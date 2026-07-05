@@ -7,7 +7,7 @@
 | 类数量 | 3 |
 | Dataclass | 5 |
 | 协议 | 1 |
-| Agent 模块 | 5 |
+| Agent 模块 | 6 |
 
 ## 覆盖地图
 
@@ -28,6 +28,7 @@
 | `PoliciesModule` | `src/unchain/agent/modules/policies.py` | subpackage | dataclass (frozen) |
 | `OptimizersModule` | `src/unchain/agent/modules/optimizers.py` | subpackage | dataclass (frozen) |
 | `SubagentModule` | `src/unchain/agent/modules/subagents.py` | subpackage | dataclass (frozen) |
+| `InteractionModule` | `src/unchain/agent/modules/interaction.py` | subpackage | dataclass (frozen) |
 
 ### `src/unchain/agent/spec.py`
 
@@ -395,3 +396,39 @@ PoliciesModule(
 | `policy` | `SubagentPolicy` | 默认值：`SubagentPolicy()`。 |
 | `executor` | `SubagentExecutor \| None` | 默认值：`None`。 |
 | `name` | `str` | 默认值：`"subagents"`。 |
+
+## InteractionModule
+
+把 `FyiChannel` 接入 Agent 的唯一入口：`configure()` 在 `fyi_channel` 不为 `None` 时向 builder 注册 `FyiInjectionHarness(channel=fyi_channel)`（`before_model` 阶段，`order=180`），使 mid-run 的 fyi 消息在当前 iteration 就对模型可见。用法与三原语的完整语义见 [Interject 原语指南](../guides/interject.md)。
+
+| 项目 | 细节 |
+| --- | --- |
+| 源码 | `src/unchain/agent/modules/interaction.py` |
+| 继承/协议 | `BaseAgentModule` |
+| 对象类型 | Dataclass (frozen)。 |
+
+### 字段
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `fyi_channel` | `FyiChannel \| None` | 默认值：`None`。为 `None` 时不注册任何 harness。 |
+| `name` | `str` | 默认值：`"interaction"`。 |
+
+### 示例
+
+```python
+from unchain import Agent
+from unchain.agent import InteractionModule
+from unchain.interaction import FyiChannel
+
+fyi_channel = FyiChannel()  # 每个 run 一个新实例
+
+agent = Agent(
+    name="assistant",
+    provider="openai",
+    model="gpt-5",
+    modules=(InteractionModule(fyi_channel=fyi_channel),),
+)
+```
+
+`SteerBuffer`（run 结束后合并追加请求）与 `ProgressDigest`/`build_btw_prompt`（旁路问答）不经过 `AgentModule`，由调用方在 `run()` 之外自行编排——同样在 [Interject 原语指南](../guides/interject.md) 中有完整示例。
