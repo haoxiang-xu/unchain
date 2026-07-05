@@ -15,6 +15,7 @@ from typing import Any, Callable
 
 from ..agent import Agent, InteractionModule
 from ..interaction import FyiChannel, ProgressDigest, SteerBuffer, build_btw_prompt
+from ..kernel.lifecycle_events import last_assistant_text
 
 _PREFIXES = {"/btw": "btw", "/fyi": "fyi", "/steer": "steer"}
 
@@ -30,18 +31,34 @@ def route_input(line: str) -> tuple[str, str]:
     return ("unknown", stripped)
 
 
+def _fallback_renderer(event: dict[str, Any]) -> None:
+    """Rich-free stand-in for ``TerminalRenderer``.
+
+    The REPL's *only* job is to eventually print the model's answer, so this
+    still has to happen even without rich installed. Prints the plain-text
+    answer on ``final_message`` events; everything else is silently ignored
+    (no live token/tool rendering without rich).
+    """
+    if not isinstance(event, dict) or event.get("type") != "final_message":
+        return
+    content = event.get("content") or ""
+    print(f"\n{content}\n")
+
+
 def _make_renderer() -> Callable[[dict[str, Any]], None]:
     """Best-effort TerminalRenderer — the 'render' extra (rich) is optional.
 
-    Falls back to a no-op callback if rich isn't installed, so the REPL
-    (and ProgressDigest, which is attached separately) still works.
+    Falls back to ``_fallback_renderer`` if rich isn't installed, so the
+    final answer is still printed (and ProgressDigest, which is attached
+    separately, still works).
     """
     try:
         from ..render import TerminalRenderer
     except ImportError:
-        print("[unchain-repl] 'rich' not installed — skipping live render output "
+        print("[unchain-repl] 'rich' not installed — the plain-text answer will still be "
+              "printed, but live rendering is disabled "
               "(pip install unchain[render] to enable). Progress digest still works.")
-        return lambda event: None
+        return _fallback_renderer
     return TerminalRenderer()
 
 
@@ -56,14 +73,33 @@ def _make_agent(args: argparse.Namespace, fyi_channel: FyiChannel) -> Agent:
 
 
 def _side_answer(args: argparse.Namespace, task: str, digest: ProgressDigest, question: str) -> None:
-    side = Agent(
-        name="repl_side_agent",
-        provider=args.provider,
-        model=args.side_model or args.model,
-        instructions="",
-    )
-    result = side.run(build_btw_prompt(task, digest.summary(), question), max_iterations=1)
-    print(f"\n[btw] {result.messages[-1]['content']}\n")
+    try:
+        side = Agent(
+            name="repl_side_agent",
+            provider=args.provider,
+            model=args.side_model or args.model,
+            instructions="",
+        )
+        result = side.run(build_btw_prompt(task, digest.summary(), question), max_iterations=1)
+        print(f"\n[btw] {last_assistant_text(result.messages)}\n")
+    except Exception as exc:  # noqa: BLE001 — a /btw failure must be visible, not silent
+        print(f"\n[btw failed] {exc}\n")
+
+
+def _run_worker(
+    agent: Agent, task: str, callback: Callable[[dict[str, Any]], None], done: threading.Event
+) -> None:
+    """Run ``agent`` in a worker thread, always signalling ``done``.
+
+    If ``agent.run`` raises, the exception is caught and printed so the
+    input loop (which waits on ``done``) never hangs silently.
+    """
+    try:
+        agent.run(task, callback=callback)
+    except Exception as exc:  # noqa: BLE001 — surface run failures instead of hanging the loop
+        print(f"\n[run failed] {exc}\n")
+    finally:
+        done.set()
 
 
 def main() -> None:
@@ -98,7 +134,8 @@ def main() -> None:
             agent = _make_agent(args, fyi_channel)
             done = threading.Event()
             worker = threading.Thread(
-                target=lambda: (agent.run(current_task, callback=callback), done.set()),
+                target=_run_worker,
+                args=(agent, current_task, callback, done),
                 daemon=True,
             )
             worker.start()
