@@ -96,7 +96,7 @@ while True:
     merged = steer_buffer.drain_merged()
     if merged is None:
         break  # 没有追加请求，结束
-    current_task = merged  # "1. 顺便把 GitHub Actions 也加进对比\n2. 最后给一个推荐结论"
+    current_task = merged  # "The user sent several follow-up requests while the previous task was running. Address all of them, in order:\n1. 顺便把 GitHub Actions 也加进对比\n2. 最后给一个推荐结论"
 ```
 
 `merge_steered_texts(["顺便把 GitHub Actions 也加进对比", "最后给一个推荐结论"])` 会产出一段带编号列表的合并文本；只有一条时原样返回，不加任何前缀。
@@ -149,7 +149,7 @@ answer = side_result.messages[-1]["content"]
   `origin="system"` 会触发 `wrap_fyi` 里的"侧助手已经回复过"措辞，而不是"用户又发来一条消息"的措辞——两者提示模型的动作不同（后者可能要求调整计划，前者通常不需要动作）。
 
 - **`FyiChannel` / `SteerBuffer` 是活对象，必须通过 module 构造参数接入，不能塞进 `payload` 或 `run()` 的 kwargs。**
-  - `Agent.run(..., payload={"fyi_channel": fyi_channel})` ——`payload` 是传给 provider 层的请求体，未知 key 会被静默丢弃，`fyi_channel` 根本不会被用到，且不会报错，非常难排查。
+  - `Agent.run(..., payload={"fyi_channel": fyi_channel})` ——`payload` 是给 provider 请求体用的：OpenAI/Anthropic provider 会把它展开成 SDK 调用的具名参数，塞入 `fyi_channel` 这类未知 key 会立刻抛 `TypeError: Responses.create() got an unexpected keyword argument`；Ollama provider 则会在 JSON 序列化活对象时抛 TypeError。总之是响亮的即时报错，不是静默失败——但无论哪种，`payload` 都不是传活对象（如 FyiChannel）的通道。
   - `Agent.run(..., fyi_channel=fyi_channel)` ——`run()` 的参数是固定签名，未知 kwarg 直接 `TypeError`。
   - 正确方式始终是构造 `Agent` 时传入 `modules=(InteractionModule(fyi_channel=fyi_channel),)`（`SteerBuffer`/`ProgressDigest` 目前没有对应的 module 接入点，由调用方在 `run()` 之外自行编排，如上面 §2、§3 所示）。
 
