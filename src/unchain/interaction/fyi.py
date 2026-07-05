@@ -4,8 +4,7 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 
-from ..capabilities import EmitEventOp, RunDelta
-from ..kernel.delta import AppendMessagesOp
+from ..capabilities import ContextTarget, EmitEventOp, InsertMessagesOp, RunDelta
 from ..kernel.harness import BaseRuntimeHarness, HarnessContext
 
 
@@ -79,18 +78,26 @@ class FyiInjectionHarness(BaseRuntimeHarness):
     channel: FyiChannel | None = None
 
     def build_delta(self, context: HarnessContext):
-        del context
         if self.channel is None:
             return None
         drained = self.channel.drain()
         if not drained:
             return None
         wrapped = [wrap_fyi(m) for m in drained]
+        # Append onto the CONVERSATION target: apply_run_delta both extends
+        # state.transcript (persistence into the final result) AND creates a
+        # new version graph node from it, becoming state.latest_version_id —
+        # so the injected message is visible to the model in *this* turn's
+        # state.latest_messages(), not just on the next iteration's rebuild.
         return RunDelta(
             created_by=FYI_CREATED_BY,
-            ops=(AppendMessagesOp(messages=wrapped),),
-            state_updates={"transcript_append": wrapped},
             context_ops=(
+                InsertMessagesOp(
+                    target=ContextTarget.CONVERSATION,
+                    index=len(context.state.transcript),
+                    messages=wrapped,
+                    reason=FYI_CREATED_BY,
+                ),
                 EmitEventOp(
                     type="fyi_injected",
                     payload={

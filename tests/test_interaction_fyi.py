@@ -1,8 +1,9 @@
 import threading
 
+from unchain.capabilities import ContextTarget, InsertMessagesOp
 from unchain.interaction.fyi import FyiChannel, FyiInjectionHarness, FyiMessage, wrap_fyi
-from unchain.kernel.delta import AppendMessagesOp
 from unchain.kernel.harness import HarnessContext
+from unchain.kernel.loop import KernelLoop
 from unchain.kernel.state import RunState
 
 
@@ -64,7 +65,7 @@ def test_harness_returns_none_when_channel_empty():
     assert harness.build_delta(_make_context()) is None
 
 
-def test_harness_drains_channel_into_append_delta_with_event():
+def test_harness_drains_channel_into_conversation_insert_delta_with_event():
     channel = FyiChannel()
     mid = channel.post("new requirement")
     harness = FyiInjectionHarness(channel=channel)
@@ -72,11 +73,11 @@ def test_harness_drains_channel_into_append_delta_with_event():
     delta = harness.build_delta(_make_context())
 
     assert channel.pending_count() == 0
-    append_ops = [op for op in delta.ops if isinstance(op, AppendMessagesOp)]
-    assert len(append_ops) == 1
-    assert append_ops[0].messages[0]["role"] == "user"
-    assert "new requirement" in append_ops[0].messages[0]["content"]
-    assert delta.state_updates["transcript_append"] == append_ops[0].messages
+    insert_ops = [op for op in delta.context_ops if isinstance(op, InsertMessagesOp)]
+    assert len(insert_ops) == 1
+    assert insert_ops[0].target == ContextTarget.CONVERSATION
+    assert insert_ops[0].messages[0]["role"] == "user"
+    assert "new requirement" in insert_ops[0].messages[0]["content"]
 
     event_ops = [op for op in delta.context_ops if getattr(op, "type", "") == "fyi_injected"]
     assert len(event_ops) == 1
@@ -86,3 +87,61 @@ def test_harness_drains_channel_into_append_delta_with_event():
     assert harness.name == "fyi_injection"
     assert harness.phases == ("before_model",)
     assert harness.order == 180
+
+
+def test_fyi_injection_is_model_visible_and_persisted_same_turn_e2e():
+    """Regression for the bug where fyi injection was invisible in the same
+    turn: went through capabilities.RunDelta.ops (dead code for apply_run_delta)
+    instead of context_ops, so state.latest_messages() never saw it until the
+    *next* iteration's transcript rebuild (or never, if the run ended first).
+
+    This drives the real dispatch path (KernelLoop.dispatch_phase ->
+    apply_run_delta) instead of asserting on the shape of the returned delta.
+    """
+    channel = FyiChannel()
+    mid = channel.post("the user changed their mind mid-task")
+    harness = FyiInjectionHarness(channel=channel)
+    loop = KernelLoop(harnesses=[harness])
+
+    state = loop.seed_state([
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "original task"},
+    ])
+
+    captured_events = []
+    loop.dispatch_phase(
+        state,
+        phase="before_model",
+        event={"callback": captured_events.append, "run_id": "run-1", "iteration": 0},
+    )
+
+    # (1) Same-turn model visibility: the version graph the model reads from
+    # must already contain the injected message.
+    latest = state.latest_messages()
+    assert any(
+        message.get("role") == "user" and "the user changed their mind mid-task" in message.get("content", "")
+        for message in latest
+    ), latest
+
+    # (1) Persistence: the flat transcript (what final result.messages is
+    # built from) must also contain it.
+    assert any(
+        message.get("role") == "user" and "the user changed their mind mid-task" in message.get("content", "")
+        for message in state.transcript
+    ), state.transcript
+
+    # Original messages are preserved, fyi message appended at the end.
+    assert latest[0] == {"role": "system", "content": "sys"}
+    assert latest[1] == {"role": "user", "content": "original task"}
+    assert "the user changed their mind mid-task" in latest[2]["content"]
+
+    # (2) Channel drained.
+    assert channel.pending_count() == 0
+    assert channel.drain() == []
+
+    # (2) Structured event emitted through dispatch_phase's event path.
+    fyi_events = [event for event in captured_events if event.get("type") == "fyi_injected"]
+    assert len(fyi_events) == 1
+    assert fyi_events[0]["count"] == 1
+    assert fyi_events[0]["messages"][0]["message_id"] == mid
+    assert fyi_events[0]["messages"][0]["text"] == "the user changed their mind mid-task"
