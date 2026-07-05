@@ -19,6 +19,9 @@ dependencies = [
     "tree-sitter-languages>=1.10.2,<2",
 ]
 
+[project.scripts]
+unchain-repl = "unchain.cli:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.4.2",
