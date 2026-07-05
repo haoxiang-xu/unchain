@@ -35,11 +35,11 @@ class ProgressDigest:
                 if etype == "iteration_started":
                     self._iterations += 1
                 elif "tool" in etype:
-                    tool = event.get("tool") or event.get("name") or ""
+                    tool = event.get("tool_name") or event.get("tool") or event.get("name") or ""
                     if tool:
                         self._entries.append(f"tool: {tool}")
                 elif etype in ("response_received", "final_message"):
-                    text = str(event.get("final_text") or "")[:120]
+                    text = str(event.get("content") or event.get("final_text") or "")[:120]
                     if text:
                         self._entries.append(f"assistant: {text}")
         except Exception:  # noqa: BLE001 - digest must never break the main run
