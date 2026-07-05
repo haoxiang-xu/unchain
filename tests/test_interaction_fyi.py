@@ -1,7 +1,9 @@
 import threading
 
+from unchain.agent import Agent, InteractionModule, ToolsModule
 from unchain.capabilities import ContextTarget, InsertMessagesOp
 from unchain.interaction.fyi import FyiChannel, FyiInjectionHarness, FyiMessage, wrap_fyi
+from unchain.kernel import ModelTurnResult, ToolCall
 from unchain.kernel.harness import HarnessContext
 from unchain.kernel.loop import KernelLoop
 from unchain.kernel.state import RunState
@@ -145,3 +147,62 @@ def test_fyi_injection_is_model_visible_and_persisted_same_turn_e2e():
     assert fyi_events[0]["count"] == 1
     assert fyi_events[0]["messages"][0]["message_id"] == mid
     assert fyi_events[0]["messages"][0]["text"] == "the user changed their mind mid-task"
+
+
+def test_fyi_posted_mid_run_reaches_next_model_request():
+    channel = FyiChannel()
+    seen_requests: list[list[dict]] = []
+
+    def echo(text: str) -> dict:
+        return {"echo": text}
+
+    class FakeModelIO:
+        provider = "ollama"
+        model = "llama3"
+
+        def __init__(self):
+            self.calls = 0
+
+        def fetch_turn(self, request):
+            seen_requests.append(list(request.messages))
+            self.calls += 1
+            if self.calls == 1:
+                # Simulate the user chiming in while the first model turn is
+                # being handled.
+                channel.post("please also handle Chinese input")
+                return ModelTurnResult(
+                    assistant_messages=[{"role": "assistant", "content": ""}],
+                    tool_calls=[ToolCall(call_id="c1", name="echo", arguments={"text": "hi"})],
+                    final_text="",
+                )
+            return ModelTurnResult(
+                assistant_messages=[{"role": "assistant", "content": "done"}],
+                tool_calls=[],
+                final_text="done",
+            )
+
+    events: list[dict] = []
+    agent = Agent(
+        name="fyi_agent",
+        provider="ollama",
+        model="llama3",
+        instructions="Be concise.",
+        model_io_factory=lambda spec, ctx: FakeModelIO(),
+        modules=(
+            ToolsModule(tools=(echo,)),
+            InteractionModule(fyi_channel=channel),
+        ),
+    )
+    result = agent.run("do the task", callback=events.append, max_iterations=3)
+
+    assert result.status == "completed"
+    # The second model request should contain the wrapped fyi message.
+    second = seen_requests[1]
+    fyi_msgs = [m for m in second if "<fyi_message>" in str(m.get("content", ""))]
+    assert len(fyi_msgs) == 1
+    assert "handle Chinese input" in fyi_msgs[0]["content"]
+    # The fyi message lands in the final transcript.
+    assert any("<fyi_message>" in str(m.get("content", "")) for m in result.messages)
+    # The callback event stream carries the raw fyi_injected event (event
+    # normalization to "interaction.fyi_injected" is a later task).
+    assert any("fyi_injected" in str(e.get("type", "")) or "fyi_injected" in str(e.get("event", "")) for e in events)

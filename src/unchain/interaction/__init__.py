@@ -16,6 +16,7 @@ from .effects import (
     build_human_input_requested_event,
     build_human_input_suspend_request,
 )
+from .fyi import FyiChannel, FyiInjectionHarness, FyiMessage, wrap_fyi
 from .resume import (
     HumanInputResumeHarness,
     HumanInputResumePlan,
@@ -34,6 +35,9 @@ __all__ = [
     "HumanInputResumeHarness",
     "HumanInputResumePlan",
     "INTERACTION_EFFECT_CREATED_BY",
+    "FyiChannel",
+    "FyiInjectionHarness",
+    "FyiMessage",
     "build_ask_user_question_tool",
     "build_human_input_continuation",
     "build_human_input_requested_event",
@@ -42,4 +46,5 @@ __all__ = [
     "is_human_input_tool_name",
     "parse_human_input_request",
     "prepare_human_input_resume_plan",
+    "wrap_fyi",
 ]

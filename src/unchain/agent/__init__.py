@@ -5,6 +5,7 @@ from .model_io import ModelIOFactoryRegistry
 from .modules import (
     AgentModule,
     BaseAgentModule,
+    InteractionModule,
     MemoryModule,
     OptimizersModule,
     PoliciesModule,
@@ -26,6 +27,7 @@ __all__ = [
     "CompletionEvaluation",
     "CompletionPolicy",
     "CompletionValidator",
+    "InteractionModule",
     "MemoryModule",
     "ModelIOFactoryRegistry",
     "OptimizersModule",
