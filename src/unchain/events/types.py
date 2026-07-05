@@ -17,6 +17,7 @@ RuntimeEventType = Literal[
     "step.completed",
     "interaction.requested",
     "interaction.resolved",
+    "interaction.fyi_injected",
     "artifact.created",
     "artifact.updated",
 ]
@@ -39,6 +40,7 @@ RUNTIME_EVENT_TYPES: frozenset[str] = frozenset(
         "step.completed",
         "interaction.requested",
         "interaction.resolved",
+        "interaction.fyi_injected",
         "artifact.created",
         "artifact.updated",
     }

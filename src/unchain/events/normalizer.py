@@ -475,6 +475,24 @@ def normalize_raw_event(
             )
         ]
 
+    if raw_type == "fyi_injected":
+        messages = raw_event.get("messages")
+        payload = {
+            "count": _int_value(raw_event.get("count")) or 0,
+            "messages": copy.deepcopy(messages) if isinstance(messages, list) else [],
+        }
+        return [
+            RuntimeEventDraft(
+                type="interaction.fyi_injected",
+                run_id=run_id,
+                agent_id=agent_id,
+                turn_id=turn_id,
+                surface=_trace_surface("interaction"),
+                payload=payload,
+                metadata=metadata,
+            )
+        ]
+
     if raw_type in {"tool_confirmed", "tool_denied"}:
         call_id = _str_value(raw_event.get("call_id"))
         interaction_id = _str_value(

@@ -2,6 +2,8 @@ import threading
 
 from unchain.agent import Agent, InteractionModule, ToolsModule
 from unchain.capabilities import ContextTarget, InsertMessagesOp
+from unchain.events.normalizer import RuntimeEventNormalizerContext, normalize_raw_event
+from unchain.events.types import RUNTIME_EVENT_TYPES
 from unchain.interaction.fyi import FyiChannel, FyiInjectionHarness, FyiMessage, wrap_fyi
 from unchain.kernel import ModelTurnResult, ToolCall
 from unchain.kernel.harness import HarnessContext
@@ -203,6 +205,36 @@ def test_fyi_posted_mid_run_reaches_next_model_request():
     assert "handle Chinese input" in fyi_msgs[0]["content"]
     # The fyi message lands in the final transcript.
     assert any("<fyi_message>" in str(m.get("content", "")) for m in result.messages)
-    # The callback event stream carries the raw fyi_injected event (event
-    # normalization to "interaction.fyi_injected" is a later task).
+    # The callback event stream carries the raw fyi_injected event; normalizing
+    # it to "interaction.fyi_injected" is a separate opt-in step
+    # (unchain.events.normalizer.normalize_raw_event), not applied here.
     assert any("fyi_injected" in str(e.get("type", "")) or "fyi_injected" in str(e.get("event", "")) for e in events)
+
+
+def test_fyi_injected_event_normalizes_to_interaction_namespace():
+    assert "interaction.fyi_injected" in RUNTIME_EVENT_TYPES
+
+    # Raw event shape as actually produced on the callback stream: emit_event
+    # (kernel/loop.py) flattens the EmitEventOp payload keys alongside
+    # type/run_id/iteration -- there is no nested "payload" key.
+    raw = {
+        "type": "fyi_injected",
+        "run_id": "run-1",
+        "iteration": 0,
+        "count": 1,
+        "messages": [{"message_id": "abc", "origin": "user", "text": "hello"}],
+    }
+    context = RuntimeEventNormalizerContext(session_id="thread-1", root_run_id="run-1")
+
+    events = normalize_raw_event(raw, context=context)
+
+    assert len(events) == 1
+    event = events[0]
+    assert event.type == "interaction.fyi_injected"
+    assert event.visibility == "user"
+    assert event.surface.slot == "trace_inline"
+    assert event.surface.scope == "turn"
+    assert event.payload["count"] == 1
+    assert event.payload["messages"][0]["message_id"] == "abc"
+    assert event.payload["messages"][0]["origin"] == "user"
+    assert event.payload["messages"][0]["text"] == "hello"
