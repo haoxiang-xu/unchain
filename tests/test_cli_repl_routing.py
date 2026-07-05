@@ -2,7 +2,7 @@ import threading
 from types import SimpleNamespace
 
 from unchain.cli import repl
-from unchain.cli.repl import _fallback_renderer, _run_worker, route_input
+from unchain.cli.repl import _fallback_renderer, _run_worker, build_followup_messages, route_input
 
 
 def test_route_input_prefixes():
@@ -61,6 +61,48 @@ def test_run_worker_sets_done_on_success():
     done = threading.Event()
     _run_worker(_OkAgent(), "do something", lambda event: None, done)
     assert done.is_set()
+
+
+def test_run_worker_stores_result_in_holder_on_success():
+    done = threading.Event()
+    result_holder = []
+    _run_worker(_OkAgent(), "do something", lambda event: None, done, result_holder=result_holder)
+    assert done.is_set()
+    assert result_holder == ["ok"]
+
+
+def test_run_worker_leaves_holder_empty_when_agent_raises(capsys):
+    done = threading.Event()
+    result_holder = []
+    _run_worker(
+        _RaisingAgent(), "do something", lambda event: None, done, result_holder=result_holder
+    )
+    assert done.is_set()
+    assert result_holder == []
+    captured = capsys.readouterr()
+    assert "[run failed]" in captured.out
+
+
+def test_build_followup_messages_appends_merged_as_user_turn():
+    prior_messages = [
+        {"role": "user", "content": "调研三家 CI 服务商的定价"},
+        {"role": "assistant", "content": "已完成初步调研"},
+    ]
+    result = build_followup_messages(prior_messages, "顺便把 GitHub Actions 也加进对比")
+
+    assert result == [
+        {"role": "user", "content": "调研三家 CI 服务商的定价"},
+        {"role": "assistant", "content": "已完成初步调研"},
+        {"role": "user", "content": "顺便把 GitHub Actions 也加进对比"},
+    ]
+    # must not mutate the caller's prior_messages list
+    assert result is not prior_messages
+    assert len(prior_messages) == 2
+
+
+def test_build_followup_messages_with_empty_prior_history():
+    result = build_followup_messages([], "merged steer text")
+    assert result == [{"role": "user", "content": "merged steer text"}]
 
 
 class _FakeProgressDigest:

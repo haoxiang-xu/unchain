@@ -79,13 +79,19 @@ events = normalize_raw_event(raw_event, context=context)
 
 `SteerBuffer` 不在 run 期间生效，而是在 run 结束后 `drain_merged()`：单条消息原样返回；多条会编号合并成一段文本，交给下一轮 `Agent.run()` 当作新任务。这是 `unchain-repl` 里 "steer 链" 的核心模式（`src/unchain/cli/repl.py` 的 while 循环）：
 
+**关键点：steer 链是同一个对话接着做，不是几个互不相关的新任务。** 下一轮 run 必须看到完整的历史消息（上一轮的 `result.messages` + 新合并的 steer 文本），不能只传 `merged` 这一句——否则上一轮 run 里生效的约束（比如一句 `/fyi "只用中文回复"`）到下一轮就会被遗忘，行为不连贯。`Agent.run()` 的 `messages` 参数接受 `str | list[dict]`（见 `src/unchain/agent/agent.py`），首轮传字符串，后续每一轮都传拼接好的消息列表：
+
 ```python
 from unchain import Agent
 from unchain.interaction import SteerBuffer
 
-steer_buffer = SteerBuffer()  # 每个 run 一个新实例
+steer_buffer = SteerBuffer()  # 每个任务一个新实例；steer 链内的多轮 run 复用同一个
 
-current_task = "调研三家 CI 服务商的定价"
+def build_followup_messages(prior_messages, merged):
+    """下一轮 run 的输入 = 上一轮完整历史 + 新合并的 steer 文本这一个 user turn。"""
+    return [*prior_messages, {"role": "user", "content": merged}]
+
+current_task = "调研三家 CI 服务商的定价"  # 首轮：纯字符串
 while True:
     agent = Agent(name="assistant", provider="openai", model="gpt-5")
     # 假设有另一个线程在 run 期间调用了：
@@ -96,10 +102,14 @@ while True:
     merged = steer_buffer.drain_merged()
     if merged is None:
         break  # 没有追加请求，结束
-    current_task = merged  # "The user sent several follow-up requests while the previous task was running. Address all of them, in order:\n1. 顺便把 GitHub Actions 也加进对比\n2. 最后给一个推荐结论"
+    print(merged)  # "The user sent several follow-up requests while the previous task was running. Address all of them, in order:\n1. 顺便把 GitHub Actions 也加进对比\n2. 最后给一个推荐结论"
+    # 后续轮：携带完整历史的消息列表，而不是只传 merged
+    current_task = build_followup_messages(result.messages, merged)
 ```
 
 `merge_steered_texts(["顺便把 GitHub Actions 也加进对比", "最后给一个推荐结论"])` 会产出一段带编号列表的合并文本；只有一条时原样返回，不加任何前缀。
+
+`src/unchain/cli/repl.py` 里的参考实现就是这个模式：`_run_worker` 把每轮 run 的 `KernelRunResult` 存进一个 `result_holder`，`main()` 用 `build_followup_messages(result_holder[0].messages, merged)` 拼出下一轮的输入；如果上一轮 run 失败（`result_holder` 为空），退化为只传 `merged`。
 
 ### 3. btw：旁路即时问答，不干扰主循环
 
@@ -122,6 +132,8 @@ result = main_agent.run("重构支付模块", callback=callback)
 主 run 进行中，随时可以起一个独立的侧路 Agent 回答用户的旁路提问：
 
 ```python
+from unchain.kernel.lifecycle_events import last_assistant_text
+
 side_agent = Agent(name="side_assistant", provider="openai", model="gpt-5", instructions="")
 messages = build_btw_prompt(
     original_task="重构支付模块",
@@ -129,14 +141,16 @@ messages = build_btw_prompt(
     question="现在做到哪一步了？",
 )
 side_result = side_agent.run(messages, max_iterations=1)
-answer = side_result.messages[-1]["content"]
+answer = last_assistant_text(side_result.messages)
 ```
+
+用 `last_assistant_text(side_result.messages)` 而不是裸 `side_result.messages[-1]["content"]`——后者假设最后一条消息一定是助手文本消息，一旦模型走了工具调用或返回了非字符串 content，索引/取值就会直接抛异常；`last_assistant_text` 从后往前找最后一条 `role == "assistant"` 且 `content` 是非空字符串的消息，找不到就返回空字符串，复制粘贴到自己代码里更稳妥（`src/unchain/cli/repl.py::_side_answer` 就是这么用的）。
 
 侧路 Agent 完全独立于主 Agent，`max_iterations=1` 是常见选择——它只需要回答一次，不需要多轮工具调用。
 
 ## 调用方责任
 
-- **每个 run 新建 `FyiChannel` / `SteerBuffer` 实例。** 两者都不知道 `run_id`，如果跨 run 复用同一个实例，上一个对话未被 drain 的消息会串到下一个对话里。`unchain-repl` 的做法是每次用户发起新任务时都新建（见 `src/unchain/cli/repl.py::main`）。
+- **每个对话/任务新建 `FyiChannel` / `SteerBuffer` 实例，这是硬要求。** 两者都不知道 `run_id`，如果跨对话复用同一个实例，上一个对话未被 drain 的消息会串到下一个不相关的对话里。但注意"对话"的粒度是**任务**，不是**run**：同一个任务内，steer 链把多轮 `agent.run()` 串成一次对话时，在这些 run 之间复用同一个 `FyiChannel` / `SteerBuffer` / `ProgressDigest` 实例是有意为之的设计——配合 §2 里 run 间的消息历史续接，语义上就是"同一对话接着做"，跨 run 未 drain 的 fyi 在下一轮的第一个 iteration 边界被注入是预期行为，不是串话。`unchain-repl` 的做法是每次用户发起新任务时才新建（见 `src/unchain/cli/repl.py::main`），而不是每次 run 都新建。
 - **btw 答完之后，建议往 `FyiChannel` 补一条 `origin="system"` 备注**，让主 Agent 保持知情（否则主 Agent 完全不知道旁路问答发生过）：
 
   ```python
