@@ -53,3 +53,11 @@ title = "Plan List"
 description = "List draft and finalized plans stored in the workspace."
 observe = false
 requires_confirmation = false
+
+[[skills]]
+name = "plan"
+title = "Plan First"
+description = "Draft a step-by-step plan and wait for confirmation before executing."
+body = "Before doing any work: draft a step-by-step plan using the planning tools ({tools}), present it to me, and wait for my explicit confirmation before executing."
+tools = ["plan_start", "plan_update", "plan_read", "plan_finalize", "plan_list"]
+phase = "composer"

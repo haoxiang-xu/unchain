@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import inspect
 import logging
+import re
 import sys
 import unicodedata
 from contextlib import contextmanager
@@ -94,6 +95,9 @@ _BUILTIN_ARTIFACT_KIND_DEFINITIONS = (
 _BUILTIN_ARTIFACT_KIND_NAMES = {
     item["kind"] for item in _BUILTIN_ARTIFACT_KIND_DEFINITIONS
 }
+
+_SKILL_PHASES = frozenset({"composer", "streaming", "always"})
+_SKILL_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
 def _read_markdown(path: Path) -> str:
@@ -319,6 +323,26 @@ class ToolDescriptor:
 
 
 @dataclass
+class SkillDescriptor:
+    name: str
+    title: str
+    description: str
+    body: str
+    tools: tuple[str, ...] = ()
+    phase: str = "composer"
+
+    def to_summary(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "title": self.title,
+            "description": self.description,
+            "body": self.body,
+            "tools": list(self.tools),
+            "phase": self.phase,
+        }
+
+
+@dataclass
 class IconDescriptor:
     type: str
     path: Path | None = None
@@ -409,6 +433,7 @@ class ToolkitDescriptor:
     compat_legacy: str | None = None
     tools: dict[str, ToolDescriptor] = field(default_factory=dict)
     artifact_kinds: dict[str, ArtifactKindDescriptor] = field(default_factory=dict)
+    skills: dict[str, SkillDescriptor] = field(default_factory=dict)
     import_roots: tuple[Path, ...] = field(default_factory=tuple, repr=False)
 
     def sorted_tools(self) -> list[ToolDescriptor]:
@@ -421,6 +446,12 @@ class ToolkitDescriptor:
         return sorted(
             self.artifact_kinds.values(),
             key=lambda item: item.kind.casefold(),
+        )
+
+    def sorted_skills(self) -> list[SkillDescriptor]:
+        return sorted(
+            self.skills.values(),
+            key=lambda item: (item.title.casefold(), item.name.casefold()),
         )
 
     def to_summary(self, *, include_tools: bool = True) -> dict[str, Any]:
@@ -451,6 +482,7 @@ class ToolkitDescriptor:
                 artifact_kind.to_summary()
                 for artifact_kind in self.sorted_artifact_kinds()
             ],
+            "skills": [skill.to_summary() for skill in self.sorted_skills()],
         }
         if include_tools:
             payload["tools"] = [tool.to_summary() for tool in self.sorted_tools()]
@@ -822,6 +854,12 @@ class ToolkitRegistry:
         if not isinstance(artifact_kinds_section, list):
             raise ValueError(f"{manifest_path}: [[artifact_kinds]] must be an array of tables")
 
+        skills_section = data.get("skills", [])
+        if skills_section is None:
+            skills_section = []
+        if not isinstance(skills_section, list):
+            raise ValueError(f"{manifest_path}: [[skills]] must be an array of tables")
+
         toolkit_id = _require_str(toolkit_section, "id", manifest_path)
         toolkit_name = _require_str(toolkit_section, "name", manifest_path)
         toolkit_description = _require_str(toolkit_section, "description", manifest_path)
@@ -870,6 +908,37 @@ class ToolkitRegistry:
                 observe=_coerce_bool(tool_item.get("observe"), default=False),
             )
 
+        skills: dict[str, SkillDescriptor] = {}
+        for skill_item in skills_section:
+            if not isinstance(skill_item, dict):
+                raise ValueError(f"{manifest_path}: invalid [[skills]] entry")
+            skill_name = _require_str(skill_item, "name", manifest_path)
+            if not _SKILL_NAME_RE.match(skill_name):
+                raise ValueError(
+                    f"{manifest_path}: skill name '{skill_name}' must match [a-zA-Z0-9_-]+"
+                )
+            if skill_name in skills:
+                raise ValueError(f"{manifest_path}: duplicate skill '{skill_name}'")
+            skill_phase = _optional_str(skill_item, "phase") or "composer"
+            if skill_phase not in _SKILL_PHASES:
+                raise ValueError(
+                    f"{manifest_path}: skill '{skill_name}' has invalid phase '{skill_phase}'"
+                )
+            skill_tools = _string_list(skill_item, "tools")
+            for tool_ref in skill_tools:
+                if tool_ref not in tools:
+                    raise ValueError(
+                        f"{manifest_path}: skill '{skill_name}' references unknown tool '{tool_ref}'"
+                    )
+            skills[skill_name] = SkillDescriptor(
+                name=skill_name,
+                title=_optional_str(skill_item, "title") or skill_name,
+                description=_require_str(skill_item, "description", manifest_path),
+                body=_require_str(skill_item, "body", manifest_path),
+                tools=tuple(skill_tools),
+                phase=skill_phase,
+            )
+
         artifact_kinds = _parse_artifact_kinds(
             root_path,
             manifest_path,
@@ -897,6 +966,7 @@ class ToolkitRegistry:
             compat_legacy=_optional_str(compat_section, "legacy"),
             tools=tools,
             artifact_kinds=artifact_kinds,
+            skills=skills,
             import_roots=tuple(import_roots),
         )
 

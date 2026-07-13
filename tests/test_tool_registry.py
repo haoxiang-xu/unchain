@@ -132,6 +132,16 @@ def test_builtin_registry_lists_expected_toolkits_and_tools():
     assert agent_reach_summary["icon"] == {"type": "emoji", "emoji": "👁️"}
     assert registry.require("core").to_summary()["tool_count"] == 9
     assert registry.require("plan").to_summary()["tool_count"] == 5
+    plan_skills = registry.require("plan").to_summary()["skills"]
+    assert [skill["name"] for skill in plan_skills] == ["plan"]
+    assert plan_skills[0]["phase"] == "composer"
+    assert plan_skills[0]["tools"] == [
+        "plan_start",
+        "plan_update",
+        "plan_read",
+        "plan_finalize",
+        "plan_list",
+    ]
 
 
 def test_only_public_builtin_toolkits_ship_registry_manifests():
