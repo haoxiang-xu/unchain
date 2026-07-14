@@ -199,6 +199,52 @@ class TestMcpResultParsing:
         parsed = MCPToolkit(command="echo")._parse_call_result(result, "test_tool")
         assert parsed["error"] == "unknown MCP error"
 
+    # ── S0: image blocks are collected into content_blocks, not dropped ──────
+
+    def test_parse_image_block_collected_into_content_blocks(self):
+        # MCP text + image content; text keeps working, image is no longer dropped.
+        result = SimpleNamespace(
+            isError=False,
+            content=[
+                SimpleNamespace(type="text", text="shot"),
+                SimpleNamespace(type="image", data="aW1n", mimeType="image/png"),
+            ],
+            structuredContent=None,
+        )
+        parsed = MCPToolkit(command="echo")._parse_call_result(result, "test_tool")
+        assert parsed["result"] == "shot"
+        assert parsed["content_blocks"] == [
+            {"type": "image", "media_type": "image/png", "data_b64": "aW1n"}
+        ]
+
+    def test_parse_image_alongside_structured_content(self):
+        result = SimpleNamespace(
+            isError=False,
+            content=[SimpleNamespace(type="image", data="Zm9v", mimeType="image/jpeg")],
+            structuredContent={"files": ["a.txt"]},
+        )
+        parsed = MCPToolkit(command="echo")._parse_call_result(result, "test_tool")
+        assert parsed["files"] == ["a.txt"]
+        assert parsed["content_blocks"] == [
+            {"type": "image", "media_type": "image/jpeg", "data_b64": "Zm9v"}
+        ]
+
+    def test_parse_image_defaults_media_type(self):
+        result = SimpleNamespace(
+            isError=False,
+            content=[SimpleNamespace(type="image", data="aW1n", mimeType=None)],
+            structuredContent=None,
+        )
+        parsed = MCPToolkit(command="echo")._parse_call_result(result, "test_tool")
+        assert parsed["content_blocks"][0]["media_type"] == "image/png"
+
+    def test_parse_text_only_result_has_no_content_blocks_key(self):
+        # zero-migration: results without images are byte-identical to before.
+        result = _make_fake_call_result("hello world")
+        parsed = MCPToolkit(command="echo")._parse_call_result(result, "test_tool")
+        assert parsed == {"result": "hello world"}
+        assert "content_blocks" not in parsed
+
 
 class TestMcpConnectDisconnect:
     """Test connect/disconnect with a fully mocked MCP session."""

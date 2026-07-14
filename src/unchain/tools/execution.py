@@ -294,8 +294,8 @@ class ToolExecutionHarness(BaseToolHarness):
             if plugin_outcome.result_messages:
                 result_messages.extend(copy_messages(plugin_outcome.result_messages))
             elif isinstance(visible_tool_result, dict):
-                result_messages.append(
-                    builder.build_tool_result_message(tool_call=tool_call, tool_result=visible_tool_result)
+                result_messages.extend(
+                    builder.build_tool_result_messages(tool_call=tool_call, tool_result=visible_tool_result)
                 )
             emitted_artifacts: list[dict] = []
             if isinstance(visible_tool_result, dict):
@@ -460,8 +460,8 @@ class ToolExecutionHarness(BaseToolHarness):
                 effective_arguments=outcome.effective_arguments,
             )
         result_messages = copy_messages(batch_state.result_messages)
-        result_messages.append(
-            builder.build_tool_result_message(tool_call=tool_call, tool_result=visible_tool_result)
+        result_messages.extend(
+            builder.build_tool_result_messages(tool_call=tool_call, tool_result=visible_tool_result)
         )
         emit_loop_event(
             context.loop,
