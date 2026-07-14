@@ -15,6 +15,12 @@ from ..kernel.types import ToolCall
 # shape. The block vocabulary is append-only; today only ``text`` and ``image``
 # are defined. Image blocks are flat: ``{"type":"image","media_type":...,
 # "data_b64":...,"width":...,"height":...}`` (width/height optional).
+#
+# When ``content_blocks`` is present the model sees ONLY the blocks (business
+# fields are dropped from the model-visible tool result). So: put EVERYTHING the
+# model should see — including any summary/caption text — into a ``text`` block,
+# and put ``text`` before ``image`` (Anthropic guidance: text-first aids image
+# localization accuracy).
 
 CONTENT_BLOCKS_KEY = "content_blocks"
 
@@ -140,11 +146,12 @@ class OpenAIMessageBuilder(_ProviderMessageBuilderBase):
         if blocks is None:
             output = json.dumps(tool_result, default=str, ensure_ascii=False)
         else:
-            # DECISION POINT (pupu-llm-expert): images are rendered as a text
-            # placeholder here. The list return shape is intentionally reserved
-            # so image blocks can later be emitted as a separate user message
-            # carrying `input_image` blocks. Do not fold that in without an
-            # llm-expert spec — it is model-visible behavior.
+            # DECISION POINT (pupu-llm-expert, ruled 2026-07-13): images stay as
+            # an honest text placeholder for now (M2). The real image回流 (M3)
+            # will emit an in-band image array inside `function_call_output.output`
+            # (the Responses API supports image output arrays) — NOT a separate
+            # user message. The list return shape stays as headroom for that.
+            # Model-visible: do not change without the llm-expert M3 spec.
             parts: list[str] = []
             for block in blocks:
                 if block.get("type") == "text":
@@ -152,7 +159,7 @@ class OpenAIMessageBuilder(_ProviderMessageBuilderBase):
                     if text:
                         parts.append(text)
                 elif block.get("type") == "image":
-                    parts.append(f"[image: {_image_label(block)}]")
+                    parts.append(f"[image omitted: {_image_label(block)}]")
             output = "\n".join(parts)
         return [{
             "type": "function_call_output",

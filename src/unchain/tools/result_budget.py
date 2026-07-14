@@ -80,6 +80,11 @@ class _ResultRecord:
     original_chars: int
     block_index: int | None = None
     part_index: int | None = None
+    # S0 rich tool result: when a tool_result block's content is a block array
+    # (text + image), only the text is budgeted; the non-text blocks (images)
+    # are preserved verbatim here so screenshots reach the model and the block
+    # array stays a valid Anthropic `tool_result.content` on rewrite.
+    rich_preserved_blocks: list[Any] | None = None
 
 
 def _safe_repr(value: Any) -> str:
@@ -384,7 +389,36 @@ def _collect_result_records(
                     by_name=by_name,
                     used_call_ids=used_call_ids,
                 )
-                payload, payload_format = _normalize_payload(block.get("content", ""))
+                raw_content = block.get("content", "")
+                if isinstance(raw_content, list):
+                    # S0 rich tool result: content is a block array. Budget only
+                    # the text portion — image (and any non-text) blocks are
+                    # preserved verbatim, so screenshot base64 is neither counted
+                    # toward the budget nor rewritten into an illegal bare dict.
+                    text_segments: list[str] = []
+                    preserved: list[Any] = []
+                    for sub_block in raw_content:
+                        if isinstance(sub_block, dict) and sub_block.get("type") == "text":
+                            text_segments.append(str(sub_block.get("text") or ""))
+                        else:
+                            preserved.append(sub_block)
+                    payload = "\n".join(text_segments)
+                    payload_format = "raw_string"
+                    records.append(
+                        _ResultRecord(
+                            message_index=message_index,
+                            location_type="content_block_tool_result",
+                            tool_name=tool_name,
+                            call_id=resolved_call_id,
+                            payload=payload,
+                            payload_format=payload_format,
+                            original_chars=_payload_chars(payload, payload_format),
+                            block_index=block_index,
+                            rich_preserved_blocks=preserved,
+                        )
+                    )
+                    continue
+                payload, payload_format = _normalize_payload(raw_content)
                 records.append(
                     _ResultRecord(
                         message_index=message_index,
@@ -476,6 +510,16 @@ def _write_record_payload(
         if not isinstance(content, list) or record.block_index is None:
             return
         if record.block_index >= len(content) or not isinstance(content[record.block_index], dict):
+            return
+        if record.rich_preserved_blocks is not None:
+            # Rebuild a valid block array: compacted text (if any) first, then
+            # the preserved image/non-text blocks verbatim.
+            text_str = serialized if isinstance(serialized, str) else _stable_json_dumps(serialized)
+            new_blocks: list[Any] = []
+            if text_str:
+                new_blocks.append({"type": "text", "text": text_str})
+            new_blocks.extend(copy.deepcopy(record.rich_preserved_blocks))
+            content[record.block_index]["content"] = new_blocks
             return
         content[record.block_index]["content"] = serialized
         return

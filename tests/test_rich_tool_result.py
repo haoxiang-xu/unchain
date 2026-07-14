@@ -11,12 +11,14 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+from unchain.kernel.types import ToolCall
 from unchain.tools import get_provider_message_builder
 from unchain.tools.messages import (
     coalesce_provider_tool_result_messages,
     iter_result_image_blocks,
     redact_result_image_data,
 )
+from unchain.tools.result_budget import ToolResultBudgetConfig, ToolResultBudgetController
 
 
 def _tool_call():
@@ -121,8 +123,8 @@ def test_anthropic_image_becomes_native_source_block():
 
 
 def test_openai_image_is_placeholder_text_and_single_message():
-    # llm-expert decision point: image回流 currently a placeholder; list-return
-    # shape reserved for future separate user message.
+    # llm-expert ruling (M2): image回流 is an honest placeholder; real image
+    # output (M3) goes in-band in function_call_output.output, not here.
     messages = get_provider_message_builder("openai").build_tool_result_messages(
         tool_call=_tool_call(), tool_result=_rich_result()
     )
@@ -130,7 +132,7 @@ def test_openai_image_is_placeholder_text_and_single_message():
     assert messages[0]["type"] == "function_call_output"
     assert messages[0]["call_id"] == "call_1"
     assert "screenshot taken" in messages[0]["output"]
-    assert "[image: 1512x982 png]" in messages[0]["output"]
+    assert "[image omitted: 1512x982 png]" in messages[0]["output"]
 
 
 def test_gemini_image_becomes_inline_data_part():
@@ -196,6 +198,80 @@ def test_redact_is_safe_on_plain_results():
 
 
 # ── regression red-lines: coalesce/budget over block arrays ──────────────────
+
+def _anthropic_tool_result_message(call_id, tool_result):
+    return get_provider_message_builder("anthropic").build_tool_result_messages(
+        tool_call=SimpleNamespace(call_id=call_id, name="computer"),
+        tool_result=tool_result,
+    )[0]
+
+
+def _budget(message, call_id="c1", config=None):
+    return ToolResultBudgetController(config or ToolResultBudgetConfig()).budget_messages(
+        provider="anthropic",
+        toolkit=None,
+        tool_calls=[ToolCall(call_id=call_id, name="computer", arguments={})],
+        result_messages=[message],
+    )
+
+
+def test_budget_preserves_screenshot_base64_over_4000_chars():
+    # RED-LINE: a real screenshot base64 (>>4000 chars) must not be counted
+    # toward the result budget, compacted, or rewritten into a bare dict.
+    big_b64 = "A" * 500_000
+    message = _anthropic_tool_result_message(
+        "c1",
+        {
+            "status": "ok",
+            "content_blocks": [
+                {"type": "text", "text": "screenshot taken"},
+                {"type": "image", "media_type": "image/png", "data_b64": big_b64,
+                 "width": 1512, "height": 982},
+            ],
+        },
+    )
+    outcome = _budget(message)
+    out_content = outcome.messages[0]["content"][0]["content"]
+    # still a valid Anthropic block array (never a bare dict / string)
+    assert isinstance(out_content, list)
+    assert all(isinstance(b, dict) and b.get("type") in ("text", "image") for b in out_content)
+    image = next(b for b in out_content if b.get("type") == "image")
+    assert image["source"]["data"] == big_b64  # base64 intact, uncompacted
+    assert outcome.stats.compacted_count == 0
+
+
+def test_budget_compacts_huge_text_but_preserves_image():
+    big_text = "x" * 50_000
+    message = _anthropic_tool_result_message(
+        "c1",
+        {
+            "content_blocks": [
+                {"type": "text", "text": big_text},
+                {"type": "image", "media_type": "image/png", "data_b64": "aW1n"},
+            ],
+        },
+    )
+    outcome = _budget(message)
+    out_content = outcome.messages[0]["content"][0]["content"]
+    assert isinstance(out_content, list)
+    image = next(b for b in out_content if b.get("type") == "image")
+    assert image["source"]["data"] == "aW1n"  # image preserved verbatim
+    text_block = next(b for b in out_content if b.get("type") == "text")
+    assert len(text_block["text"]) < len(big_text)  # text was compacted
+    assert outcome.stats.compacted_count >= 1
+
+
+def test_budget_text_only_block_array_stays_valid_block_array_on_compaction():
+    # Broader red-line: even a text-only block array must not compact into a
+    # bare dict (illegal Anthropic tool_result.content).
+    big_text = "y" * 50_000
+    message = _anthropic_tool_result_message("c1", {"content_blocks": [{"type": "text", "text": big_text}]})
+    outcome = _budget(message)
+    out_content = outcome.messages[0]["content"][0]["content"]
+    assert isinstance(out_content, list)
+    assert all(isinstance(b, dict) and b.get("type") == "text" for b in out_content)
+    assert len(out_content[0]["text"]) < len(big_text)
+
 
 def test_coalesce_merges_anthropic_block_array_tool_results():
     builder = get_provider_message_builder("anthropic")

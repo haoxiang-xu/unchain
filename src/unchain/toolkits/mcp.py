@@ -358,11 +358,11 @@ class MCPToolkit(Toolkit):
 
         parsed = MCPToolkit._parse_success_payload(result)
 
-        image_blocks = MCPToolkit._collect_image_blocks(result.content or [])
-        if image_blocks:
+        content_blocks = MCPToolkit._collect_content_blocks(result.content or [])
+        if content_blocks:
             existing = parsed.get("content_blocks") if isinstance(parsed, dict) else None
             blocks = list(existing) if isinstance(existing, list) else []
-            blocks.extend(image_blocks)
+            blocks.extend(content_blocks)
             parsed = dict(parsed)
             parsed["content_blocks"] = blocks
 
@@ -395,22 +395,35 @@ class MCPToolkit(Toolkit):
         return {"result": combined}
 
     @staticmethod
-    def _collect_image_blocks(content) -> list[dict[str, Any]]:
-        """Map MCP image content blocks to the S0 ``content_blocks`` shape."""
-        blocks: list[dict[str, Any]] = []
+    def _collect_content_blocks(content) -> list[dict[str, Any]]:
+        """Map MCP text+image content blocks to the S0 ``content_blocks`` shape.
+
+        Only builds blocks when an image is present (text-only results keep the
+        pre-S0 byte-identical behavior). When it does, the accompanying text is
+        surfaced too — otherwise "screenshot + caption" MCP results would lose
+        the caption, since the model only sees ``content_blocks`` when present.
+        Text blocks come before the image (Anthropic guidance: text-first aids
+        localization accuracy).
+        """
+        text_blocks: list[dict[str, Any]] = []
+        image_blocks: list[dict[str, Any]] = []
         for block in content:
-            if getattr(block, "type", None) != "image":
+            btype = getattr(block, "type", None)
+            if btype == "image":
+                data = getattr(block, "data", None)
+                if isinstance(data, str) and data:
+                    image_blocks.append({
+                        "type": "image",
+                        "media_type": getattr(block, "mimeType", None) or "image/png",
+                        "data_b64": data,
+                    })
                 continue
-            data = getattr(block, "data", None)
-            if not isinstance(data, str) or not data:
-                continue
-            media_type = getattr(block, "mimeType", None) or "image/png"
-            blocks.append({
-                "type": "image",
-                "media_type": media_type,
-                "data_b64": data,
-            })
-        return blocks
+            text = getattr(block, "text", None)
+            if isinstance(text, str) and text:
+                text_blocks.append({"type": "text", "text": text})
+        if not image_blocks:
+            return []
+        return text_blocks + image_blocks
 
     # ── repr ───────────────────────────────────────────────────────────────
 

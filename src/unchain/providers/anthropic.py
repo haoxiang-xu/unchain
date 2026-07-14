@@ -57,6 +57,21 @@ class AnthropicModelIO(_NativeModelIOBase):
         betas = collector(self.provider)
         return [beta for beta in betas if isinstance(beta, str) and beta] if isinstance(betas, list) else []
 
+    @staticmethod
+    def _merge_beta_header(existing: Any, required: list[str]) -> str:
+        """Merge required betas into any pre-existing anthropic-beta value.
+
+        Existing values (e.g. from the merged payload) come first and are
+        preserved; required betas are appended, deduplicated, order-stable.
+        """
+        merged: list[str] = []
+        if isinstance(existing, str):
+            merged.extend(beta.strip() for beta in existing.split(",") if beta.strip())
+        for beta in required:
+            if beta not in merged:
+                merged.append(beta)
+        return ",".join(merged)
+
     def fetch_turn(self, request: ModelTurnRequest) -> ModelTurnResult:
         client = self._client_factory(api_key=self.api_key, timeout=self._ANTHROPIC_TIMEOUT)
         request_payload = self._merged_payload(request.payload)
@@ -106,7 +121,9 @@ class AnthropicModelIO(_NativeModelIOBase):
         required_betas = self._collect_required_betas(request.toolkit)
         if required_betas:
             extra_headers = dict(request_kwargs.get("extra_headers") or {})
-            extra_headers["anthropic-beta"] = ",".join(required_betas)
+            extra_headers["anthropic-beta"] = self._merge_beta_header(
+                extra_headers.get("anthropic-beta"), required_betas
+            )
             request_kwargs["extra_headers"] = extra_headers
         # Annotate last message for prompt caching.
         if chat_messages:

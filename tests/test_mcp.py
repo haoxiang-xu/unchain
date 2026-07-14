@@ -202,7 +202,8 @@ class TestMcpResultParsing:
     # ── S0: image blocks are collected into content_blocks, not dropped ──────
 
     def test_parse_image_block_collected_into_content_blocks(self):
-        # MCP text + image content; text keeps working, image is no longer dropped.
+        # MCP text + image content: the caption text must ALSO reach the model
+        # (text block before image), not just the image. Business field retained.
         result = SimpleNamespace(
             isError=False,
             content=[
@@ -214,7 +215,8 @@ class TestMcpResultParsing:
         parsed = MCPToolkit(command="echo")._parse_call_result(result, "test_tool")
         assert parsed["result"] == "shot"
         assert parsed["content_blocks"] == [
-            {"type": "image", "media_type": "image/png", "data_b64": "aW1n"}
+            {"type": "text", "text": "shot"},
+            {"type": "image", "media_type": "image/png", "data_b64": "aW1n"},
         ]
 
     def test_parse_image_alongside_structured_content(self):

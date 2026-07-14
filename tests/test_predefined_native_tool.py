@@ -208,6 +208,15 @@ def test_anthropic_sets_beta_header_when_native_tool_present():
         assert computer[key] == value
 
 
+def test_merge_beta_header_preserves_existing_and_dedupes():
+    merge = AnthropicModelIO._merge_beta_header
+    assert merge(None, [COMPUTER_BETA]) == COMPUTER_BETA
+    # existing header value is preserved (first) and not overwritten
+    assert merge("prompt-caching-2024", [COMPUTER_BETA]) == f"prompt-caching-2024,{COMPUTER_BETA}"
+    # dedupe: a required beta already present is not repeated
+    assert merge(f"x, {COMPUTER_BETA}", [COMPUTER_BETA, "y"]) == f"x,{COMPUTER_BETA},y"
+
+
 def test_anthropic_omits_beta_header_without_required_betas():
     def echo(x: str):
         return {"x": x}
