@@ -50,6 +50,13 @@ class AnthropicModelIO(_NativeModelIOBase):
 
     _ANTHROPIC_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0)
 
+    def _collect_required_betas(self, toolkit: Any) -> list[str]:
+        collector = getattr(toolkit, "required_betas", None)
+        if not callable(collector):
+            return []
+        betas = collector(self.provider)
+        return [beta for beta in betas if isinstance(beta, str) and beta] if isinstance(betas, list) else []
+
     def fetch_turn(self, request: ModelTurnRequest) -> ModelTurnResult:
         client = self._client_factory(api_key=self.api_key, timeout=self._ANTHROPIC_TIMEOUT)
         request_payload = self._merged_payload(request.payload)
@@ -92,6 +99,15 @@ class AnthropicModelIO(_NativeModelIOBase):
         if anthropic_tools:
             anthropic_tools[-1]["cache_control"] = {"type": "ephemeral"}
             request_kwargs["tools"] = anthropic_tools
+
+        # Provider-native predefined tools (e.g. `computer`) may require an
+        # Anthropic beta flag. Aggregate the betas declared by the exposed tools
+        # and send them via the `anthropic-beta` request header.
+        required_betas = self._collect_required_betas(request.toolkit)
+        if required_betas:
+            extra_headers = dict(request_kwargs.get("extra_headers") or {})
+            extra_headers["anthropic-beta"] = ",".join(required_betas)
+            request_kwargs["extra_headers"] = extra_headers
         # Annotate last message for prompt caching.
         if chat_messages:
             _last = chat_messages[-1]

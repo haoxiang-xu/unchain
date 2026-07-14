@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import inspect
 import json
 from typing import Any, Callable, get_type_hints
@@ -43,6 +44,8 @@ class Tool:
         always_load: bool = False,
         defer_by_default: bool = False,
         search_hint: str = "",
+        provider_native_specs: dict[str, dict[str, Any]] | None = None,
+        required_betas: dict[str, list[str]] | None = None,
     ):
         if callable(name) and func is None:
             func = name
@@ -63,6 +66,13 @@ class Tool:
         self.always_load = bool(always_load)
         self.defer_by_default = bool(defer_by_default)
         self.search_hint = str(search_hint or "")
+        # Provider-native tool specs (e.g. Anthropic predefined `computer` tool)
+        # keyed by normalized provider name. When present for the requested
+        # provider, `to_provider_json` returns the native spec instead of the
+        # generic function schema. `required_betas` declares provider beta flags
+        # a tool needs (e.g. {"anthropic": ["computer-use-2025-11-24"]}).
+        self.provider_native_specs = self._construct_provider_native_specs(provider_native_specs)
+        self.required_betas = self._construct_required_betas(required_betas)
         self.parameters = self._construct_parameters(parameters)
 
         if self.func is not None and not self.parameters:
@@ -95,6 +105,8 @@ class Tool:
                 always_load=self.always_load,
                 defer_by_default=self.defer_by_default,
                 search_hint=self.search_hint,
+                provider_native_specs=self.provider_native_specs,
+                required_betas=self.required_betas,
             )
 
         if self.func is not None:
@@ -161,6 +173,8 @@ class Tool:
         always_load: bool = False,
         defer_by_default: bool = False,
         search_hint: str = "",
+        provider_native_specs: dict[str, dict[str, Any]] | None = None,
+        required_betas: dict[str, list[str]] | None = None,
     ) -> "Tool":
         summary, _ = _parse_docstring(func)
         return cls(
@@ -180,7 +194,46 @@ class Tool:
             always_load=always_load,
             defer_by_default=defer_by_default,
             search_hint=search_hint,
+            provider_native_specs=provider_native_specs,
+            required_betas=required_betas,
         )
+
+    @staticmethod
+    def _construct_provider_native_specs(
+        specs: dict[str, dict[str, Any]] | None,
+    ) -> dict[str, dict[str, Any]]:
+        if not isinstance(specs, dict):
+            return {}
+        constructed: dict[str, dict[str, Any]] = {}
+        for provider, spec in specs.items():
+            key = str(provider or "").strip().lower()
+            if key and isinstance(spec, dict):
+                constructed[key] = copy.deepcopy(spec)
+        return constructed
+
+    @staticmethod
+    def _construct_required_betas(
+        required_betas: dict[str, list[str]] | None,
+    ) -> dict[str, list[str]]:
+        if not isinstance(required_betas, dict):
+            return {}
+        constructed: dict[str, list[str]] = {}
+        for provider, betas in required_betas.items():
+            key = str(provider or "").strip().lower()
+            if not key or not isinstance(betas, (list, tuple)):
+                continue
+            values = [str(beta).strip() for beta in betas if str(beta or "").strip()]
+            if values:
+                constructed[key] = values
+        return constructed
+
+    def _provider_native_spec(self, normalized_provider: str) -> dict[str, Any] | None:
+        spec = self.provider_native_specs.get(normalized_provider)
+        return copy.deepcopy(spec) if isinstance(spec, dict) else None
+
+    def required_betas_for(self, provider: str | None) -> list[str]:
+        normalized = str(provider or "").strip().lower()
+        return list(self.required_betas.get(normalized, []))
 
     def _construct_parameters(
         self,
@@ -263,6 +316,14 @@ class Tool:
 
     def to_provider_json(self, provider: str | None = None) -> dict[str, Any]:
         normalized_provider = str(provider or "openai").strip().lower()
+
+        # Provider-native predefined tool (e.g. Anthropic `computer`): the native
+        # spec replaces the generic function/input_schema shape. Providers with
+        # no native spec fall back to the generic schema below (same execute).
+        native_spec = self._provider_native_spec(normalized_provider)
+        if native_spec is not None:
+            return native_spec
+
         parameters = self._parameters_json_schema()
 
         if normalized_provider in {"anthropic", "hyperspace"}:

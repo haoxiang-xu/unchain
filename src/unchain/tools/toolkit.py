@@ -188,6 +188,20 @@ class Toolkit:
     def to_provider_json(self, provider: str | None = None) -> list[dict[str, Any]]:
         return [tool_obj.to_provider_json(provider) for tool_obj in self.tools.values()]
 
+    def required_betas(self, provider: str | None = None) -> list[str]:
+        """Aggregate provider beta flags declared by the registered tools.
+
+        Order is stable (registration order, first occurrence wins) and
+        deduplicated, so a provider can pass them as a single ``anthropic-beta``
+        header without repeats.
+        """
+        collected: list[str] = []
+        for tool_obj in self.tools.values():
+            for beta in tool_obj.required_betas_for(provider):
+                if beta not in collected:
+                    collected.append(beta)
+        return collected
+
     def shutdown(self) -> None:
         return None
 
