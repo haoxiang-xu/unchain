@@ -22,7 +22,12 @@ EXECUTION_CHECKPOINT_KEY = "execution_checkpoint"
 EXECUTION_CHECKPOINT_DOMAIN_KEY = "execution_checkpoint_domain"
 EXECUTION_CHECKPOINT_SCHEMA_VERSION = 1
 _CHECKPOINT_STATUSES = frozenset(
-    {"max_iterations", "awaiting_human_input", "awaiting_interaction"}
+    {
+        "max_iterations",
+        "awaiting_human_input",
+        "awaiting_interaction",
+        "tool_result_ready",
+    }
 )
 
 

@@ -24,12 +24,17 @@ from ..execution import (
     StaleExecutionLeaseError,
 )
 from ..tools.models import NormalizedToolHistoryRecord, ToolHistoryOptimizationContext
+from ..tools.receipts import (
+    apply_durable_tool_receipt_ledger,
+    ensure_durable_tool_receipt_execution_id,
+)
 from .checkpoint_state import (
     EXECUTION_CHECKPOINT_DOMAIN_KEY,
     EXECUTION_CHECKPOINT_KEY,
     ExecutionCheckpointCompatibilityError,
     ExecutionCheckpointResumeRequiredError,
     apply_checkpoint_interaction_receipt,
+    transcript_digest,
     validate_execution_checkpoint,
 )
 from .ownership import ensure_session_delta_input
@@ -3148,6 +3153,7 @@ class MemoryManager:
         summary_text: str | None = None,
         return_result: bool = False,
         clear_execution_checkpoint_id: str | None = None,
+        durable_receipt_ledger: Any = None,
         execution_fence: ExecutionFence | None = None,
     ) -> MemoryCommitResult | None:
         if execution_fence is not None:
@@ -3172,6 +3178,11 @@ class MemoryManager:
                 actual_revision=session_snapshot.revision,
             )
         state = copy.deepcopy(session_snapshot.state)
+        clean_conversation = _deepcopy_messages(full_conversation)
+        receipt_ledger = ensure_durable_tool_receipt_execution_id(
+            durable_receipt_ledger,
+            execution_id=session_id,
+        )
         if (
             EXECUTION_CHECKPOINT_KEY in state
             and not clear_execution_checkpoint_id
@@ -3210,7 +3221,15 @@ class MemoryManager:
             state.pop(EXECUTION_CHECKPOINT_KEY, None)
             state.pop(EXECUTION_CHECKPOINT_DOMAIN_KEY, None)
             checkpoint_cleared = True
-        clean_conversation = _deepcopy_messages(full_conversation)
+        if receipt_ledger["pending"]:
+            apply_durable_tool_receipt_ledger(
+                state,
+                ledger=receipt_ledger,
+                application_id=(
+                    clear_execution_checkpoint_id
+                    or f"semantic_commit_{transcript_digest(clean_conversation)[:32]}"
+                ),
+            )
         state["messages"] = clean_conversation
 
         self.strategy.commit(state=state, full_conversation=clean_conversation)
@@ -3221,6 +3240,10 @@ class MemoryManager:
             "stored_message_count": len(clean_conversation),
             "execution_checkpoint_cleared": checkpoint_cleared,
         }
+        if receipt_ledger["pending"]:
+            commit_info["durable_tool_receipt_applied_count"] = len(
+                receipt_ledger["pending"]
+            )
         if summary_text is not None:
             normalized_summary = str(summary_text or "").strip()
             state["summary"] = normalized_summary

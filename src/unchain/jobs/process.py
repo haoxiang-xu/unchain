@@ -13,7 +13,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from .delivery import (
+    JobResultAcknowledgement,
+    JobResultReceipt,
+    JsonFileJobDeliveryJournal,
+    build_job_result_payload,
+)
 from .environment import JobEnvironmentProfile
+from .lineage import JsonFileJobLineageStore
 from .models import (
     TERMINAL_JOB_STATUSES,
     DurableJobConflictError,
@@ -72,6 +79,11 @@ class ProcessJobSupervisor:
         if not isinstance(store, JsonFileJobStore):
             raise TypeError("store must be a JsonFileJobStore")
         self.store = store
+        self.lineage = JsonFileJobLineageStore(store)
+        self.deliveries = JsonFileJobDeliveryJournal(
+            store,
+            lineage_store=self.lineage,
+        )
         self.python_executable = str(python_executable or sys.executable)
         if python_executable is not None and worker_command_prefix is not None:
             raise ValueError(
@@ -182,6 +194,8 @@ class ProcessJobSupervisor:
         intent_digest: str | None = None,
         adapter: str = "local_process",
         max_log_bytes: int | None = None,
+        logical_execution_id: str = "",
+        created_by_attempt_id: str = "",
     ) -> DurableJobSnapshot:
         """Reserve one stable job id and ensure its worker has been launched."""
 
@@ -207,18 +221,81 @@ class ProcessJobSupervisor:
                 separators=(",", ":"),
             ).encode("utf-8")
             resolved_intent_digest = hashlib.sha256(encoded_intent).hexdigest()
-        snapshot, _created = self.store.reserve_process_job(
+        if not isinstance(logical_execution_id, str):
+            raise TypeError("logical_execution_id must be a string")
+        normalized_logical_execution_id = logical_execution_id.strip()
+
+        def reserve_bind_and_launch() -> DurableJobSnapshot:
+            reservation_guard = (
+                self.lineage.reservation_guard(
+                    execution_id=execution_id,
+                    logical_execution_id=normalized_logical_execution_id,
+                    created_by_attempt_id=created_by_attempt_id,
+                )
+                if normalized_logical_execution_id
+                else None
+            )
+            reservation_kwargs: dict[str, Any] = {}
+            if reservation_guard is not None:
+                # Preserve the legacy/unscoped store call surface.  Older
+                # adapters and test doubles do not know about the internal
+                # scoped-reservation hook.
+                reservation_kwargs["_reservation_guard"] = reservation_guard
+            snapshot, _created = self.store.reserve_process_job(
+                execution_id=execution_id,
+                adapter=adapter,
+                argv=argv,
+                cwd=cwd,
+                timeout_ms=timeout_ms,
+                idempotency_key=idempotency_key,
+                intent_digest=resolved_intent_digest,
+                max_log_bytes=resolved_max_log_bytes,
+                environment_digest=self.environment_profile.digest,
+                **reservation_kwargs,
+            )
+            try:
+                self.lineage.bind(
+                    snapshot.job_id,
+                    execution_id=execution_id,
+                    logical_execution_id=normalized_logical_execution_id,
+                    created_by_attempt_id=created_by_attempt_id,
+                )
+            except DurableJobConflictError:
+                # A replayed start may arrive under a later run attempt after
+                # the original start wrote both records. Preserve creation
+                # provenance and accept only the same logical owner.
+                existing_lineage = self.lineage.load(
+                    snapshot.job_id,
+                    execution_id=execution_id,
+                )
+                if (
+                    existing_lineage is None
+                    or existing_lineage.logical_execution_id
+                    != normalized_logical_execution_id
+                ):
+                    raise
+            return self._reconcile(snapshot, allow_launch=True)
+
+        if not normalized_logical_execution_id:
+            return reserve_bind_and_launch()
+
+        # Stop and start share this exact scope lock.  Stop either waits for a
+        # fully bound launch and then marks it cancelled, or wins first and
+        # leaves a tombstone that prevents both a new start and an idempotent
+        # replay from relaunching the command.
+        with self.lineage.lock_scope(
             execution_id=execution_id,
-            adapter=adapter,
-            argv=argv,
-            cwd=cwd,
-            timeout_ms=timeout_ms,
-            idempotency_key=idempotency_key,
-            intent_digest=resolved_intent_digest,
-            max_log_bytes=resolved_max_log_bytes,
-            environment_digest=self.environment_profile.digest,
-        )
-        return self._reconcile(snapshot, allow_launch=True)
+            logical_execution_id=normalized_logical_execution_id,
+        ):
+            cancellation = self.lineage.cancellation_locked(
+                execution_id=execution_id,
+                logical_execution_id=normalized_logical_execution_id,
+            )
+            if cancellation is not None:
+                raise DurableJobConflictError(
+                    "durable job logical execution has been cancelled"
+                )
+            return reserve_bind_and_launch()
 
     def inspect(
         self,
@@ -304,7 +381,10 @@ class ProcessJobSupervisor:
         snapshot = self.store.load(job_id, execution_id=execution_id)
         snapshot = self._reconcile(snapshot, allow_launch=False)
         cancel_requested = False
-        if snapshot.status not in TERMINAL_JOB_STATUSES:
+        if (
+            snapshot.status not in TERMINAL_JOB_STATUSES
+            or snapshot.status == "outcome_unknown"
+        ):
             self.store.request_cancel(job_id, execution_id=execution_id)
             cancel_requested = True
             # A queued reservation with no live worker still needs a worker to
@@ -328,6 +408,371 @@ class ProcessJobSupervisor:
         result["cancel_wait_timeout_ms"] = resolved_wait_ms
         result["cancel_wait_timed_out"] = not snapshot.completed
         return result
+
+    def poll_with_receipt(
+        self,
+        job_id: str,
+        *,
+        execution_id: str,
+        delivery_key: str,
+        operation_digest: str | None = None,
+        logical_execution_id: str = "",
+        created_by_attempt_id: str = "",
+        source_attempt_id: str = "",
+        max_output_chars: int = 20_000,
+    ) -> JobResultReceipt:
+        """Prepare one replayable poll result without committing log offsets."""
+
+        digest = self._delivery_operation_digest(
+            operation_digest,
+            {
+                "action": "poll",
+                "job_id": job_id,
+                "max_output_chars": max_output_chars,
+            },
+        )
+        replay = self.deliveries.lookup(
+            job_id,
+            execution_id=execution_id,
+            delivery_key=delivery_key,
+            action="poll",
+            operation_digest=digest,
+            logical_execution_id=logical_execution_id,
+            created_by_attempt_id=created_by_attempt_id,
+        )
+        if replay is not None:
+            return replay
+        self.inspect(job_id, execution_id=execution_id)
+        return self.deliveries.prepare(
+            job_id,
+            execution_id=execution_id,
+            delivery_key=delivery_key,
+            action="poll",
+            operation_digest=digest,
+            logical_execution_id=logical_execution_id,
+            created_by_attempt_id=created_by_attempt_id,
+            source_attempt_id=source_attempt_id,
+            max_output_chars=max_output_chars,
+        )
+
+    def wait_with_receipt(
+        self,
+        job_id: str,
+        *,
+        execution_id: str,
+        delivery_key: str,
+        operation_digest: str | None = None,
+        logical_execution_id: str = "",
+        created_by_attempt_id: str = "",
+        source_attempt_id: str = "",
+        timeout_ms: int = 120_000,
+        max_output_chars: int = 20_000,
+    ) -> JobResultReceipt:
+        """Wait boundedly, then persist an unacknowledged immutable result."""
+
+        resolved_timeout_ms = self._non_negative_int(timeout_ms, "timeout_ms")
+        digest = self._delivery_operation_digest(
+            operation_digest,
+            {
+                "action": "wait",
+                "job_id": job_id,
+                "timeout_ms": resolved_timeout_ms,
+                "max_output_chars": max_output_chars,
+            },
+        )
+        replay = self.deliveries.lookup(
+            job_id,
+            execution_id=execution_id,
+            delivery_key=delivery_key,
+            action="wait",
+            operation_digest=digest,
+            logical_execution_id=logical_execution_id,
+            created_by_attempt_id=created_by_attempt_id,
+        )
+        if replay is not None:
+            return replay
+
+        deadline = time.monotonic() + (resolved_timeout_ms / 1000.0)
+        snapshot = self.inspect(job_id, execution_id=execution_id)
+        while not snapshot.completed and time.monotonic() < deadline:
+            remaining = deadline - time.monotonic()
+            time.sleep(min(self.poll_interval_s, max(0.0, remaining)))
+            snapshot = self.inspect(job_id, execution_id=execution_id)
+        return self.deliveries.prepare(
+            job_id,
+            execution_id=execution_id,
+            delivery_key=delivery_key,
+            action="wait",
+            operation_digest=digest,
+            logical_execution_id=logical_execution_id,
+            created_by_attempt_id=created_by_attempt_id,
+            source_attempt_id=source_attempt_id,
+            max_output_chars=max_output_chars,
+            result_updates={
+                "wait_timeout_ms": resolved_timeout_ms,
+                "wait_timed_out": not snapshot.completed,
+            },
+        )
+
+    def cancel_with_receipt(
+        self,
+        job_id: str,
+        *,
+        execution_id: str,
+        delivery_key: str,
+        operation_digest: str | None = None,
+        logical_execution_id: str = "",
+        created_by_attempt_id: str = "",
+        source_attempt_id: str = "",
+        wait_timeout_ms: int | None = None,
+        timeout_ms: int | None = None,
+        max_output_chars: int = 20_000,
+        receipt_action: str = "cancel",
+    ) -> JobResultReceipt:
+        """Request cancellation and prepare a replayable result receipt."""
+
+        if wait_timeout_ms is not None and timeout_ms is not None:
+            raise ValueError("provide only one of wait_timeout_ms or timeout_ms")
+        requested_wait_ms = (
+            wait_timeout_ms
+            if wait_timeout_ms is not None
+            else (timeout_ms if timeout_ms is not None else 2_000)
+        )
+        resolved_wait_ms = self._non_negative_int(
+            requested_wait_ms,
+            "wait_timeout_ms",
+        )
+        action = str(receipt_action or "").strip()
+        if not action:
+            raise ValueError("receipt_action must be a non-empty string")
+        digest = self._delivery_operation_digest(
+            operation_digest,
+            {
+                "action": action,
+                "job_id": job_id,
+                "wait_timeout_ms": resolved_wait_ms,
+                "max_output_chars": max_output_chars,
+            },
+        )
+        replay = self.deliveries.lookup(
+            job_id,
+            execution_id=execution_id,
+            delivery_key=delivery_key,
+            action=action,
+            operation_digest=digest,
+            logical_execution_id=logical_execution_id,
+            created_by_attempt_id=created_by_attempt_id,
+        )
+        if replay is not None:
+            return replay
+
+        snapshot = self.store.load(job_id, execution_id=execution_id)
+        snapshot = self._reconcile(snapshot, allow_launch=False)
+        cancel_requested = False
+        if (
+            snapshot.status not in TERMINAL_JOB_STATUSES
+            or snapshot.status == "outcome_unknown"
+        ):
+            self.store.request_cancel(job_id, execution_id=execution_id)
+            cancel_requested = True
+            snapshot = self._reconcile(
+                snapshot,
+                allow_launch=not self._closed,
+            )
+
+        deadline = time.monotonic() + (resolved_wait_ms / 1000.0)
+        while not snapshot.completed and time.monotonic() < deadline:
+            remaining = deadline - time.monotonic()
+            time.sleep(min(self.poll_interval_s, max(0.0, remaining)))
+            snapshot = self.inspect(job_id, execution_id=execution_id)
+        return self.deliveries.prepare(
+            job_id,
+            execution_id=execution_id,
+            delivery_key=delivery_key,
+            action=action,
+            operation_digest=digest,
+            logical_execution_id=logical_execution_id,
+            created_by_attempt_id=created_by_attempt_id,
+            source_attempt_id=source_attempt_id,
+            max_output_chars=max_output_chars,
+            result_updates={
+                "cancel_requested": cancel_requested,
+                "cancel_wait_timeout_ms": resolved_wait_ms,
+                "cancel_wait_timed_out": not snapshot.completed,
+            },
+        )
+
+    def acknowledge_result_receipt(
+        self,
+        job_id: str,
+        *,
+        execution_id: str,
+        receipt_id: str,
+        applied_checkpoint_id: str,
+        expected_receipt_digest: str | None = None,
+        expected_result_digest: str | None = None,
+        expected_delivery_key: str | None = None,
+        expected_operation_digest: str | None = None,
+    ) -> JobResultAcknowledgement:
+        """Commit one prepared receipt after its session checkpoint CAS."""
+
+        return self.deliveries.acknowledge(
+            job_id,
+            execution_id=execution_id,
+            receipt_id=receipt_id,
+            applied_checkpoint_id=applied_checkpoint_id,
+            expected_receipt_digest=expected_receipt_digest,
+            expected_result_digest=expected_result_digest,
+            expected_delivery_key=expected_delivery_key,
+            expected_operation_digest=expected_operation_digest,
+        )
+
+    def pending_result_receipts(
+        self,
+        job_id: str,
+        *,
+        execution_id: str,
+    ) -> list[JobResultReceipt]:
+        return self.deliveries.pending_for_job(
+            job_id,
+            execution_id=execution_id,
+        )
+
+    def reattach_lineage(
+        self,
+        *,
+        execution_id: str,
+        logical_execution_id: str,
+    ) -> list[DurableJobSnapshot]:
+        """Reconcile only jobs carrying one exact non-empty lineage sidecar."""
+
+        snapshots: list[DurableJobSnapshot] = []
+        for snapshot in self.lineage.list_lineage(
+            execution_id=execution_id,
+            logical_execution_id=logical_execution_id,
+        ):
+            snapshots.append(
+                self._reconcile(snapshot, allow_launch=not self._closed)
+            )
+        return snapshots
+
+    def cancel_lineage(
+        self,
+        *,
+        execution_id: str,
+        logical_execution_id: str,
+        wait_timeout_ms: int = 2_000,
+        reason: str = "user_stop",
+    ) -> list[DurableJobSnapshot]:
+        """Cancel only jobs bound to one exact logical execution.
+
+        This intentionally never falls back to every job in a session. Jobs
+        without a lineage sidecar remain legacy/unscoped and are not selected.
+        No log cursor is consumed while cancellation is requested.
+        """
+
+        resolved_wait_ms = self._non_negative_int(
+            wait_timeout_ms,
+            "wait_timeout_ms",
+        )
+        # Scope lock order is always lineage -> job.  The durable tombstone and
+        # every currently bound job marker become visible before the lock is
+        # released; a racing scoped start therefore cannot slip through the
+        # reserve/bind/launch gap.
+        with self.lineage.lock_scope(
+            execution_id=execution_id,
+            logical_execution_id=logical_execution_id,
+        ):
+            self.lineage.request_cancel_locked(
+                execution_id=execution_id,
+                logical_execution_id=logical_execution_id,
+                reason=reason,
+            )
+            snapshots = self.lineage.list_lineage(
+                execution_id=execution_id,
+                logical_execution_id=logical_execution_id,
+            )
+            results: list[DurableJobSnapshot] = []
+            for snapshot in snapshots:
+                current = self.store.load(
+                    snapshot.job_id,
+                    execution_id=execution_id,
+                )
+                current = self._reconcile(current, allow_launch=False)
+                if (
+                    current.status not in TERMINAL_JOB_STATUSES
+                    or current.status == "outcome_unknown"
+                ):
+                    self.store.request_cancel(
+                        current.job_id,
+                        execution_id=execution_id,
+                    )
+                    current = self._reconcile(
+                        current,
+                        allow_launch=not self._closed,
+                    )
+                results.append(current)
+
+        # All cancellation markers are durable before waiting for any one job.
+        # One shared deadline keeps Stop bounded even when a logical execution
+        # owns several background jobs.
+        deadline = time.monotonic() + (resolved_wait_ms / 1000.0)
+        while any(not snapshot.completed for snapshot in results):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(self.poll_interval_s, remaining))
+            for index, current in enumerate(results):
+                if current.completed:
+                    continue
+                results[index] = self.inspect(
+                    current.job_id,
+                    execution_id=execution_id,
+                )
+        return results
+
+    def cancel_logical_execution(
+        self,
+        *,
+        execution_id: str,
+        logical_execution_id: str,
+        wait_timeout_ms: int = 2_000,
+        reason: str = "user_stop",
+    ) -> dict[str, Any]:
+        """Cancel one exact execution lineage and return JSON-safe outcomes.
+
+        Both identities are mandatory.  In particular, this method never
+        searches globally by logical id and never includes legacy jobs that
+        lack a lineage sidecar.
+        """
+
+        snapshots = self.cancel_lineage(
+            execution_id=execution_id,
+            logical_execution_id=logical_execution_id,
+            wait_timeout_ms=wait_timeout_ms,
+            reason=reason,
+        )
+        jobs = [
+            {
+                "job_id": snapshot.job_id,
+                "task_id": snapshot.job_id,
+                "execution_id": snapshot.execution_id,
+                "logical_execution_id": logical_execution_id,
+                "status": snapshot.status,
+                "completed": snapshot.completed,
+                "cancelled": snapshot.cancelled,
+                "outcome_unknown": snapshot.status == "outcome_unknown",
+            }
+            for snapshot in snapshots
+        ]
+        return {
+            "supported": True,
+            "disposition": "applied" if jobs else "unchanged",
+            "execution_id": execution_id,
+            "logical_execution_id": logical_execution_id,
+            "cancelled_job_ids": [item["job_id"] for item in jobs],
+            "jobs": jobs,
+        }
 
     def reattach(self, execution_id: str) -> list[DurableJobSnapshot]:
         """Return all jobs owned by an execution after reconciling liveness."""
@@ -725,48 +1170,33 @@ class ProcessJobSupervisor:
         action: str,
         logs: dict[str, Any],
     ) -> DurableJobResult:
-        stdout = str(logs.get("stdout") or "")
-        stderr = str(logs.get("stderr") or "")
-        stdout_start_offset = int(logs.get("stdout_start_offset") or 0)
-        stderr_start_offset = int(logs.get("stderr_start_offset") or 0)
-        next_stdout_offset = int(logs.get("stdout_offset") or 0)
-        next_stderr_offset = int(logs.get("stderr_offset") or 0)
-        consumer_truncated = bool(logs.get("truncated"))
-        result = DurableJobResult(
-            ok=snapshot.ok,
-            action=action,
-            status=snapshot.status,
-            task_id=snapshot.job_id,
-            job_id=snapshot.job_id,
-            execution_id=snapshot.execution_id,
-            adapter=snapshot.adapter,
-            durable=True,
-            background=True,
-            stdout=stdout,
-            stderr=stderr,
-            completed=snapshot.completed,
-            returncode=snapshot.returncode,
-            timed_out=snapshot.timed_out,
-            cancelled=snapshot.cancelled,
-            outcome_unknown=snapshot.status == "outcome_unknown",
-            outcome_unknown_reason=snapshot.outcome_unknown_reason,
-            error=snapshot.error,
-            stdout_truncated=snapshot.stdout_truncated,
-            stderr_truncated=snapshot.stderr_truncated,
-            truncated=(
-                consumer_truncated
-                or snapshot.stdout_truncated
-                or snapshot.stderr_truncated
-            ),
-            stdout_offset=stdout_start_offset,
-            stderr_offset=stderr_start_offset,
-            next_stdout_offset=next_stdout_offset,
-            next_stderr_offset=next_stderr_offset,
-            offset_unit=str(logs.get("offset_unit") or "utf8_bytes"),
-            stdout_available=int(logs.get("stdout_available") or 0),
-            stderr_available=int(logs.get("stderr_available") or 0),
+        return DurableJobResult(
+            build_job_result_payload(
+                snapshot,
+                action=action,
+                logs=logs,
+            )
         )
-        return result
+
+    @staticmethod
+    def _delivery_operation_digest(
+        supplied: str | None,
+        operation: dict[str, Any],
+    ) -> str:
+        normalized = str(supplied or "").strip()
+        if normalized:
+            if not all(character in "0123456789abcdef" for character in normalized) or len(normalized) != 64:
+                raise ValueError(
+                    "operation_digest must be a lowercase SHA-256 digest"
+                )
+            return normalized
+        encoded = json.dumps(
+            operation,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
 
     @staticmethod
     def _positive_int(value: Any, field: str) -> int:

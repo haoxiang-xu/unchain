@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ..tools.receipts import DURABLE_TOOL_RECEIPT_LEDGER_KEY
 from .base import BaseMemoryHarness, MemoryContext
 from .effects import build_memory_delta, memory_commit_update, memory_state_update
 
@@ -27,6 +28,9 @@ class MemoryCommitHarness(BaseMemoryHarness):
             expected_checkpoint_id=(
                 str(context.state.memory_state.get("execution_checkpoint_id") or "")
                 or None
+            ),
+            durable_receipt_ledger=context.state.metadata.get(
+                DURABLE_TOOL_RECEIPT_LEDGER_KEY
             ),
             execution_fence=context.execution_fence,
         )

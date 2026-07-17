@@ -10,9 +10,16 @@ from ..kernel.types import ToolCall
 from ..tools.common import emit_loop_event
 from ..tools.confirmation import prepare_tool_confirmation
 from ..tools.models import ToolConfirmationResponse, ToolExecutionContext
+from ..tools.receipts import (
+    DurableToolReceiptIntegrityError,
+    build_durable_tool_receipt,
+    durable_tool_receipt_state_update,
+    validate_durable_tool_receipt,
+)
 from ..tools.runtime import ToolRuntimeOutcome, ToolRuntimePlugin
 from .environment import JobEnvironmentProfile
 from .models import (
+    DurableJobConflictError,
     DurableJobNotFoundError,
     DurableJobOwnershipError,
     DurableJobSnapshot,
@@ -25,6 +32,7 @@ if TYPE_CHECKING:
 
 _DURABLE_JOB_PREFIX = "job_"
 _SHELL_ACTIONS = frozenset({"run", "poll", "wait", "kill"})
+_DURABLE_JOB_RECEIPT_SOURCE = "unchain.jobs.durable_shell"
 
 
 def _canonical_digest(value: Any) -> str:
@@ -79,6 +87,10 @@ class DurableShellJobPlugin(ToolRuntimePlugin):
     ) -> dict[str, Any]:
         """Bind approval replay to this store and normalized shell intent."""
 
+        self._validate_runtime_session(
+            context,
+            execution_id=self._execution_id(context),
+        )
         store = getattr(self.supervisor, "store", None)
         base_dir = getattr(store, "base_dir", None)
         store_id = getattr(store, "store_id", None)
@@ -88,6 +100,7 @@ class DurableShellJobPlugin(ToolRuntimePlugin):
             )
         arguments = tool_call.arguments if isinstance(tool_call.arguments, dict) else {}
         action = str(arguments.get("action") or "").strip().lower()
+        logical_execution_id, _ = self._runtime_lineage_fields(context)
         operation: dict[str, Any] = {
             "action": action,
             "task_id": str(arguments.get("task_id") or ""),
@@ -124,6 +137,8 @@ class DurableShellJobPlugin(ToolRuntimePlugin):
                         }
                     ),
                 }
+        if logical_execution_id:
+            operation["logical_execution_id"] = logical_execution_id
         path_digest = hashlib.sha256(str(base_dir).encode("utf-8")).hexdigest()
         store_identity = {
             "backend": "json_file",
@@ -131,16 +146,23 @@ class DurableShellJobPlugin(ToolRuntimePlugin):
             "store_id": store_id,
             "base_dir_digest": path_digest,
         }
-        return {
+        manifest = {
             "handler": "durable_shell_job",
             "protocol_version": 1,
             "terminal_handler": True,
             "adapter": "shell",
             "store": store_identity,
             "store_namespace_digest": _canonical_digest(store_identity),
-            "job_identity": "execution_id+shell_call_id:v1",
+            "job_identity": (
+                "execution_id+logical_execution_id+shell_call_id:v2"
+                if logical_execution_id
+                else "execution_id+shell_call_id:v1"
+            ),
             "operation": operation,
         }
+        if logical_execution_id:
+            manifest["logical_execution_id"] = logical_execution_id
+        return manifest
 
     def execute(self, *, tool_call: ToolCall, context: Any) -> ToolRuntimeOutcome:
         original_arguments = (
@@ -184,16 +206,19 @@ class DurableShellJobPlugin(ToolRuntimePlugin):
                     arguments=effective_arguments,
                     context=context,
                 )
+                state_updates: dict[str, Any] = {}
             else:
-                result = self._lifecycle(
+                result, state_updates = self._lifecycle(
                     action=action,
                     execution_id=execution_id,
+                    call_id=tool_call.call_id,
                     arguments=effective_arguments,
                     context=context,
                 )
             return ToolRuntimeOutcome(
                 handled=True,
                 tool_result=result,
+                state_updates=state_updates,
                 should_observe=should_observe,
             )
         except Exception as exc:
@@ -317,6 +342,7 @@ class DurableShellJobPlugin(ToolRuntimePlugin):
         arguments: dict[str, Any],
         context: Any,
     ) -> dict[str, Any]:
+        self._validate_runtime_session(context, execution_id=execution_id)
         cached = self._approved_intents.pop((execution_id, call_id), None)
         arguments_digest = _canonical_digest(arguments)
         if cached is not None and cached[0] == arguments_digest:
@@ -330,14 +356,31 @@ class DurableShellJobPlugin(ToolRuntimePlugin):
                     cached[1].environment_profile if cached is not None else None
                 ),
             )
+        logical_execution_id, created_by_attempt_id = self._runtime_lineage_fields(
+            context
+        )
+        idempotency_key = (
+            "shell:v2:"
+            + _canonical_digest(
+                {
+                    "schema_version": 2,
+                    "logical_execution_id": logical_execution_id,
+                    "call_id": call_id,
+                }
+            )
+            if logical_execution_id
+            else f"shell:{call_id}"
+        )
         snapshot = self.supervisor.start(
             execution_id=execution_id,
-            idempotency_key=f"shell:{call_id}",
+            idempotency_key=idempotency_key,
             argv=intent.argv,
             cwd=intent.cwd,
             timeout_ms=intent.timeout_ms,
             intent_digest=intent.intent_digest,
             adapter="shell",
+            logical_execution_id=logical_execution_id,
+            created_by_attempt_id=created_by_attempt_id,
         )
         return self._snapshot_result(
             snapshot,
@@ -397,9 +440,11 @@ class DurableShellJobPlugin(ToolRuntimePlugin):
         *,
         action: str,
         execution_id: str,
+        call_id: str,
         arguments: dict[str, Any],
         context: Any,
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        self._validate_runtime_session(context, execution_id=execution_id)
         task_id = arguments.get("task_id")
         if not isinstance(task_id, str) or not task_id.strip():
             raise ValueError("task_id is required")
@@ -409,6 +454,87 @@ class DurableShellJobPlugin(ToolRuntimePlugin):
         max_output_chars = shell_runtime._normalize_max_output_chars(
             arguments.get("max_output_chars")
         )
+        lineage = self._receipt_lineage(
+            context,
+            job_id=task_id,
+            execution_id=execution_id,
+        )
+        if lineage is not None:
+            _, current_created_by_attempt_id = self._runtime_lineage_fields(context)
+            request_digest = _canonical_digest(
+                {
+                    "tool": "shell",
+                    "arguments": arguments,
+                }
+            )
+            delivery_key = f"shell:{call_id}"
+            current_attempt_id = str(getattr(context, "run_id", "") or "").strip()
+            if action == "poll":
+                receipt = self.supervisor.poll_with_receipt(
+                    execution_id=execution_id,
+                    job_id=task_id,
+                    delivery_key=delivery_key,
+                    operation_digest=request_digest,
+                    logical_execution_id=lineage.logical_execution_id,
+                    created_by_attempt_id=current_created_by_attempt_id,
+                    source_attempt_id=current_attempt_id,
+                    max_output_chars=max_output_chars,
+                )
+            elif action == "wait":
+                timeout_ms = shell_runtime._normalize_timeout_ms(
+                    arguments.get("timeout_ms")
+                )
+                receipt = self.supervisor.wait_with_receipt(
+                    execution_id=execution_id,
+                    job_id=task_id,
+                    delivery_key=delivery_key,
+                    operation_digest=request_digest,
+                    logical_execution_id=lineage.logical_execution_id,
+                    created_by_attempt_id=current_created_by_attempt_id,
+                    source_attempt_id=current_attempt_id,
+                    timeout_ms=timeout_ms,
+                    max_output_chars=max_output_chars,
+                )
+            else:
+                receipt = self.supervisor.cancel_with_receipt(
+                    execution_id=execution_id,
+                    job_id=task_id,
+                    delivery_key=delivery_key,
+                    operation_digest=request_digest,
+                    logical_execution_id=lineage.logical_execution_id,
+                    created_by_attempt_id=current_created_by_attempt_id,
+                    source_attempt_id=current_attempt_id,
+                    wait_timeout_ms=2_000,
+                    max_output_chars=max_output_chars,
+                    receipt_action="kill",
+                )
+            bridge_receipt = build_durable_tool_receipt(
+                source=_DURABLE_JOB_RECEIPT_SOURCE,
+                receipt_id=receipt.receipt_id,
+                execution_id=receipt.execution_id,
+                logical_execution_id=receipt.logical_execution_id,
+                created_by_attempt_id=receipt.created_by_attempt_id,
+                tool_call_id=call_id,
+                request_digest=request_digest,
+                result_digest=receipt.result_digest,
+                payload={
+                    "job_receipt": receipt.runtime_metadata(),
+                    "stdout_offset": receipt.result["stdout_offset"],
+                    "stderr_offset": receipt.result["stderr_offset"],
+                    "next_stdout_offset": receipt.result["next_stdout_offset"],
+                    "next_stderr_offset": receipt.result["next_stderr_offset"],
+                },
+            )
+            result = receipt.result
+            result.setdefault("task_id", task_id)
+            result.setdefault("job_id", task_id)
+            result.setdefault("durable", True)
+            result.setdefault("background", True)
+            return (
+                result,
+                durable_tool_receipt_state_update(context.state, bridge_receipt),
+            )
+
         if action == "poll":
             result = self.supervisor.poll(
                 execution_id=execution_id,
@@ -435,7 +561,142 @@ class DurableShellJobPlugin(ToolRuntimePlugin):
         result.setdefault("job_id", task_id)
         result.setdefault("durable", True)
         result.setdefault("background", True)
-        return result
+        return result, {}
+
+    def acknowledge_durable_receipt(
+        self,
+        *,
+        receipt: dict[str, Any],
+        application: dict[str, Any],
+    ) -> bool:
+        """Commit a prepared job cursor after its session CAS is durable."""
+
+        validated = validate_durable_tool_receipt(receipt)
+        if validated["source"] != _DURABLE_JOB_RECEIPT_SOURCE:
+            return False
+        payload = validated["payload"]
+        job_receipt = payload.get("job_receipt")
+        if not isinstance(job_receipt, dict):
+            raise DurableToolReceiptIntegrityError(
+                "durable shell receipt is missing job receipt metadata"
+            )
+        store = getattr(self.supervisor, "store", None)
+        store_id = str(getattr(store, "store_id", "") or "")
+        if str(job_receipt.get("store_id") or "") != store_id:
+            return False
+        if application.get("receipt") != validated:
+            raise DurableToolReceiptIntegrityError(
+                "durable shell receipt application does not match its receipt"
+            )
+        application_id = str(application.get("application_id") or "").strip()
+        if not application_id:
+            raise DurableToolReceiptIntegrityError(
+                "durable shell receipt application_id is required"
+            )
+        expected = {
+            "receipt_id": validated["receipt_id"],
+            "execution_id": validated["execution_id"],
+            "logical_execution_id": validated["logical_execution_id"],
+            "created_by_attempt_id": validated["created_by_attempt_id"],
+            "tool_call_id": validated["tool_call_id"],
+            "request_digest": validated["request_digest"],
+            "result_digest": str(job_receipt.get("result_digest") or ""),
+        }
+        actual = {
+            "receipt_id": str(job_receipt.get("receipt_id") or ""),
+            "execution_id": str(job_receipt.get("execution_id") or ""),
+            "logical_execution_id": str(
+                job_receipt.get("logical_execution_id") or ""
+            ),
+            "created_by_attempt_id": str(
+                job_receipt.get("created_by_attempt_id") or ""
+            ),
+            "tool_call_id": str(job_receipt.get("delivery_key") or "").removeprefix(
+                "shell:"
+            ),
+            "request_digest": str(job_receipt.get("operation_digest") or ""),
+            "result_digest": validated["result_digest"],
+        }
+        if actual != expected:
+            raise DurableToolReceiptIntegrityError(
+                "durable shell receipt identity does not match its job receipt"
+            )
+        self.supervisor.acknowledge_result_receipt(
+            str(job_receipt.get("job_id") or ""),
+            execution_id=str(job_receipt.get("execution_id") or ""),
+            receipt_id=validated["receipt_id"],
+            applied_checkpoint_id=application_id,
+            expected_receipt_digest=str(job_receipt.get("receipt_digest") or ""),
+            expected_result_digest=validated["result_digest"],
+            expected_delivery_key=str(job_receipt.get("delivery_key") or ""),
+            expected_operation_digest=validated["request_digest"],
+        )
+        return True
+
+    def _receipt_lineage(
+        self,
+        context: Any,
+        *,
+        job_id: str,
+        execution_id: str,
+    ) -> Any | None:
+        state = getattr(context, "state", None)
+        memory_state = getattr(state, "memory_state", None)
+        if (
+            not execution_id
+            or not isinstance(memory_state, dict)
+            or memory_state.get("session_revision_supported") is not True
+        ):
+            return None
+        lineage_store = getattr(self.supervisor, "lineage", None)
+        load = getattr(lineage_store, "load", None)
+        if not callable(load):
+            return None
+        lineage = load(job_id, execution_id=execution_id)
+        if lineage is None:
+            return None
+        logical_execution_id, _ = self._runtime_lineage_fields(context)
+        if logical_execution_id != lineage.logical_execution_id:
+            raise DurableJobConflictError(
+                "durable job does not belong to the current logical execution"
+            )
+        if not lineage.created_by_attempt_id:
+            raise DurableJobConflictError(
+                "durable job lineage has no creation attempt for receipt delivery"
+            )
+        return lineage
+
+    @staticmethod
+    def _runtime_lineage_fields(context: Any) -> tuple[str, str]:
+        config = DurableShellJobPlugin._runtime_job_config(context)
+        return (
+            str(config.get("logical_execution_id") or "").strip(),
+            str(config.get("created_by_attempt_id") or "").strip(),
+        )
+
+    @staticmethod
+    def _runtime_job_config(context: Any) -> dict[str, Any]:
+        event = getattr(context, "event", None)
+        runtime_config = (
+            event.get("tool_runtime_config")
+            if isinstance(event, dict)
+            and isinstance(event.get("tool_runtime_config"), dict)
+            else {}
+        )
+        namespaced = runtime_config.get("durable_jobs")
+        config = namespaced if isinstance(namespaced, dict) else runtime_config
+        return config
+
+    @staticmethod
+    def _validate_runtime_session(context: Any, *, execution_id: str) -> None:
+        configured_session_id = str(
+            DurableShellJobPlugin._runtime_job_config(context).get("session_id")
+            or ""
+        ).strip()
+        if configured_session_id and configured_session_id != execution_id:
+            raise DurableJobConflictError(
+                "durable jobs runtime session does not match the active session"
+            )
 
     @staticmethod
     def _execution_id(context: Any) -> str:

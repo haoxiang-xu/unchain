@@ -3,6 +3,10 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 
+from ..tools.receipts import (
+    DURABLE_TOOL_RECEIPT_LEDGER_KEY,
+    validate_durable_tool_receipt_ledger,
+)
 from .base import BaseMemoryHarness, MemoryContext
 from .checkpoint_state import (
     build_execution_checkpoint,
@@ -21,11 +25,20 @@ class ExecutionCheckpointHarness(BaseMemoryHarness):
 
     durable_barrier = True
     name: str = "memory_execution_checkpoint"
-    phases: tuple[str, ...] = ("suspend_persist", "finalize_persist")
+    phases: tuple[str, ...] = (
+        "before_model",
+        "suspend_persist",
+        "finalize_persist",
+    )
     order: int = 90
 
     def build_memory_delta(self, context: MemoryContext):
         status = str(context.event.get("status") or context.state.run_status or "")
+        receipt_ledger = validate_durable_tool_receipt_ledger(
+            context.state.metadata.get(DURABLE_TOOL_RECEIPT_LEDGER_KEY)
+        )
+        if context.phase == "before_model" and not receipt_ledger["pending"]:
+            return None
         if not context.session_id:
             return build_memory_delta(
                 created_by=self.created_by,
@@ -36,6 +49,12 @@ class ExecutionCheckpointHarness(BaseMemoryHarness):
                 },
             )
 
+        if context.phase == "before_model":
+            return self._persist(
+                context,
+                status="tool_result_ready",
+                receipt_ledger=receipt_ledger,
+            )
         if context.phase == "suspend_persist":
             suspend_status = str(context.event.get("status") or "awaiting_human_input")
             if suspend_status not in {
@@ -44,16 +63,36 @@ class ExecutionCheckpointHarness(BaseMemoryHarness):
                 "max_iterations",
             }:
                 return None
-            return self._persist(context, status=suspend_status)
+            return self._persist(
+                context,
+                status=suspend_status,
+                receipt_ledger=receipt_ledger,
+            )
         if context.phase != "finalize_persist":
             return None
         if status == "max_iterations":
-            return self._persist(context, status="max_iterations")
+            return self._persist(
+                context,
+                status="max_iterations",
+                receipt_ledger=receipt_ledger,
+            )
         if status == "completed":
-            return self._complete(context)
+            return self._complete(context, receipt_ledger=receipt_ledger)
+        if receipt_ledger["pending"]:
+            return self._persist(
+                context,
+                status="tool_result_ready",
+                receipt_ledger=receipt_ledger,
+            )
         return None
 
-    def _persist(self, context: MemoryContext, *, status: str):
+    def _persist(
+        self,
+        context: MemoryContext,
+        *,
+        status: str,
+        receipt_ledger: dict,
+    ):
         checkpoint = build_execution_checkpoint(
             context.state,
             status=status,
@@ -69,6 +108,7 @@ class ExecutionCheckpointHarness(BaseMemoryHarness):
             context.session_id,
             checkpoint,
             interaction_request=interaction_request,
+            durable_receipt_ledger=receipt_ledger,
             expected_revision=context.state.memory_state.get("session_revision"),
             execution_fence=context.execution_fence,
         )
@@ -85,6 +125,7 @@ class ExecutionCheckpointHarness(BaseMemoryHarness):
                     "execution_checkpoint_id": str(
                         persisted.get("checkpoint_id") or ""
                     ),
+                    "session_snapshot": copy.deepcopy(session_snapshot.state),
                     "session_revision": session_snapshot.revision,
                     "session_revision_supported": session_snapshot.revision_supported,
                     "session_consistency": session_snapshot.consistency,
@@ -99,10 +140,18 @@ class ExecutionCheckpointHarness(BaseMemoryHarness):
                 "execution_checkpoint_message_count": len(
                     persisted.get("transcript") or []
                 ),
+                "durable_tool_receipt_applied_count": len(
+                    receipt_ledger["pending"]
+                ),
             },
         )
 
-    def _complete(self, context: MemoryContext):
+    def _complete(
+        self,
+        context: MemoryContext,
+        *,
+        receipt_ledger: dict,
+    ):
         current_digest = transcript_digest(context.state.transcript)
         committed_digest = str(
             context.state.memory_commit_info.get("transcript_digest") or ""
@@ -112,7 +161,7 @@ class ExecutionCheckpointHarness(BaseMemoryHarness):
         expected_checkpoint_id = str(
             context.state.memory_state.get("execution_checkpoint_id") or ""
         )
-        if committed_digest != current_digest:
+        if committed_digest != current_digest or receipt_ledger["pending"]:
             summary_bucket = context.state.optimizer_state.get("llm_summary", {})
             summary_text = (
                 str(summary_bucket.get("summary") or "").strip()
@@ -127,6 +176,7 @@ class ExecutionCheckpointHarness(BaseMemoryHarness):
                 summary_text=summary_text,
                 expected_revision=expected_revision,
                 expected_checkpoint_id=expected_checkpoint_id or None,
+                durable_receipt_ledger=receipt_ledger,
                 execution_fence=context.execution_fence,
             )
             expected_revision = commit_info.get("session_revision")

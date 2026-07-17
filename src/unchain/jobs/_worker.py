@@ -8,10 +8,12 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, BinaryIO, Sequence
 
 from .environment import JobEnvironmentProfile
+from .lineage import JsonFileJobLineageStore
 from .models import DurableJobSnapshot
 from .store import JsonFileJobStore
 
@@ -352,56 +354,79 @@ def run_worker(
         # thread remains active through command teardown, log drain/fsync, and
         # the terminal state commit below.
         lease.start()
-        snapshot = store.load(job_id, execution_id=str(spec["execution_id"]))
-        # This durable STARTING receipt is written before Popen.  Consequently
-        # a stale claim paired with QUEUED state is safe for a supervisor to
-        # retry; no user command can have started in that state.
-        snapshot = store.update_state(
+        lineage_store = JsonFileJobLineageStore(store)
+        lineage = lineage_store.load(
             job_id,
-            worker_token=worker_token,
-            status="starting",
-            worker_pid=worker_pid,
+            execution_id=str(spec["execution_id"]),
         )
-        if store.cancel_requested(job_id):
-            store.update_state(
+        launch_scope = (
+            lineage_store.lock_scope(
+                execution_id=lineage.execution_id,
+                logical_execution_id=lineage.logical_execution_id,
+            )
+            if lineage is not None
+            else nullcontext()
+        )
+        # For scoped jobs, this lock is the final Stop/start fence around the
+        # actual user-command Popen. Stop either leaves a tombstone before this
+        # block, or waits until Popen is durably recorded and then writes the
+        # exact job cancel marker before returning.
+        with launch_scope:
+            snapshot = store.load(job_id, execution_id=str(spec["execution_id"]))
+            # This durable STARTING receipt is written before Popen.
+            snapshot = store.update_state(
                 job_id,
                 worker_token=worker_token,
-                status="cancelled",
+                status="starting",
                 worker_pid=worker_pid,
-                cancelled=True,
-                error="cancelled before command launch",
             )
-            return 0
+            if lineage is not None and lineage_store.cancellation_locked(
+                execution_id=lineage.execution_id,
+                logical_execution_id=lineage.logical_execution_id,
+            ) is not None:
+                store.request_cancel(
+                    job_id,
+                    execution_id=lineage.execution_id,
+                )
+            if store.cancel_requested(job_id):
+                store.update_state(
+                    job_id,
+                    worker_token=worker_token,
+                    status="cancelled",
+                    worker_pid=worker_pid,
+                    cancelled=True,
+                    error="cancelled before command launch",
+                )
+                return 0
 
-        # The claim generation is the final launch fence.  A stale supervisor
-        # must not be able to replace this claim between acquisition and
-        # Popen; if ownership is ever lost, fail closed before user code runs.
-        if not store.worker_claim_is_current(
-            job_id,
-            worker_token=worker_token,
-            worker_pid=worker_pid,
-        ):
-            store.transition_to_outcome_unknown(
+            # The claim generation is the final launch fence.  A stale
+            # supervisor must not replace it between acquisition and Popen.
+            if not store.worker_claim_is_current(
                 job_id,
-                execution_id=snapshot.execution_id,
-                expected_revision=snapshot.revision,
-                expected_status=snapshot.status,
-                reason="worker_claim_lost_before_launch",
-                error="worker claim changed before command launch",
-            )
-            return 3
+                worker_token=worker_token,
+                worker_pid=worker_pid,
+            ):
+                store.transition_to_outcome_unknown(
+                    job_id,
+                    execution_id=snapshot.execution_id,
+                    expected_revision=snapshot.revision,
+                    expected_status=snapshot.status,
+                    reason="worker_claim_lost_before_launch",
+                    error="worker claim changed before command launch",
+                )
+                return 3
 
-        process = subprocess.Popen(
-            list(spec["argv"]),
-            **_popen_kwargs(cwd=str(spec["cwd"])),
-        )
-        snapshot = store.update_state(
-            job_id,
-            worker_token=worker_token,
-            status="running",
-            worker_pid=worker_pid,
-            child_pid=process.pid,
-        )
+            process = subprocess.Popen(
+                list(spec["argv"]),
+                **_popen_kwargs(cwd=str(spec["cwd"])),
+            )
+            snapshot = store.update_state(
+                job_id,
+                worker_token=worker_token,
+                status="running",
+                worker_pid=worker_pid,
+                child_pid=process.pid,
+            )
         paths = store.paths_for_worker(job_id)
         assert process.stdout is not None
         assert process.stderr is not None

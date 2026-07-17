@@ -10,7 +10,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 from weakref import WeakValueDictionary
 
 from .environment import JobEnvironmentProfile
@@ -158,6 +158,9 @@ class JsonFileJobStore:
         intent_digest: str,
         max_log_bytes: int,
         environment_digest: str | None = None,
+        _reservation_guard: (
+            Callable[[dict[str, Path], dict[str, Any], bool], None] | None
+        ) = None,
     ) -> tuple[DurableJobSnapshot, bool]:
         execution_id = self._required_text(execution_id, "execution_id")
         adapter = self._required_text(adapter, "adapter")
@@ -185,6 +188,8 @@ class JsonFileJobStore:
             or max_log_bytes <= 0
         ):
             raise ValueError("max_log_bytes must be a positive integer")
+        if _reservation_guard is not None and not callable(_reservation_guard):
+            raise TypeError("_reservation_guard must be callable")
 
         job_id = self.durable_job_id(execution_id, idempotency_key)
         paths = self._paths(job_id, create=True)
@@ -210,7 +215,16 @@ class JsonFileJobStore:
                     raise DurableJobConflictError(
                         "the durable job idempotency key is already bound to a different intent"
                     )
+                if _reservation_guard is not None:
+                    _reservation_guard(paths, spec, False)
             else:
+                if (
+                    _reservation_guard is None
+                    and (paths["dir"] / "lineage.json").exists()
+                ):
+                    raise DurableJobConflictError(
+                        "scoped durable job reservation requires its lineage guard"
+                    )
                 created_at_ms = self.now_ms()
                 spec = {
                     "schema_version": JOB_SCHEMA_VERSION,
@@ -220,6 +234,11 @@ class JsonFileJobStore:
                     "worker_token": uuid.uuid4().hex,
                     "created_at_ms": created_at_ms,
                 }
+                if _reservation_guard is not None:
+                    # The guard writes/validates its owner record under this
+                    # same job lock before spec publication.  Therefore no
+                    # discoverable scoped spec can exist without lineage.
+                    _reservation_guard(paths, spec, True)
                 self._write_json_atomic(paths["spec"], spec)
                 created = True
 
@@ -662,6 +681,20 @@ class JsonFileJobStore:
             self._assert_store_identity()
             spec = self._read_spec(paths["spec"])
             self._ensure_owner(spec, execution_id)
+            # Once receipt-aware delivery has been used, its journal becomes
+            # the single atomic authority for committed offsets and receipt
+            # acknowledgement. Legacy callers keep their old return shape,
+            # but cannot destructively read past a pending receipt.
+            from .delivery import JsonFileJobDeliveryJournal
+
+            journal_logs = JsonFileJobDeliveryJournal(self).consume_legacy_locked(
+                paths,
+                spec=spec,
+                max_output_chars=limit,
+                final=final,
+            )
+            if journal_logs is not None:
+                return journal_logs
             cursor = self._read_cursor(
                 paths["cursor"],
                 expected_job_id=job_id,

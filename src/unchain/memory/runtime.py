@@ -16,6 +16,12 @@ from ..interaction.durable import (
     validate_interaction_journal,
     validate_interaction_request,
 )
+from ..tools.receipts import (
+    TOOL_RECEIPT_JOURNAL_KEY,
+    apply_durable_tool_receipt_ledger,
+    ensure_durable_tool_receipt_execution_id,
+    validate_durable_tool_receipt_ledger,
+)
 from .checkpoint_state import (
     EXECUTION_CHECKPOINT_DOMAIN_KEY,
     EXECUTION_CHECKPOINT_KEY,
@@ -641,6 +647,7 @@ class KernelMemoryRuntime:
         checkpoint: dict[str, Any],
         *,
         interaction_request: Any = None,
+        durable_receipt_ledger: Any = None,
         expected_revision: int | None = None,
         execution_fence: ExecutionFence | None = None,
     ) -> tuple[dict[str, Any], SessionSnapshot]:
@@ -713,6 +720,16 @@ class KernelMemoryRuntime:
                 applied_checkpoint_id=str(validated.get("checkpoint_id") or ""),
             )
         state[EXECUTION_CHECKPOINT_KEY] = copy.deepcopy(validated)
+        receipt_ledger = ensure_durable_tool_receipt_execution_id(
+            durable_receipt_ledger,
+            execution_id=session_id,
+        )
+        if receipt_ledger["pending"]:
+            apply_durable_tool_receipt_ledger(
+                state,
+                ledger=receipt_ledger,
+                application_id=str(validated.get("checkpoint_id") or ""),
+            )
         if execution_fence is not None:
             cancellation_aware = all(
                 callable(getattr(self.store, method, None))
@@ -837,6 +854,26 @@ class KernelMemoryRuntime:
                 raise ExecutionCheckpointPersistenceError(
                     "interaction journal write verification failed"
                 )
+        if receipt_ledger["pending"]:
+            try:
+                receipt_journal = validate_durable_tool_receipt_ledger(
+                    verified_snapshot.state.get(TOOL_RECEIPT_JOURNAL_KEY)
+                )
+            except Exception as exc:
+                raise ExecutionCheckpointPersistenceError(
+                    f"persisted tool receipt journal could not be verified: {exc}"
+                ) from exc
+            for receipt_key, receipt in receipt_ledger["pending"].items():
+                application = receipt_journal["applications"].get(receipt_key)
+                if (
+                    not isinstance(application, dict)
+                    or application.get("receipt") != receipt
+                    or application.get("application_id")
+                    != validated.get("checkpoint_id")
+                ):
+                    raise ExecutionCheckpointPersistenceError(
+                        "tool receipt journal write verification failed"
+                    )
         return persisted, persisted_snapshot
 
     def clear_execution_checkpoint(
@@ -1144,6 +1181,7 @@ class KernelMemoryRuntime:
         summary_text: str | None,
         expected_revision: int | None = None,
         expected_checkpoint_id: str | None = None,
+        durable_receipt_ledger: Any = None,
         execution_fence: ExecutionFence | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         if not session_id:
@@ -1167,6 +1205,7 @@ class KernelMemoryRuntime:
             summary_text=str(summary_text or "").strip(),
             return_result=True,
             clear_execution_checkpoint_id=expected_checkpoint_id,
+            durable_receipt_ledger=durable_receipt_ledger,
             execution_fence=execution_fence,
         )
         if outcome is None:
