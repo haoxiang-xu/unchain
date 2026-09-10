@@ -701,14 +701,14 @@ class CoreCodingBackend:
         if action in {"poll", "wait", "kill"}:
             return ToolConfirmationPolicy(requires_confirmation=False)
         if action != "run":
-            return ToolConfirmationPolicy(requires_confirmation=False)
+            return ToolConfirmationPolicy(requires_confirmation=True)
 
         if bool(arguments.get("run_in_background")):
             return ToolConfirmationPolicy(requires_confirmation=True)
 
         command = arguments.get("command")
         if not isinstance(command, str) or not command.strip():
-            return ToolConfirmationPolicy(requires_confirmation=False)
+            return ToolConfirmationPolicy(requires_confirmation=True)
 
         shell_family = self._shell_runtime.detect_executor().family
         if self._shell_runtime.is_low_risk_command(command, shell_family):

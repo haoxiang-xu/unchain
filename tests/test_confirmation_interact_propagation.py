@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 from unchain.tools.confirmation import execute_confirmable_tool_call
 from unchain.tools.models import ToolConfirmationPolicy, ToolConfirmationRequest
+from unchain.tools import Tool
 
 
 def _make_tool_call(name: str = "write", args: dict | None = None, call_id: str = "c-1"):
@@ -16,7 +17,7 @@ def _make_tool_call(name: str = "write", args: dict | None = None, call_id: str 
 
 
 def _make_tool_obj(resolver_return):
-    tool_obj = MagicMock()
+    tool_obj = Tool.from_callable(lambda path, content: {"ok": True}, name="write")
     tool_obj.requires_confirmation = True
     tool_obj.observe = False
     tool_obj.description = "write"

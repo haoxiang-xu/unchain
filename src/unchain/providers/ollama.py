@@ -44,6 +44,17 @@ class OllamaModelIO(_NativeModelIOBase):
             stream_factory = httpx.stream
         self._stream_factory = stream_factory
 
+    def _merged_payload(self, payload: dict[str, Any] | None) -> dict[str, Any]:
+        merged = super()._merged_payload(payload)
+        # num_ctx is a native Ollama option even when the local model has no
+        # catalog entry. Keep the host's compiler window on the provider wire.
+        if payload is not None and "num_ctx" in payload:
+            window = payload["num_ctx"]
+            if isinstance(window, bool) or not isinstance(window, int) or window <= 0:
+                raise ValueError("Ollama num_ctx must be a positive integer")
+            merged["num_ctx"] = window
+        return merged
+
     def fetch_turn(self, request: ModelTurnRequest) -> ModelTurnResult:
         messages = copy.deepcopy(request.messages)
         _translate_content_blocks_for_ollama(messages)

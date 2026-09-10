@@ -3625,17 +3625,28 @@ class ContextCompiler:
             source_result_ids.update(_tool_result_ids(message))
         if source_result_ids - source_call_ids:
             raise ContextCompilerError("orphan_tool_result")
-        (
-            combined,
-            neutral,
-            atomic_call_ids,
-            consumed_semantic_event_indexes,
-        ) = _assemble(request)
-        messages, reduction, checkpoint_requests = _reduce(
-            combined,
-            request=request,
-            budget=budget,
-        )
+        try:
+            (
+                combined,
+                neutral,
+                atomic_call_ids,
+                consumed_semantic_event_indexes,
+            ) = _assemble(request)
+            messages, reduction, checkpoint_requests = _reduce(
+                combined,
+                request=request,
+                budget=budget,
+            )
+        except ContextBudgetExceededError as exc:
+            # Preserve the error subtype while carrying the actual graph/agent
+            # model and window to hosts; they cannot infer it from the root run.
+            exc.code = "context_budget_exceeded"
+            exc.args = (
+                f"{request.provider or 'model'}:{request.model or 'unknown'} "
+                f"has a {budget.context_window_tokens}-token context window: {exc}. "
+                "Reduce the input or selected tools, or choose a model with a larger context window.",
+            )
+            raise
         diagnostics = {
             **reduction,
             "provider": request.provider or "",

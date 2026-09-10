@@ -23,6 +23,7 @@ from unchain.providers import (
     OpenAIModelIO,
 )
 from unchain.providers import prepared_turn, wire_preparer as wire_preparer_module
+from unchain.providers.prepared_request_factory import resolve_prepared_provider_request_payload
 from unchain.providers.wire_preparer import (
     build_prepared_provider_request_payload,
     prepare_provider_wire as prepare_bound_provider_wire,
@@ -40,6 +41,20 @@ ATTEMPT = AttemptRef(
     GenerationRef("execution-wire-preparer", "generation-wire-preparer"),
     "attempt-wire-preparer",
 )
+
+
+def test_uncatalogued_ollama_window_survives_durable_wire_preparation():
+    model_io = OllamaModelIO(model="unknown-local:latest", default_payloads={}, model_capabilities={})
+    request = ModelTurnRequest(messages=[{"role": "user", "content": "Hello"}], payload={"num_ctx": 32768, "unknown_option": True})
+    payload = resolve_prepared_provider_request_payload(model_io=model_io, request=request)
+    assert payload["effective_payload"] == {"num_ctx": 32768}
+    prepared, draft = _prepared_turn_for_request(model_io=model_io, request_payload=payload)
+    envelope = prepare_bound_provider_wire(prepared, model_io=model_io, attempt=ATTEMPT, iteration=7, transport_target_sha256="9" * 64)
+    wire = envelope.request_copy()
+    assert set(wire) == {"model", "messages", "stream", "options", "tools", "tool_choice"}
+    assert wire["tools"] == draft.toolkit.to_provider_json("ollama")
+    assert wire["tool_choice"] == "auto"
+    assert wire["options"] == {"num_ctx": 32768}
 ProviderWirePreparationInput = wire_preparer_module._ProviderWirePreparationInput
 prepare_provider_wire = wire_preparer_module._prepare_provider_wire_from_input
 
