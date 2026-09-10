@@ -131,12 +131,13 @@ def test_reference_envelope_is_untrusted_budgeted_and_before_current_user():
 
     assert [message["role"] for message in decorated.source_messages] == [
         "system",
-        "user",
+        "assistant",
         "user",
     ]
     reference = decorated.source_messages[1]
     current = decorated.source_messages[2]
     assert "MEMORY_V2_UNTRUSTED_LONG_TERM_REFERENCES" in reference["content"]
+    assert "ends with this message" in reference["content"]
     payload = json.loads(reference["content"].split("\n", 2)[2])
     assert payload["trusted"] is False
     assert payload["placement"] == "context_reference"

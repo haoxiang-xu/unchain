@@ -60,6 +60,7 @@ from .runtime import (
     snapshot_durable_tool_runtime_route,
 )
 from .types import ToolBatchState
+from .web_fetch_guard import web_fetch_failure_limit
 
 
 def _artifact_owner(context: ToolContext, tool_call: ToolCall) -> ArtifactOwner:
@@ -980,7 +981,8 @@ class ToolExecutionHarness(BaseToolHarness):
 
         result_messages = copy_messages(batch_state.result_messages)
         token_state = {}
-        if batch_state.should_observe and result_messages:
+        fetch_limit = web_fetch_failure_limit(context.state.transcript + result_messages)
+        if batch_state.should_observe and result_messages and not fetch_limit:
             observation = ""
             observation_model_io = context.model_io
             provider_turn_ownership = (
@@ -1157,6 +1159,8 @@ class ToolExecutionHarness(BaseToolHarness):
             context.provider,
             result_messages,
         )
+        if fetch_limit:
+            result_messages.append({"role": "assistant", "content": fetch_limit})
 
         if not result_messages:
             return HarnessDelta(
@@ -1190,7 +1194,7 @@ class ToolExecutionHarness(BaseToolHarness):
                 "transcript_append": result_messages,
                 "pending_tool_calls": [],
                 "tool_batch_state": ToolBatchState(),
-                "run_status": "running",
+                "run_status": "completed" if fetch_limit else "running",
                 "last_continuation": None,
                 "next_model_input": next_model_input,
                 "remote_continuation_input": remote_continuation_input,

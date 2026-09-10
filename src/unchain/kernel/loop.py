@@ -1355,6 +1355,17 @@ class KernelLoop:
                 execution_guard=execution_guard,
             )
 
+            # A resumed tool batch can already have reached a terminal limit.
+            # Honor that result before asking for more budget or another turn.
+            if state.run_status == "completed":
+                return finish_completed_run(
+                    state,
+                    callback=callback,
+                    run_id=run_id,
+                    emit_event=terminal_emit_event,
+                    dispatch_run_finalizing=dispatch_run_finalizing,
+                )
+
             max_wait_revision: int | None = None
             durable_max_wait = (
                 callable(on_max_iterations)
