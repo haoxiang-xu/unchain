@@ -67,7 +67,9 @@ _INJECTED_MANDATORY_KEY = "__unchain_context_injected_mandatory__"
 _INJECTED_MANDATORY_TAIL_KEY = "__unchain_context_injected_mandatory_tail__"
 _CHECKPOINT_MARKER_KEY = "__unchain_context_checkpoint_request_id__"
 _NATIVE_TOOL_RESULT_INLINE_LIMIT = 16_000
-_NATIVE_TOOL_PROVIDERS = frozenset({"openai", "anthropic", "hyperspace", "ollama"})
+_NATIVE_TOOL_PROVIDERS = frozenset(
+    {"openai", "anthropic", "hyperspace", "ollama", "gemini"}
+)
 _SHADOW_OBSERVED_TOOL_EVENT = {
     "schema": "unchain.shadow_observed_tool_event.v1",
     "mode": "shadow",
@@ -2278,6 +2280,23 @@ def _native_tool_call_messages(
                 }
             )
         return [{"role": "assistant", "content": blocks}]
+
+    if provider == "gemini":
+        return [
+            {
+                "role": "model",
+                "parts": [
+                    {
+                        "function_call": {
+                            "id": call.call_id,
+                            "name": call.name,
+                            "args": _plain(call.arguments),
+                        }
+                    }
+                    for _event, call in calls
+                ],
+            }
+        ]
 
     if provider == "ollama":
         tool_calls: list[dict[str, Any]] = []

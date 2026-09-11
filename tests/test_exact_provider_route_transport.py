@@ -724,3 +724,21 @@ def test_anthropic_exact_transport_classifies_explicit_bad_request_as_terminal()
         )
 
     assert caught.value.kind is ExactProviderRouteFailureKind.TERMINAL
+
+
+@pytest.mark.parametrize('status,expected', [(400, 'terminal'), (401, 'terminal'), (429, 'transient_retry_safe'), (503, None)])
+def test_google_sdk_http_failures_have_exact_retry_classification(status, expected):
+    from google.genai.errors import APIError
+    from unchain.providers.exact_route_transport import _classified_failure_kind
+
+    error = APIError(status, {'error': {'code': status, 'message': 'private'}})
+    kind = _classified_failure_kind(error)
+    assert (kind.value if kind else None) == expected
+
+
+def test_arbitrary_numeric_error_code_is_not_http_evidence():
+    from unchain.providers.exact_route_transport import _classified_failure_kind
+
+    error = RuntimeError('private')
+    error.code = 429
+    assert _classified_failure_kind(error) is None

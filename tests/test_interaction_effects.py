@@ -349,7 +349,7 @@ def test_interaction_resume_plan_errors_do_not_name_kernel_loop():
     with pytest.raises(NotImplementedError) as exc_info:
         prepare_human_input_resume_plan(
             conversation=[],
-            continuation={"provider": "gemini"},
+            continuation={"provider": "unsupported-provider"},
         )
 
     message = str(exc_info.value)

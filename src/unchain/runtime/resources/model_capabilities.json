@@ -461,6 +461,29 @@
     "supports_dimensions": true,
     "allowed_payload_keys": ["dimensions", "encoding_format", "user"]
   },
+  "gemini-3.6-flash": {
+    "provider": "gemini",
+    "max_context_window_tokens": 1048576,
+    "max_output_tokens": 65536,
+    "supports_tools": true,
+    "supports_response_format": true,
+    "supports_previous_response_id": false,
+    "supports_reasoning": true,
+    "reasoning_efforts": ["low", "medium", "high"],
+    "default_reasoning_effort": "medium",
+    "input_modalities": ["text", "image", "pdf"],
+    "input_source_types": {
+      "image": ["url", "base64"],
+      "pdf": ["url", "base64"]
+    },
+    "allowed_payload_keys": [
+      "max_output_tokens",
+      "temperature",
+      "top_p",
+      "top_k",
+      "thinking_config"
+    ]
+  },
   "gemini-2.5-pro": {
     "provider": "gemini",
     "max_context_window_tokens": 1048576,
@@ -478,7 +501,8 @@
       "max_output_tokens",
       "temperature",
       "top_p",
-      "top_k"
+      "top_k",
+      "thinking_config"
     ]
   },
   "gemini-2.5-flash": {
@@ -498,7 +522,8 @@
       "max_output_tokens",
       "temperature",
       "top_p",
-      "top_k"
+      "top_k",
+      "thinking_config"
     ]
   },
   "text-embedding-ada-002": {

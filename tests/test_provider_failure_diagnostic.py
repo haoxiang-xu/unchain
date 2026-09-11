@@ -54,3 +54,14 @@ def test_missing_http_evidence_never_invents_status(status):
     error = RuntimeError("HTTP 401 invalid_api_key")
     error.status_code = status
     assert ProviderFailureDiagnostic.from_exception(error) is None
+
+
+@pytest.mark.parametrize('status', [400, 401, 403, 404, 429, 503])
+def test_google_sdk_error_has_safe_http_diagnostic(status):
+    from google.genai.errors import APIError
+
+    error = APIError(status, {'error': {'code': status, 'message': 'private prompt and key'}})
+    diagnostic = ProviderFailureDiagnostic.from_exception(error)
+    assert diagnostic.http_status == status
+    assert diagnostic.provider_code == diagnostic.parameter == ''
+    assert 'private' not in repr(diagnostic.to_dict()) + diagnostic.summary()

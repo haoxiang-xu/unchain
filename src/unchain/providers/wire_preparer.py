@@ -26,6 +26,10 @@ from .wire_envelope import ProviderWireEnvelope, ProviderWireRoute
 
 
 _PROFILES = {
+    "gemini": (
+        "unchain.gemini.contents.request.v1",
+        "gemini.models.generate_content_stream",
+    ),
     "openai": (
         "unchain.openai.responses.request.v1",
         "openai.responses.create",
@@ -46,6 +50,7 @@ _PROFILES = {
 _PREPARED_REQUEST_SCHEMA = "unchain.prepared_provider_request.v1"
 _CONTEXT_MODES = frozenset({"semantic", "local_replay", "remote_continuation"})
 _RESPONSE_FORMAT_KINDS = {
+    "gemini": frozenset({"none"}),
     "openai": frozenset({"none", "openai_text"}),
     "anthropic": frozenset({"none", "anthropic_instruction"}),
     "hyperspace": frozenset({"none", "anthropic_instruction"}),
@@ -535,6 +540,9 @@ def _prepare_provider_wire_from_input(
             request_model=request_model,
         )
         routes = (route,)
+    elif preparation.provider == "gemini":
+        routes = (_gemini_route(preparation, merged_payload=merged_payload),)
+        base_anthropic_betas = ()
     elif preparation.provider == "ollama":
         routes = (
             _ollama_route(
@@ -670,3 +678,22 @@ __all__ = [
     "build_prepared_provider_request_payload",
     "prepare_provider_wire",
 ]
+
+
+def _gemini_route(preparation, *, merged_payload):
+    from .gemini import translate_gemini_messages
+
+    contents, system = translate_gemini_messages(preparation.messages)
+    config = _json_copy(merged_payload)
+    config["automatic_function_calling"] = {"disable": True}
+    if system:
+        config["system_instruction"] = system
+    request = {
+        "model": preparation.configured_model,
+        "contents": contents,
+        "config": config,
+    }
+    tools = preparation.toolkit.to_provider_json("gemini")
+    if tools:
+        request["tools"] = tools
+    return ProviderWireRoute("primary", request)

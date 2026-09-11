@@ -12,6 +12,7 @@ from .types import ModelSpec, coerce_model_spec
 _PROVIDER_ENV_DEFAULTS = {
     "openai": ("OPENAI_API_KEY",),
     "anthropic": ("ANTHROPIC_API_KEY",),
+    "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
     "ollama": tuple(),
     "hyperspace": ("HYPERSPACE_API_KEY",),
 }

@@ -8,7 +8,7 @@ from ..interaction import hydrate_human_input_resume_state, prepare_human_input_
 from ..schemas import ResponseFormat
 from .state import RunState
 
-SUPPORTED_PROVIDERS = {"openai", "anthropic", "ollama", "hyperspace"}
+SUPPORTED_PROVIDERS = {"openai", "anthropic", "ollama", "hyperspace", "gemini"}
 
 
 @dataclass(frozen=True)

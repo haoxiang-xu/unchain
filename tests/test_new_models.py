@@ -33,16 +33,15 @@ def test_claude_sonnet_35_configuration():
 
 def test_gemini_pro_15_configuration():
     """Test Gemini Pro 1.5 model configuration."""
-    assert GEMINI_PRO_15.name == "gemini-pro-1.5"
-    assert GEMINI_PRO_15.capabilities.provider == "google"
-    assert GEMINI_PRO_15.capabilities.provider_model == "gemini-1.5-pro"
+    assert GEMINI_PRO_15.name == "gemini-2.5-pro"
+    assert GEMINI_PRO_15.capabilities.provider == "gemini"
+    assert GEMINI_PRO_15.capabilities.provider_model == "gemini-2.5-pro"
     assert GEMINI_PRO_15.capabilities.max_context_window_tokens == 1048576
     assert GEMINI_PRO_15.capabilities.supports_tools is True
     assert "text" in GEMINI_PRO_15.capabilities.input_modalities
     assert "image" in GEMINI_PRO_15.capabilities.input_modalities
-    assert "audio" in GEMINI_PRO_15.capabilities.input_modalities
-    assert "video" in GEMINI_PRO_15.capabilities.input_modalities
-    assert GEMINI_PRO_15.default_payload.payload["max_output_tokens"] == 8192
+    assert "pdf" in GEMINI_PRO_15.capabilities.input_modalities
+    assert GEMINI_PRO_15.default_payload.payload["max_output_tokens"] == 65536
 
 
 def test_model_serialization():

@@ -40,6 +40,7 @@ _REPLAY_FORMATS = {
     "anthropic": "anthropic.messages.v1",
     "hyperspace": "anthropic.messages.v1",
     "ollama": "ollama.chat.v1",
+    "gemini": "gemini.contents.v1",
 }
 
 _OPENAI_OPAQUE_OUTPUT_TYPES = {
@@ -374,6 +375,20 @@ def _segments_for(format_name: str, items: list[dict[str, Any]]) -> list[_Replay
         raise ProviderContextProjectionError(
             "provider replay items must be message dictionaries"
         )
+    if format_name == "gemini.contents.v1":
+        from .gemini import gemini_semantic_message
+
+        return [
+            _ReplaySegment(
+                semantic=gemini_semantic_message(item),
+                wire_items=(copy.deepcopy(item),),
+                key=_message_key("gemini", item),
+                requires_replay=any(
+                    "thought_signature" in part for part in item.get("parts", [])
+                ),
+            )
+            for item in items
+        ]
     if format_name == "openai.responses.v1":
         return _openai_segments(items)
     if format_name == "anthropic.messages.v1":
@@ -386,6 +401,13 @@ def _segments_for(format_name: str, items: list[dict[str, Any]]) -> list[_Replay
 
 
 def _message_key(provider: str, message: dict[str, Any]) -> tuple[str, ...] | None:
+    if provider == "gemini":
+        ids = tuple(
+            str(p["function_call"].get("id") or "")
+            for p in message.get("parts", [])
+            if "function_call" in p
+        )
+        return ("gemini.function_call", *ids) if ids else None
     if provider == "openai" and message.get("type") == "function_call":
         call_id = str(message.get("call_id") or message.get("id") or "")
         return ("openai.function_call", call_id) if call_id else None
@@ -510,6 +532,47 @@ def _validate_tool_pairs(provider: str, messages: list[dict[str, Any]]) -> None:
                         "Anthropic tool_result blocks require user role and must come first"
                     )
                 events.append(("results", result_ids))
+            else:
+                events.append(("other", []))
+            index += 1
+            continue
+        if provider == "gemini":
+            parts = message.get("parts") or []
+            calls = [p["function_call"] for p in parts if "function_call" in p]
+            results = [
+                p["function_response"] for p in parts if "function_response" in p
+            ]
+            if calls and results:
+                raise ProviderContextProjectionError(
+                    "Gemini message mixes calls and results"
+                )
+            if calls:
+                if message.get("role") not in {"model", "assistant"} or any(
+                    not c.get("name") or not isinstance(c.get("args"), dict)
+                    for c in calls
+                ):
+                    raise ProviderContextProjectionError("Invalid Gemini function call")
+                events.append(("calls", [str(c.get("id") or "") for c in calls]))
+            elif results:
+                ids = []
+                while index < len(messages):
+                    batch = [
+                        p["function_response"]
+                        for p in messages[index].get("parts", [])
+                        if "function_response" in p
+                    ]
+                    if not batch:
+                        break
+                    if messages[index].get("role") != "user" or any(
+                        not isinstance(r.get("response"), dict) for r in batch
+                    ):
+                        raise ProviderContextProjectionError(
+                            "Invalid Gemini function response"
+                        )
+                    ids.extend(str(r.get("id") or "") for r in batch)
+                    index += 1
+                events.append(("results", ids))
+                continue
             else:
                 events.append(("other", []))
             index += 1

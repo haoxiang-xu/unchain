@@ -251,21 +251,29 @@ class GeminiMessageBuilder(_ProviderMessageBuilderBase):
     ) -> list[dict]:
         blocks = _content_blocks(tool_result)
         if blocks is None:
-            return [{
-                "role": "user",
-                "parts": [{
-                    "function_response": {
-                        "name": tool_call.name,
-                        "response": dict(tool_result),
-                    },
-                }],
-            }]
-        parts: list[dict] = [{
-            "function_response": {
-                "name": tool_call.name,
-                "response": {"content": _text_blocks_joined(blocks)},
-            },
-        }]
+            return [
+                {
+                    "role": "user",
+                    "parts": [
+                        {
+                            "function_response": {
+                                "name": tool_call.name,
+                                "id": tool_call.call_id,
+                                "response": dict(tool_result),
+                            },
+                        }
+                    ],
+                }
+            ]
+        parts: list[dict] = [
+            {
+                "function_response": {
+                    "name": tool_call.name,
+                    "id": tool_call.call_id,
+                    "response": {"content": _text_blocks_joined(blocks)},
+                },
+            }
+        ]
         for block in _image_blocks(blocks):
             parts.append({
                 "inline_data": {

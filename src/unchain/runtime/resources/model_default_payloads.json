@@ -146,6 +146,14 @@
     },
     "tool_choice": null
   },
+  "gemini-3.6-flash": {
+    "max_output_tokens": 65536,
+    "temperature": 1,
+    "thinking_config": {
+      "thinking_level": "medium",
+      "include_thoughts": true
+    }
+  },
   "gemini-2.5-pro": {
     "max_output_tokens": 65536,
     "temperature": 0.7,
