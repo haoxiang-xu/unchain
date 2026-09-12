@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from unchain.journal import (
@@ -20,9 +21,11 @@ from unchain.journal import (
 from unchain.journal.models import _required_text, _thaw_json
 from unchain.kernel.harness import HarnessContext
 
+from .artifacts import ArtifactService
 from .attachments import normalize_host_resolved_attachments
 from .budget import estimate_context_tokens, resolve_context_budget
 from .models import ContextCompileRequest, HandoffEnvelope, SourceMessageCursor
+from .graph_checkpoint import GraphExecutionPlan
 
 
 _CURRENT_INPUT_EVENT_TYPES = frozenset(
@@ -320,6 +323,120 @@ def _is_verified_derived_input(
     )
 
 
+@dataclass(frozen=True)
+class _GraphSeedProjection:
+    source: JournalEvent
+    input_receipt: JournalEvent
+    handoff: JournalEvent
+
+
+def _graph_seed_projections(
+    events: Sequence[JournalEvent],
+    *,
+    artifacts: ArtifactService | None = None,
+) -> tuple[_GraphSeedProjection, ...]:
+    """Resolve root graph seeds from receipts, never from model-facing text.
+
+    The input receipt still authorizes the step. Its original source is only
+    the message projection; the seed artifact and all journal bytes stay put.
+    """
+    by_cursor = {(event.event_id, event.store_seq): event for event in events}
+    projections: list[_GraphSeedProjection] = []
+    for admission in events:
+        if admission.event_type != "graph.execution.admitted":
+            continue
+        try:
+            if set(admission.payload) != {"graph_plan_id", "graph_scope_id", "plan"}:
+                raise ValueError("graph admission fields")
+            plan = GraphExecutionPlan.from_dict(_thaw_json(admission.payload["plan"]))
+            if (
+                plan.orchestration_attempt != admission.attempt
+                or admission.payload["graph_plan_id"] != plan.plan_id
+                or admission.payload["graph_scope_id"] != plan.scope_id
+            ):
+                raise ValueError("graph admission identity")
+            step = plan.steps[0]
+            source = by_cursor[(plan.initial_input_cursor.event_id,
+                                plan.initial_input_cursor.store_seq)]
+            if source.attempt != plan.orchestration_attempt:
+                raise ValueError("graph seed source")
+            if source.event_type == "interaction.resolved":
+                continue
+            if source.event_type != "message.user":
+                raise ValueError("graph seed source type")
+            source_message = _canonical_user_message(source)
+            # A recipe-ref/subagent coordinator has an intentional derived
+            # task as its seed. It is not a root user message to unwrap.
+            if any(attachment.kind == "handoff" for attachment in
+                   normalize_host_resolved_attachments(source_message.get("attachments"))):
+                continue
+            starts = [event for event in events
+                      if event.event_type == "graph.step.started"
+                      and event.attempt == step.attempt]
+            if not starts:
+                continue
+            if len(starts) != 1:
+                raise ValueError("ambiguous graph seed start")
+            started = starts[0]
+            if (
+                set(started.payload) != {"graph_plan_id", "graph_scope_id", "step",
+                                         "handoff_cursor", "input_cursor"}
+                or started.payload["graph_plan_id"] != plan.plan_id
+                or started.payload["graph_scope_id"] != plan.scope_id
+                or _thaw_json(started.payload["step"]) != step.to_dict()
+            ):
+                raise ValueError("graph seed start identity")
+            input_cursor = EventCursor.from_dict(started.payload["input_cursor"])
+            handoff_cursor = EventCursor.from_dict(started.payload["handoff_cursor"])
+            trigger = by_cursor[(input_cursor.event_id, input_cursor.store_seq)]
+            handoff = by_cursor[(handoff_cursor.event_id, handoff_cursor.store_seq)]
+            if trigger.attempt != step.attempt or not _is_verified_derived_input(
+                trigger, generation_events=events,
+            ):
+                raise ValueError("graph seed derived receipt")
+            descriptor = json.loads(trigger.payload["message"]["content"])
+            if set(descriptor) != {"schema", "consumer_attempt", "source_attempt",
+                                   "handoff_event", "handoff_envelope", "full_output_artifact"}:
+                raise ValueError("graph seed descriptor fields")
+            envelope = HandoffEnvelope.from_dict(descriptor["handoff_envelope"])
+            artifact = ArtifactRef.from_dict(descriptor["full_output_artifact"])
+            seed_value = {
+                "schema": "unchain.graph_input_seed.v1",
+                "input_event": source.to_dict(),
+            }
+            seed_bytes = _canonical_bytes(seed_value)
+            if artifacts is not None:
+                # Graph seed artifacts use the general sanitizer, while the
+                # canonical user event can retain provenance-only handles.
+                seed_bytes = artifacts.prepare_json_value(
+                    seed_value,
+                    operation_id="graph-seed-projection-verification",
+                ).sanitized
+                if artifacts.read_full(
+                    artifact, remaining_budget_bytes=artifact.byte_length,
+                ) != seed_bytes:
+                    raise ValueError("graph seed stored artifact")
+            if (
+                descriptor["source_attempt"] != source.attempt.to_dict()
+                or descriptor["handoff_event"] != handoff_cursor.to_dict()
+                or envelope.source_event_range.start != plan.initial_input_cursor
+                or envelope.source_event_range.end != plan.initial_input_cursor
+                or envelope.artifact_refs
+                or envelope.status.value != "complete"
+                or artifact.sha256 != hashlib.sha256(seed_bytes).hexdigest()
+                or artifact.byte_length != len(seed_bytes)
+                or started.resource_refs != (artifact.ref,)
+                or not source.store_seq < admission.store_seq < handoff.store_seq < trigger.store_seq < started.store_seq
+            ):
+                raise ValueError("graph seed artifact or lineage")
+            projections.append(_GraphSeedProjection(source, trigger, handoff))
+        except (KeyError, TypeError, ValueError, AttributeError) as exc:
+            raise JournalContextRequestFactoryError(
+                "graph seed projection does not match its durable receipts"
+            ) from exc
+    return tuple(projections)
+
+
 def _pending_tool_result(event: JournalEvent) -> dict[str, Any]:
     payload = event.payload
     raw_ref = payload.get("full_output_ref")
@@ -443,6 +560,7 @@ class JournalContextRequestFactory:
         attempt: AttemptRef,
         journal: BoundExecutionJournal,
         model_window_fallback: ModelWindowFallbackPolicy,
+        artifacts: ArtifactService | None = None,
         output_reserve_tokens: int | None = None,
         transport_margin_tokens: int | None = None,
         snapshot_max_events: int = 10_000,
@@ -458,6 +576,12 @@ class JournalContextRequestFactory:
             )
         if not callable(model_window_fallback):
             raise TypeError("model_window_fallback must be callable")
+        if artifacts is not None and (
+            not isinstance(artifacts, ArtifactService)
+            or artifacts.execution_id != journal.execution_id
+        ):
+            raise JournalContextRequestFactoryError("artifact service scope mismatch")
+        self._artifacts = artifacts
         self._attempt = attempt
         self._journal = journal
         self._model_window_fallback = model_window_fallback
@@ -529,15 +653,21 @@ class JournalContextRequestFactory:
                 "latest input receipt belongs to a foreign attempt"
             )
         source_messages = list(_current_instruction_messages(context))
+        graph_seeds = _graph_seed_projections(generation_events, artifacts=self._artifacts)
+        visible_trigger = next(
+            (seed.source for seed in graph_seeds if seed.input_receipt == trigger),
+            trigger,
+        )
+        seed_handoff_ids = {seed.handoff.event_id for seed in graph_seeds}
         source_cursors: tuple[SourceMessageCursor, ...] = ()
         pending_task_inputs: tuple[Mapping[str, Any], ...] | None = None
         if trigger.event_type == "message.user":
-            source_messages.append(_canonical_user_message(trigger))
+            source_messages.append(_canonical_user_message(visible_trigger))
             source_cursors = (
                 SourceMessageCursor(
                     message_index=len(source_messages) - 1,
-                    event_id=trigger.event_id,
-                    store_seq=trigger.store_seq,
+                    event_id=visible_trigger.event_id,
+                    store_seq=visible_trigger.store_seq,
                 ),
             )
         elif trigger.event_type == "tool_result":
@@ -553,6 +683,8 @@ class JournalContextRequestFactory:
             raise JournalContextRequestFactoryError("unsupported current input receipt")
         semantic_events: list[Mapping[str, Any]] = []
         for event in generation_events:
+            if event.event_id in seed_handoff_ids:
+                continue
             projected = journal_event_to_semantic_event(event)
             projected["journal_event_sha256"] = journal_event_sha256(event)
             semantic_events.append(projected)
