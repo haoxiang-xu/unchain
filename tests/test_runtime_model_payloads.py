@@ -1,6 +1,23 @@
 from unchain.runtime.payloads import load_default_payloads, load_model_capabilities
 
 
+def test_gemini_36_runtime_resources_are_registered():
+    from google.genai import types
+
+    capabilities = load_model_capabilities()["gemini-3.6-flash"]
+    payload = load_default_payloads()["gemini-3.6-flash"]
+    assert capabilities["provider"] == "gemini"
+    assert capabilities["max_context_window_tokens"] == 1048576
+    assert capabilities["max_output_tokens"] == 65536
+    assert capabilities["supports_tools"] is True
+    assert capabilities["supports_response_format"] is True
+    assert capabilities["reasoning_efforts"] == ["low", "medium", "high"]
+    assert payload["thinking_config"] == {
+        "thinking_level": "medium", "include_thoughts": True,
+    }
+    types.GenerateContentConfig.model_validate(payload)
+
+
 def test_gpt_55_runtime_resources_are_registered():
     capabilities = load_model_capabilities()
     payloads = load_default_payloads()

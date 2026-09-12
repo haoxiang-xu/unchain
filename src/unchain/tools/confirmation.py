@@ -116,8 +116,28 @@ def prepare_tool_confirmation(
     confirmation_policy: ToolConfirmationPolicy | None = None
     requires_confirmation = bool(tool_obj is not None and tool_obj.requires_confirmation)
 
+    if tool_obj is not None:
+        try:
+            # Use the executor's parser before policy evaluation. Providers may
+            # encode the same object as JSON; policy, UI and execution must see
+            # the same arguments, including the existing JSON repair behavior.
+            effective_arguments = copy.deepcopy(tool_obj._parse_arguments(effective_arguments))
+            if not isinstance(effective_arguments, dict):
+                raise ValueError("tool arguments must decode to an object")
+        except ExecutionLeaseError:
+            raise
+        except Exception as exc:
+            return ToolConfirmationPreparation(
+                should_observe=should_observe,
+                effective_arguments=effective_arguments,
+                confirmation_policy=None,
+                requires_confirmation=requires_confirmation,
+                request=None,
+                resolver_error=f"{type(exc).__name__}: {exc}",
+            )
+
     if tool_obj is not None and callable(getattr(tool_obj, "confirmation_resolver", None)):
-        resolver_arguments = tool_call.arguments if isinstance(tool_call.arguments, dict) else {}
+        resolver_arguments = copy.deepcopy(effective_arguments)
         try:
             confirmation_policy = ToolConfirmationPolicy.from_raw(
                 tool_obj.confirmation_resolver(resolver_arguments, execution_context)
@@ -164,7 +184,7 @@ def prepare_tool_confirmation(
         confirmation_request = ToolConfirmationRequest(
             tool_name=tool_call.name,
             call_id=tool_call.call_id,
-            arguments=tool_call.arguments if isinstance(tool_call.arguments, dict) else {},
+            arguments=copy.deepcopy(effective_arguments),
             description=(
                 confirmation_policy.description
                 if confirmation_policy is not None and confirmation_policy.description

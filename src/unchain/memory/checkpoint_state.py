@@ -78,6 +78,8 @@ def _provider_replay_format(provider: str) -> str:
         return "openai.responses.v1"
     if provider in {"anthropic", "hyperspace"}:
         return "anthropic.messages.v1"
+    if provider == "gemini":
+        return "gemini.contents.v1"
     if provider == "ollama":
         return "ollama.chat.v1"
     return f"{provider or 'unknown'}.messages.v1"

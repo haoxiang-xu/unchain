@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "anthropic>=0.83.0",
-    "google-genai>=1.14.0",
+    "google-genai>=1.68.0",
     "httpx>=0.28.1",
     "mcp>=1.26.0,<2.0.0",
     "openai>=2.7.1",
@@ -49,6 +49,7 @@ unchain = [
 ]
 
 [tool.pytest.ini_options]
+markers = ["live_provider: opt-in credentialed provider qualification"]
 testpaths = ["tests"]
 norecursedirs = [
     ".git",

@@ -15,7 +15,7 @@ from .attachments import (
 
 
 _MULTIMODAL_PROVIDERS = frozenset(
-    {"openai", "anthropic", "hyperspace", "ollama"}
+    {"openai", "anthropic", "hyperspace", "ollama", "gemini"}
 )
 _PROVENANCE_ONLY_ATTACHMENT_KINDS = frozenset({"handoff"})
 

@@ -283,7 +283,6 @@ def test_prepared_tool_result_keeps_sealed_result_and_records_model_projection()
     assert draft.payload["model_projection"]["result"]["projection"] == "artifact_only"
 
 
-
 def test_user_message_artifact_sanitizer_preserves_only_its_provenance_lane() -> None:
     order = []
     handle = "pvh1_" + ("a" * 64)
@@ -389,7 +388,7 @@ def test_tool_call_persists_a_normalized_source_provider(
     assert draft.payload["source_provider"] == expected_provider
 
 
-@pytest.mark.parametrize("source_provider", ["gemini", "", 7, object()])
+@pytest.mark.parametrize("source_provider", ["unsupported-provider", "", 7, object()])
 def test_tool_call_rejects_an_unknown_source_provider(source_provider) -> None:
     with pytest.raises(SemanticEventProjectionError, match="source provider"):
         _projector([])(

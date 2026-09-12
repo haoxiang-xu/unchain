@@ -517,7 +517,7 @@ def test_draft_authority_cannot_be_reanchored_by_another_issuer() -> None:
 
 @pytest.mark.parametrize(
     "provider",
-    [" OpenAI", "openai ", "OPENAI", "gemini", ""],
+    [" OpenAI", "openai ", "OPENAI", "unsupported-provider", ""],
 )
 def test_provider_name_uses_an_exact_allowlist(provider: str) -> None:
     from unchain.providers import prepared_turn as module

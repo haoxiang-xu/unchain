@@ -74,7 +74,15 @@ def test_gemini_without_content_blocks_is_unchanged():
     )
     assert msg == {
         "role": "user",
-        "parts": [{"function_response": {"name": "demo_tool", "response": {"ok": True}}}],
+        "parts": [
+            {
+                "function_response": {
+                    "id": "call_1",
+                    "name": "demo_tool",
+                    "response": {"ok": True},
+                }
+            }
+        ],
     }
 
 

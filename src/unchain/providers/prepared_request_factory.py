@@ -12,7 +12,9 @@ from .wire_preparer import (
 )
 
 
-_SUPPORTED_PROVIDERS = frozenset({"openai", "anthropic", "hyperspace", "ollama"})
+_SUPPORTED_PROVIDERS = frozenset(
+    {"openai", "anthropic", "hyperspace", "ollama", "gemini"}
+)
 
 
 def _required_callable(value: object, name: str):
@@ -80,6 +82,15 @@ def resolve_prepared_provider_request_payload(
                 "kind": "openai_text",
                 "value": copy.deepcopy(openai_format),
             }
+    elif provider == "gemini":
+        if request.response_format is not None:
+            from .gemini_schema import sanitize_gemini_schema
+
+            value = _response_format_value(request.response_format, "to_gemini")
+            effective_payload.update(value)
+            effective_payload["response_schema"] = sanitize_gemini_schema(
+                value["response_schema"]
+            )
     elif provider in {"anthropic", "hyperspace"}:
         request_model = _required_callable(model_io, "_provider_request_model")()
         if not isinstance(request_model, str) or not request_model.strip():

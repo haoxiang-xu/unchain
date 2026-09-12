@@ -1,3 +1,4 @@
+from .gemini import GeminiModelIO
 from .anthropic import AnthropicModelIO
 from .base import ModelAdapter, ModelIO, ModelTurnRequest
 from .hyperspace import HyperspaceModelIO
@@ -6,6 +7,7 @@ from .ollama import OllamaModelIO
 from .registry import ProviderAdapterRegistry, create_model_adapter, get_model_adapter_class
 
 __all__ = [
+    "GeminiModelIO",
     "AnthropicModelIO",
     "HyperspaceModelIO",
     "ModelAdapter",

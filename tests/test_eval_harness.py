@@ -65,7 +65,8 @@ def test_filter_model_specs_uses_current_provider_and_auth_policy():
     ready, skipped = filter_model_specs(
         [
             {"provider": "ollama", "model": "qwen3", "label": "local"},
-            {"provider": "gemini", "model": "gemini-2.5", "label": "unsupported"},
+            {"provider": "unsupported-provider", "model": "unknown", "label": "unsupported"},
+            {"provider": "gemini", "model": "gemini-2.5-flash", "label": "gemini"},
             {"provider": "hyperspace", "model": "hyperspace--claude", "label": "hyperspace"},
         ],
         env={},
@@ -74,6 +75,7 @@ def test_filter_model_specs_uses_current_provider_and_auth_policy():
     assert [(spec.label, api_key) for spec, api_key, _ in ready] == [("local", None)]
     skipped_by_label = {item["label"]: item["reason"] for item in skipped}
     assert "unsupported provider" in skipped_by_label["unsupported"]
+    assert "GEMINI_API_KEY/GOOGLE_API_KEY" in skipped_by_label["gemini"]
     assert "HYPERSPACE_API_KEY" in skipped_by_label["hyperspace"]
 
 

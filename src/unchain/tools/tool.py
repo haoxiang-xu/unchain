@@ -348,6 +348,15 @@ class Tool:
                 "input_schema": parameters,
             }
 
+        if normalized_provider == "gemini":
+            from ..providers.gemini_schema import sanitize_gemini_schema
+
+            return {
+                "name": self.name,
+                "description": self.description,
+                "parameters": sanitize_gemini_schema(parameters),
+            }
+
         if normalized_provider == "ollama":
             return {
                 "type": "function",

@@ -12,6 +12,20 @@ from ..tools.tool import Tool
 ASK_USER_QUESTION_TOOL_NAME = "ask_user_question"
 HUMAN_INPUT_KIND_SELECTOR = "selector"
 HUMAN_INPUT_OTHER_VALUE = "__other__"
+_HUMAN_INPUT_ARGUMENT_KEYS = frozenset(
+    {
+        "title",
+        "question",
+        "selection_mode",
+        "options",
+        "allow_other",
+        "other_label",
+        "other_placeholder",
+        "min_selected",
+        "max_selected",
+    }
+)
+_HUMAN_INPUT_OPTION_KEYS = frozenset({"label", "value", "description"})
 ASK_USER_QUESTION_TOOL_DESCRIPTION = (
     "Ask the user a structured selector question and suspend the run until they respond. "
     "Use this when you need a concrete decision, clarification, or preference that would materially change "
@@ -19,6 +33,10 @@ ASK_USER_QUESTION_TOOL_DESCRIPTION = (
     "Do not ask meta-questions such as what to discuss first. "
     "The question must let the user directly choose an answer, and the options must be concrete candidate answers, "
     "not categories, dimensions, or discussion topics. "
+    "For an unbounded answer such as a folder path or name, ask for that blocking value directly before making "
+    "downstream feature-scope decisions; use options=[] with allow_other=true, selection_mode=\"single\", and "
+    "a meaningful other_label such as \"Folder path\". Never guess a local or OS-specific path, and never "
+    "invent custom_path or enter_text options. "
     "When several reasonable paths exist, ask the user instead of silently guessing."
 )
 ASK_USER_QUESTION_TOOL_PROMPT_SPEC = ToolPromptSpec(
@@ -39,11 +57,15 @@ ASK_USER_QUESTION_TOOL_PROMPT_SPEC = ToolPromptSpec(
     examples=(
         'ask_user_question(title="Auth strategy", question="Which auth approach should I implement?", selection_mode="single", options=[{"label": "Session cookies", "value": "session", "description": "Server-managed sessions with cookies."}, {"label": "JWT", "value": "jwt", "description": "Stateless tokens for API clients."}])',
         'ask_user_question(title="Platform support", question="Which platforms should this first version support?", selection_mode="multiple", options=[{"label": "Desktop web", "value": "desktop_web"}, {"label": "Mobile web", "value": "mobile_web"}, {"label": "Native mobile", "value": "native_mobile"}], max_selected=2)',
+        'ask_user_question(title="Project folder", question="What folder path should I use?", selection_mode="single", options=[], allow_other=true, other_label="Folder path", other_placeholder="/path/to/folder")',
     ),
     advanced_tips=(
         "Prefer 2-4 strong options and make each option a concrete answer the user can directly pick.",
         "If one option is the best default, put it first and say so in the option label or description.",
-        "Use assistant text for freeform discussion only when structured choices would be a poor fit.",
+        'For free text such as a folder path or name, use options=[] with allow_other=true, '
+        'selection_mode="single", and a meaningful other_label such as "Folder path".',
+        "Ask for the blocking path or name directly before deciding downstream feature scope; never guess a local or OS-specific path or invent custom_path/enter_text options.",
+        "Use this tool whenever a direct user answer is needed, including an unbounded folder path or name; use assistant text for discussion that does not require an answer.",
     ),
 )
 
@@ -101,6 +123,9 @@ class HumanInputOption:
     def from_raw(cls, raw: Any) -> "HumanInputOption":
         if not isinstance(raw, dict):
             raise ValueError("each selector option must be an object")
+        unknown_keys = set(raw) - _HUMAN_INPUT_OPTION_KEYS
+        if unknown_keys:
+            raise ValueError(f"unknown option field(s): {sorted(unknown_keys)!r}")
 
         label = _clean_required_text(raw.get("label"), "option.label")
         value = _clean_required_text(raw.get("value"), "option.value")
@@ -141,15 +166,28 @@ class HumanInputRequest:
         request_id: str,
     ) -> "HumanInputRequest":
         raw = _parse_tool_arguments(arguments)
+        if not isinstance(raw, dict):
+            raise ValueError("human input tool arguments must be an object")
+        unknown_keys = set(raw) - _HUMAN_INPUT_ARGUMENT_KEYS
+        if unknown_keys:
+            raise ValueError(f"unknown argument field(s): {sorted(unknown_keys)!r}")
+
         title = _clean_required_text(raw.get("title"), "title")
         question = _clean_required_text(raw.get("question"), "question")
         selection_mode = raw.get("selection_mode")
-        if selection_mode not in {"single", "multiple"}:
+        if not isinstance(selection_mode, str) or selection_mode not in {"single", "multiple"}:
             raise ValueError("selection_mode must be 'single' or 'multiple'")
 
+        raw_allow_other = raw.get("allow_other", False)
+        if not isinstance(raw_allow_other, bool):
+            raise ValueError("allow_other must be a boolean")
+        allow_other = raw_allow_other
+
         raw_options = raw.get("options")
-        if not isinstance(raw_options, list) or not raw_options:
-            raise ValueError("options must be a non-empty array")
+        if not isinstance(raw_options, list):
+            raise ValueError("options must be an array")
+        if not raw_options and not allow_other:
+            raise ValueError("options must be a non-empty array unless allow_other is true")
 
         options = [HumanInputOption.from_raw(item) for item in raw_options]
         seen_values: set[str] = set()
@@ -158,10 +196,6 @@ class HumanInputRequest:
                 raise ValueError(f"duplicate option value: {option.value}")
             seen_values.add(option.value)
 
-        raw_allow_other = raw.get("allow_other", False)
-        if not isinstance(raw_allow_other, bool):
-            raise ValueError("allow_other must be a boolean")
-        allow_other = raw_allow_other
         other_label = _clean_optional_text(raw.get("other_label", "Other")) or "Other"
         other_placeholder = _clean_optional_text(raw.get("other_placeholder", ""))
         min_selected = _clean_optional_int(raw.get("min_selected"), "min_selected")
@@ -375,7 +409,8 @@ def build_ask_user_question_tool() -> Tool:
                 name="question",
                 description=(
                     "Concrete user-facing question for the decision you need now. "
-                    "Ask for a direct answer, not which dimensions, topics, or categories to explore."
+                    "Ask for a direct answer, not which dimensions, topics, or categories to explore. "
+                    "For an unbounded value such as a folder path or name, ask directly for that value."
                 ),
                 type_="string",
                 required=True,
@@ -390,7 +425,8 @@ def build_ask_user_question_tool() -> Tool:
                 name="options",
                 description=(
                     "Concrete candidate answers shown to the user. "
-                    "Do not use categories, placeholders, or meta options such as 'platform', 'tech', or 'scope'."
+                    "Do not use categories, placeholders, or meta options such as 'platform', 'tech', or 'scope'. "
+                    "For free text, use an empty array only with allow_other=true and set a meaningful other_label."
                 ),
                 type_="array",
                 required=True,
@@ -398,13 +434,16 @@ def build_ask_user_question_tool() -> Tool:
             ),
             ToolParameter(
                 name="allow_other",
-                description="Whether to allow a freeform concrete answer when the listed options are insufficient.",
+                description=(
+                    "Whether to allow a freeform concrete answer when the listed options are insufficient. "
+                    "For an unbounded answer, set this true with options=[] and selection_mode=\"single\"."
+                ),
                 type_="boolean",
                 required=False,
             ),
             ToolParameter(
                 name="other_label",
-                description="Label for the Other option when allow_other is true.",
+                description="Meaningful input label for the freeform answer when allow_other is true, such as 'Folder path'.",
                 type_="string",
                 required=False,
             ),

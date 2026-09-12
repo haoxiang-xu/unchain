@@ -21,6 +21,7 @@ from unchain.providers.durable_turn_runtime import (
     ExactProviderRouteTransport,
 )
 from unchain.providers.exact_route_transport import (
+    GeminiExactRouteTransport,
     AnthropicExactRouteTransport,
     HyperspaceExactRouteTransport,
     OllamaExactRouteTransport,
@@ -66,6 +67,10 @@ def _exact_transport(
         "run_id": request.run_id,
         "emit_stream": request.emit_stream,
     }
+    from unchain.providers.gemini import GeminiModelIO
+
+    if provider == "gemini" and type(model_io) is GeminiModelIO:
+        return GeminiExactRouteTransport(**common)
     if provider == "openai" and type(model_io) is OpenAIModelIO:
         return OpenAIExactRouteTransport(**common)
     if provider == "anthropic" and type(model_io) is AnthropicModelIO:

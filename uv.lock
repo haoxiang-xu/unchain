@@ -1227,9 +1227,9 @@ render = [
 [package.metadata]
 requires-dist = [
     { name = "anthropic", specifier = ">=0.83.0" },
-    { name = "google-genai", specifier = ">=1.14.0" },
+    { name = "google-genai", specifier = ">=1.68.0" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "mcp", specifier = ">=1.26.0" },
+    { name = "mcp", specifier = ">=1.26.0,<2.0.0" },
     { name = "openai", specifier = ">=2.7.1" },
     { name = "platformdirs", specifier = ">=4.4.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.4.2" },

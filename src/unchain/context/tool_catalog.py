@@ -66,7 +66,7 @@ TOOL_SCHEMA_JSON_LIMITS = JsonResourceLimits(
     max_nodes=TOOL_CATALOG_JSON_LIMITS.max_nodes,
 )
 SUPPORTED_TOOL_CATALOG_PROVIDERS = frozenset(
-    {"openai", "anthropic", "hyperspace", "ollama"}
+    {"openai", "anthropic", "hyperspace", "ollama", "gemini"}
 )
 _SCHEMA_PROPERTY_CONTAINERS = frozenset({"properties", "patternProperties"})
 _SCHEMA_CHILD_KEYS = frozenset(
@@ -218,7 +218,7 @@ def _is_provider_parameter_root(
     provider: str,
     location: tuple[str | int, ...],
 ) -> bool:
-    if provider == "openai":
+    if provider in {"openai", "gemini"}:
         return location == ("parameters",)
     if provider in {"anthropic", "hyperspace"}:
         return location == ("input_schema",)
@@ -637,6 +637,25 @@ def build_tool_catalog_entry_from_resolution(
             "verified tool descriptor has no provider schema authority"
         )
     frozen_schema = provider_schemas.get(provider)
+    if provider == "gemini":
+        # Derive the new transport projection from already-verified authority.
+        # Adding a fifth entry to every handler descriptor would change existing
+        # providers' durable identities and invalidate their cold resumes.
+        from unchain.providers.gemini_schema import sanitize_gemini_schema
+
+        descriptor = verified.tool_descriptor
+        native = (
+            descriptor.get("config", {}).get("provider_native_specs", {}).get("gemini")
+        )
+        if isinstance(native, Mapping):
+            frozen_schema = native
+        else:
+            neutral = _thaw_json(descriptor["provider_neutral_schema"])
+            frozen_schema = {
+                "name": neutral["name"],
+                "description": neutral["description"],
+                "parameters": sanitize_gemini_schema(neutral["parameters"]),
+            }
     if not isinstance(frozen_schema, Mapping):
         raise ToolCatalogContractError(
             "verified tool descriptor does not support the selected provider"

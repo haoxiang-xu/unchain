@@ -36,7 +36,14 @@ def _explicit_status_code(error: BaseException) -> int | None:
         return status_code
     response = getattr(error, "response", None)
     status_code = getattr(response, "status_code", None)
-    return status_code if type(status_code) is int else None
+    if type(status_code) is int:
+        return status_code
+    # google-genai APIError uses code for HTTP status, even without a response.
+    from google.genai.errors import APIError
+
+    if isinstance(error, APIError) and type(error.code) is int:
+        return error.code
+    return None
 
 
 def _classified_failure_kind(
@@ -411,3 +418,47 @@ __all__ = [
     "OllamaExactRouteTransport",
     "OpenAIExactRouteTransport",
 ]
+
+
+class GeminiExactRouteTransport(_BufferedExactRouteTransport):
+    """Send the frozen Gemini request once, with SDK retries disabled."""
+
+    provider = "gemini"
+
+    def __init__(
+        self, *, model_io, catalog, callback=None, run_id="kernel", emit_stream=False
+    ):
+        from .gemini import GeminiModelIO
+
+        if type(model_io) is not GeminiModelIO:
+            raise TypeError("model_io must be GeminiModelIO")
+        self._model_io = model_io
+        super().__init__(
+            catalog=catalog, callback=callback, run_id=run_id, emit_stream=emit_stream
+        )
+
+    def send(self, *, envelope, route, retry_ordinal):
+        wire = self._begin_send(
+            envelope=envelope,
+            route=route,
+            retry_ordinal=retry_ordinal,
+            configured_model=self._model_io.model,
+        )
+        messages = copy.deepcopy(wire["contents"])
+        system = wire["config"].get("system_instruction")
+        if system:
+            messages.insert(0, {"role": "system", "content": system})
+        request = self._result_request(envelope=envelope, messages=messages)
+        tools = wire.pop("tools", [])
+        if tools:
+            wire["config"]["tools"] = [{"function_declarations": tools}]
+        try:
+            return self._model_io._fetch_prepared(request, wire)
+        except Exception as exc:
+            if is_durable_persistence_failure(exc):
+                raise
+            self.discard_buffered_events()
+            kind = _classified_failure_kind(exc)
+            if kind is not None:
+                raise ExactProviderRouteFailure(kind, exc) from None
+            raise
