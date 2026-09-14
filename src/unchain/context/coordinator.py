@@ -36,6 +36,8 @@ from .compiler import (
     project_canonical_journal_messages,
 )
 from .models import ContextCompileRequest
+from .artifacts import ArtifactService
+from .request_factory import _graph_seed_projections
 from .model_projection import (
     ContextModelProjectionError,
     ModelContextProjection,
@@ -341,6 +343,7 @@ def _prepare_journal_view(
     *,
     request: ContextCompileRequest,
     snapshot: JournalSnapshot,
+    artifacts: ArtifactService | None = None,
 ) -> tuple[ContextCompileRequest, _PreparedJournalView]:
     if not isinstance(snapshot, JournalSnapshot):
         raise ContextCompileCoordinatorError("journal did not return a JournalSnapshot")
@@ -391,8 +394,12 @@ def _prepare_journal_view(
         request=request,
         events_by_cursor=events_by_cursor,
     )
+    graph_seeds = _graph_seed_projections(generation_events, artifacts=artifacts)
+    seed_handoff_ids = {seed.handoff.event_id for seed in graph_seeds}
     semantic_events: list[Mapping[str, Any]] = []
     for event in semantic_receipt_events:
+        if event.event_id in seed_handoff_ids:
+            continue
         semantic = journal_event_to_semantic_event(event)
         semantic["journal_event_sha256"] = journal_event_sha256(event)
         semantic_events.append(MappingProxyType(semantic))
@@ -454,7 +461,15 @@ def _prepare_journal_view(
             current_user_event is not None
             and current_user_event.event_type == "message.user"
         ):
-            bound_current_user_event = current_user_event
+            # The model sees the original message, but only the exact step's
+            # derived receipt can authorize a build. Re-resolve this against
+            # our snapshot rather than trusting a factory-provided mapping.
+            bound_current_user_event = next(
+                (seed.input_receipt for seed in graph_seeds
+                 if seed.source == current_user_event
+                 and seed.input_receipt.attempt.attempt_id == attempt_id),
+                current_user_event,
+            )
     admitted_input_receipts = tuple(
         event
         for event in (
@@ -724,6 +739,7 @@ class ContextCompileCoordinator:
         build_repository: BoundContextBuildRepository,
         partial_attempt_sink: Callable[[ContextCompileRequest, Exception], None],
         model_projection: ModelContextProjection | None = None,
+        artifacts: ArtifactService | None = None,
     ) -> None:
         if not isinstance(journal, BoundExecutionJournal):
             raise TypeError("journal must be a BoundExecutionJournal")
@@ -748,6 +764,12 @@ class ContextCompileCoordinator:
             raise TypeError(
                 "model_projection must be the official ModelContextProjection"
             )
+        if artifacts is not None and (
+            not isinstance(artifacts, ArtifactService)
+            or artifacts.execution_id != journal.execution_id
+        ):
+            raise ContextCompileCoordinatorError("artifact service scope mismatch")
+        self._artifacts = artifacts
         self._compiler = ContextCompiler()
         self._journal = journal
         self._checkpoint_repository = checkpoint_repository
@@ -792,6 +814,7 @@ class ContextCompileCoordinator:
             prepared_request, journal_view = _prepare_journal_view(
                 request=request,
                 snapshot=snapshot,
+                artifacts=self._artifacts,
             )
             self._verify_input_trigger_claim(request, journal_view.input_receipt)
             first = self._compile_pass(prepared_request)
