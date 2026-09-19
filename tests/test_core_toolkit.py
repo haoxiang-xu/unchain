@@ -19,6 +19,7 @@ from unchain.toolkits import CoreToolkit
 import unchain.toolkits.builtin.core.core as core_module
 from unchain.toolkits.builtin.core.lsp_runtime import LSPServerSpec
 from unchain.toolkits.builtin.core import web_fetch as web_fetch_module
+from unchain.toolkits.builtin.core.web_backend import truncation_notice
 from unchain.toolkits.builtin.core.shell_runtime import ShellRuntime
 
 
@@ -760,7 +761,7 @@ def test_code_toolkit_web_fetch_raw_uses_cache_and_paginates(monkeypatch):
             {"url": "https://example.com/docs", "mode": "raw", "offset": 6, "max_chars": 4},
         )
         assert first["ok"] is True
-        assert first["result"] == "beta"
+        assert first["result"] == "beta" + truncation_notice(6, 10, 22, 10)
         assert first["truncated"] is True
         assert first["next_offset"] == 10
         assert first["cached"] is False
@@ -769,7 +770,7 @@ def test_code_toolkit_web_fetch_raw_uses_cache_and_paginates(monkeypatch):
             "web_fetch",
             {"url": "https://example.com/docs", "mode": "raw", "offset": 0, "max_chars": 5},
         )
-        assert second["result"] == "alpha"
+        assert second["result"] == "alpha" + truncation_notice(0, 5, 22, 5)
         assert second["cached"] is True
         assert calls["count"] == 1
 

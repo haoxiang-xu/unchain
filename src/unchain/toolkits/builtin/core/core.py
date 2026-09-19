@@ -5,7 +5,12 @@ from typing import Any
 
 from ...base import BuiltinToolkit
 from ....input.human_input import build_ask_user_question_tool
-from ....tools.models import ToolConfirmationPolicy, ToolExecutionContext, ToolHistoryOptimizationContext
+from ....tools.models import (
+    ToolConfirmationPolicy,
+    ToolExecutionContext,
+    ToolHistoryOptimizationContext,
+    ToolPromptSpec,
+)
 from .coding_backend import CoreCodingBackend
 from .web_backend import CoreWebBackend
 
@@ -87,11 +92,43 @@ class CoreToolkit(BuiltinToolkit):
         self.register(
             self.web_fetch,
             name="web_fetch",
-            description="Fetch a public web page over HTTP(S), return raw page content or run a runtime-configured extraction model.",
+            description=(
+                "Fetch a public web page over HTTP(S). Raw mode returns the page text "
+                "converted to Markdown with scripts, styles and embedded data removed, "
+                "paginated by offset/max_chars; a truncated result ends with a notice and "
+                "next_offset — continue with offset=next_offset before answering. Extract "
+                "mode runs a runtime-configured extraction model."
+            ),
             requires_confirmation=True,
             history_arguments_optimizer=self._compact_web_fetch_args,
             history_result_optimizer=self._compact_web_fetch_result,
             output_policy="head_tail",
+            prompt_spec=ToolPromptSpec(
+                purpose=(
+                    "Read a public web page and return its text as Markdown, or extract "
+                    "specific information with a configured model."
+                ),
+                when_to_use=(
+                    "The answer depends on the current content of a specific public URL.",
+                ),
+                when_not_to_use=(
+                    "A local file or an earlier fetch already contains the needed text.",
+                ),
+                examples=(
+                    'web_fetch(url="https://example.com/docs")',
+                    'web_fetch(url="https://example.com/docs", offset=20000)',
+                ),
+                advanced_tips=(
+                    "A result whose text ends with a [web_fetch notice: …] line is "
+                    "incomplete: call web_fetch again with offset=next_offset (repeat until "
+                    "next_offset is null) before answering, or say you could not read the "
+                    "whole page.",
+                    "Never answer from a truncated page as if it were complete, and never "
+                    "cite a URL you did not fetch.",
+                    "Prefer raw.githubusercontent.com or a docs page over a rendered app "
+                    "page when both exist.",
+                ),
+            ),
         )
         self.register(
             self.shell,
@@ -205,14 +242,14 @@ class CoreToolkit(BuiltinToolkit):
         offset: int = 0,
         max_chars: int = 20000,
     ) -> dict[str, Any]:
-        """Fetch a public web page and return raw content or extracted content.
+        """Fetch a public web page as Markdown text (scripts and styles removed), or run a configured extraction model; a truncated result ends with a notice and next_offset.
 
         Args:
             url: Public HTTP(S) URL to fetch.
-            mode: Either `raw` or `extract`.
+            mode: Either `raw` (page text as Markdown, paginated) or `extract` (needs a runtime-configured extraction model).
             prompt: Extraction prompt used only when `mode="extract"`.
-            offset: Zero-based character offset for `raw` mode pagination.
-            max_chars: Maximum characters to return in `raw` mode. Capped at 50,000.
+            offset: Zero-based character offset for `raw` mode pagination. Pass the `next_offset` of a truncated result to continue reading.
+            max_chars: Maximum characters to return in `raw` mode. Capped at 50,000. A truncated result ends with a notice and sets `next_offset`.
         """
         return self._web_backend.fetch(
             url=url,

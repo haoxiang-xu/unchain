@@ -173,6 +173,10 @@ def _file_kind_for(content_type: str, body: bytes, final_url: str) -> str:
 
 class _MarkdownHTMLParser(HTMLParser):
     _BLOCK_TAGS = {"article", "blockquote", "div", "header", "footer", "main", "nav", "p", "section"}
+    _SKIP_TAGS = {
+        "script", "style", "noscript", "template", "svg",
+        "iframe", "object", "canvas", "audio", "video",
+    }
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -181,6 +185,7 @@ class _MarkdownHTMLParser(HTMLParser):
         self._list_depth = 0
         self._in_pre = False
         self._in_code = False
+        self._skip_depth = 0
 
     def _append(self, text: str) -> None:
         if text:
@@ -196,6 +201,11 @@ class _MarkdownHTMLParser(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         tag = tag.lower()
+        if tag in self._SKIP_TAGS:
+            self._skip_depth += 1
+            return
+        if self._skip_depth > 0:
+            return
         attrs_map = {key.lower(): value for key, value in attrs}
         if tag in self._BLOCK_TAGS:
             self._newline(2)
@@ -231,6 +241,12 @@ class _MarkdownHTMLParser(HTMLParser):
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
+        if tag in self._SKIP_TAGS:
+            if self._skip_depth > 0:
+                self._skip_depth -= 1
+            return
+        if self._skip_depth > 0:
+            return
         if tag in self._BLOCK_TAGS:
             self._newline(2)
             return
@@ -258,8 +274,15 @@ class _MarkdownHTMLParser(HTMLParser):
                 if href and href != anchor_text:
                     self._append(f" ({href})")
 
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if self._skip_depth > 0:
+            return
+        super().handle_startendtag(tag, attrs)
+
     def handle_data(self, data: str) -> None:
         if not data:
+            return
+        if self._skip_depth > 0:
             return
         if self._in_pre:
             self._append(data)

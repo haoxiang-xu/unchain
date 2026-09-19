@@ -9,6 +9,22 @@ from ....tools.models import ToolHistoryOptimizationContext
 from .web_fetch import WebFetchService, run_extract_model
 
 
+def truncation_notice(offset: int, end: int, content_length: int, next_offset: int) -> str:
+    return (
+        f"\n\n[web_fetch notice: this page has {content_length} characters; "
+        f"you received characters {offset}-{end}. Call web_fetch again with "
+        f"offset={next_offset} to read the rest. Do not treat this partial page "
+        f"as the whole page or answer from it alone.]"
+    )
+
+
+def past_end_notice(offset: int, content_length: int) -> str:
+    return (
+        f"[web_fetch notice: offset {offset} is beyond the end of this page "
+        f"({content_length} characters); nothing more to read.]"
+    )
+
+
 class CoreWebBackend:
     """Private backend for CoreToolkit web-fetch behavior."""
 
@@ -132,20 +148,27 @@ class CoreWebBackend:
         max_chars: int,
     ) -> dict[str, Any]:
         offset_value = self._coerce_nonnegative_int(offset, 0)
+        content_length = len(page_content)
+        if offset_value >= content_length:
+            result["result"] = past_end_notice(offset_value, content_length)
+            result["returned_chars"] = 0
+            result["truncated"] = False
+            result["next_offset"] = None
+            return result
         try:
             limit_value = max(1, min(50_000, int(max_chars)))
         except (TypeError, ValueError):
             limit_value = 20_000
         chunk = page_content[offset_value : offset_value + limit_value]
-        next_offset = (
-            offset_value + len(chunk)
-            if offset_value + len(chunk) < len(page_content)
-            else None
-        )
-        result["result"] = chunk
+        end = offset_value + len(chunk)
+        next_offset = end if end < content_length else None
         result["returned_chars"] = len(chunk)
         result["truncated"] = next_offset is not None
         result["next_offset"] = next_offset
+        if next_offset is not None:
+            result["result"] = chunk + truncation_notice(offset_value, end, content_length, next_offset)
+        else:
+            result["result"] = chunk
         return result
 
     def _tool_runtime_config_for(self, tool_name: str) -> dict[str, Any]:
