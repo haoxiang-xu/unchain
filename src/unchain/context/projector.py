@@ -168,7 +168,9 @@ def _bounded_iteration(value: Any) -> int | None:
     return value
 
 
-_SOURCE_TOOL_PROVIDERS = frozenset({"openai", "anthropic", "hyperspace", "ollama"})
+_SOURCE_TOOL_PROVIDERS = frozenset(
+    {"openai", "anthropic", "hyperspace", "ollama", "gemini"}
+)
 
 
 def _normalized_source_provider(event: Mapping[str, Any]) -> str | None:

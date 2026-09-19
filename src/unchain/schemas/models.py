@@ -200,33 +200,32 @@ CLAUDE_SONNET_35 = ModelConfiguration(
     )
 )
 
-GEMINI_PRO_15 = ModelConfiguration(
-    name="gemini-pro-1.5",
+GEMINI_PRO_25 = ModelConfiguration(
+    name="gemini-2.5-pro",
     capabilities=ModelCapabilities(
-        provider="google",
-        provider_model="gemini-1.5-pro",
+        provider="gemini",
+        provider_model="gemini-2.5-pro",
         max_context_window_tokens=1048576,
         supports_tools=True,
-        supports_response_format=False,
+        supports_response_format=True,
         supports_previous_response_id=False,
-        supports_reasoning=False,
-        input_modalities=["text", "image", "audio", "video"],
-        input_source_types={
-            "image": ["url", "base64"],
-            "audio": ["url", "base64"],
-            "video": ["url", "base64"]
-        },
-        allowed_payload_keys=["max_output_tokens", "temperature", "top_k", "top_p"]
+        supports_reasoning=True,
+        input_modalities=["text", "image", "pdf"],
+        input_source_types={"image": ["url", "base64"], "pdf": ["url", "base64"]},
+        allowed_payload_keys=[
+            "max_output_tokens",
+            "temperature",
+            "top_k",
+            "top_p",
+            "thinking_config",
+        ],
     ),
     default_payload=ModelDefaultPayload(
-        payload={
-            "max_output_tokens": 8192,
-            "temperature": 0.7,
-            "top_p": 1,
-            "top_k": 40
-        }
-    )
+        payload={"max_output_tokens": 65536, "temperature": 0.7, "top_p": 1}
+    ),
 )
+# Deprecated import alias; it resolves to the supported Gemini configuration.
+GEMINI_PRO_15 = GEMINI_PRO_25
 
 __all__ = [
     "ModelCapabilities",
@@ -237,4 +236,5 @@ __all__ = [
     "GPT_4O",
     "CLAUDE_SONNET_35",
     "GEMINI_PRO_15",
+    "GEMINI_PRO_25",
 ]

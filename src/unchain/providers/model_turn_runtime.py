@@ -45,6 +45,7 @@ _REPLAY_FORMATS = {
     "anthropic": "anthropic.messages.v1",
     "hyperspace": "anthropic.messages.v1",
     "ollama": "ollama.chat.v1",
+    "gemini": "gemini.contents.v1",
 }
 
 
@@ -276,6 +277,21 @@ def build_model_turn_request(
         state,
         toolkit=resolved_toolkit,
     )
+    from ..optimizers.context_usage import context_usage_request_note
+
+    status_note = context_usage_request_note(state)
+    if status_note is not None and assembly.messages:
+        # Append only after replay/tool-pair assembly. Keeping telemetry out of
+        # working history preserves the real latest user query and all stable
+        # instruction/history prefixes, including providers that hoist systems.
+        assembly = replace(
+            assembly,
+            messages=[*assembly.messages, status_note],
+            fallback_messages=(
+                None if assembly.fallback_messages is None
+                else [*assembly.fallback_messages, copy.deepcopy(status_note)]
+            ),
+        )
     from ..context.composition import (
         build_internal_context_composition,
         freeze_internal_context_composition,

@@ -4,6 +4,7 @@ from typing import Any
 
 
 def _default_adapter_classes() -> dict[str, type]:
+    from .gemini import GeminiModelIO
     from .anthropic import AnthropicModelIO
     from .hyperspace import HyperspaceModelIO
     from .openai import OpenAIModelIO
@@ -11,6 +12,7 @@ def _default_adapter_classes() -> dict[str, type]:
 
     return {
         "anthropic": AnthropicModelIO,
+        "gemini": GeminiModelIO,
         "hyperspace": HyperspaceModelIO,
         "ollama": OllamaModelIO,
         "openai": OpenAIModelIO,

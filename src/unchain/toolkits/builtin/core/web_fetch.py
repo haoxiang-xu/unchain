@@ -173,6 +173,10 @@ def _file_kind_for(content_type: str, body: bytes, final_url: str) -> str:
 
 class _MarkdownHTMLParser(HTMLParser):
     _BLOCK_TAGS = {"article", "blockquote", "div", "header", "footer", "main", "nav", "p", "section"}
+    _SKIP_TAGS = {
+        "script", "style", "noscript", "template", "svg",
+        "iframe", "object", "canvas", "audio", "video",
+    }
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -181,6 +185,7 @@ class _MarkdownHTMLParser(HTMLParser):
         self._list_depth = 0
         self._in_pre = False
         self._in_code = False
+        self._skip_depth = 0
 
     def _append(self, text: str) -> None:
         if text:
@@ -196,6 +201,11 @@ class _MarkdownHTMLParser(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         tag = tag.lower()
+        if tag in self._SKIP_TAGS:
+            self._skip_depth += 1
+            return
+        if self._skip_depth > 0:
+            return
         attrs_map = {key.lower(): value for key, value in attrs}
         if tag in self._BLOCK_TAGS:
             self._newline(2)
@@ -231,6 +241,12 @@ class _MarkdownHTMLParser(HTMLParser):
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
+        if tag in self._SKIP_TAGS:
+            if self._skip_depth > 0:
+                self._skip_depth -= 1
+            return
+        if self._skip_depth > 0:
+            return
         if tag in self._BLOCK_TAGS:
             self._newline(2)
             return
@@ -258,8 +274,15 @@ class _MarkdownHTMLParser(HTMLParser):
                 if href and href != anchor_text:
                     self._append(f" ({href})")
 
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if self._skip_depth > 0:
+            return
+        super().handle_startendtag(tag, attrs)
+
     def handle_data(self, data: str) -> None:
         if not data:
+            return
+        if self._skip_depth > 0:
             return
         if self._in_pre:
             self._append(data)
@@ -362,6 +385,18 @@ class _TTLPageCache:
         self._current_bytes += size
 
 
+def _read_error_response_body(response: httpx.Response) -> bytes:
+    # Read one sentinel byte to report truncation without downloading an
+    # arbitrarily large error page. Error bodies are diagnostics, not content.
+    collected = bytearray()
+    limit = 16_384 + 1
+    for chunk in response.iter_bytes():
+        collected.extend(chunk[:limit - len(collected)])
+        if len(collected) >= limit:
+            break
+    return bytes(collected)
+
+
 class WebFetchService:
     def __init__(self) -> None:
         self._cache = _TTLPageCache(max_bytes=_CACHE_MAX_BYTES, ttl_seconds=_CACHE_TTL_SECONDS)
@@ -462,16 +497,59 @@ class WebFetchService:
                             },
                             None,
                         )
-                    body = _read_response_body(response)
+                    body = (
+                        _read_response_body(response)
+                        if 200 <= response.status_code < 300
+                        else _read_error_response_body(response)
+                    )
                     final_url = str(response.url)
                     final_host = response.url.host or ""
                     status_code = response.status_code
                     content_type = _normalize_content_type(response.headers.get("content-type"))
+                    retry_after = str(response.headers.get("retry-after") or "")[:128]
                     break
             else:
                 raise RuntimeError(f"too many redirects (>{_MAX_REDIRECTS})")
 
         file_kind = _file_kind_for(content_type, body, final_url)
+        if not 200 <= status_code < 300:
+            content, normalized_type = (
+                decode_response_body(body[:16_384], content_type)
+                if file_kind == "text"
+                else ("", content_type)
+            )
+            excerpt = content[:4096]
+            retryable = status_code in {408, 425, 429} or status_code >= 500
+            return (
+                {
+                    "ok": False,
+                    "url": normalized_url,
+                    "final_url": final_url,
+                    "host": final_host,
+                    "status_code": status_code,
+                    "content_type": normalized_type,
+                    "file_kind": file_kind,
+                    "result": excerpt,
+                    "content_length": len(content),
+                    "returned_chars": len(excerpt),
+                    "truncated": len(body) > 16_384 or len(content) > len(excerpt),
+                    "next_offset": None,
+                    "cached": False,
+                    "redirect": None,
+                    "skipped": file_kind != "text",
+                    "error": f"HTTP {status_code}",
+                    "retryable": retryable,
+                    "retry_after": retry_after,
+                    "retry_advice": (
+                        "Temporary HTTP failure. Respect Retry-After; retry only within "
+                        "the bounded fetch budget, then use another source or explain the failure."
+                        if retryable else
+                        "Do not repeat this URL unchanged. Use another source or explain "
+                        "that the site denied or could not serve the request."
+                    ),
+                },
+                None,
+            )
         if file_kind != "text":
             return (
                 {
@@ -496,29 +574,6 @@ class WebFetchService:
             )
 
         content, normalized_type = decode_response_body(body, content_type)
-        if status_code >= 400:
-            return (
-                {
-                    "ok": False,
-                    "url": normalized_url,
-                    "final_url": final_url,
-                    "host": final_host,
-                    "status_code": status_code,
-                    "content_type": normalized_type,
-                    "file_kind": file_kind,
-                    "result": "",
-                    "content_length": len(content),
-                    "returned_chars": 0,
-                    "truncated": False,
-                    "next_offset": None,
-                    "cached": False,
-                    "redirect": None,
-                    "skipped": False,
-                    "error": f"HTTP {status_code}",
-                },
-                None,
-            )
-
         return (
             {
                 "ok": True,

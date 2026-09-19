@@ -72,6 +72,11 @@ class ProviderFailureDiagnostic:
         status = getattr(error, "status_code", None)
         if type(status) is not int:
             status = getattr(getattr(error, "response", None), "status_code", None)
+        if type(status) is not int:
+            from google.genai.errors import APIError
+
+            if isinstance(error, APIError):
+                status = error.code
         if type(status) is not int or not 400 <= status <= 599:
             return None
         body = getattr(error, "body", None)

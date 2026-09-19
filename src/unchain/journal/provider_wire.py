@@ -47,6 +47,7 @@ PROVIDER_WIRE_RECEIPT_LOOKUP_LIMITS = JsonResourceLimits(
     max_nodes=4_096,
 )
 _PROVIDER_REVISIONS = {
+    "gemini": "unchain.gemini.contents.request.v1",
     "openai": "unchain.openai.responses.request.v1",
     "anthropic": "unchain.anthropic.messages.request.v1",
     "hyperspace": "unchain.hyperspace.anthropic-messages.request.v1",

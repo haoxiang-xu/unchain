@@ -1,17 +1,21 @@
 {
   "schema": "unchain.context_v2.compiler_golden_manifest.v1",
-  "freeze_version": 1,
+  "freeze_version": 2,
   "provenance": {
     "kind": "unchain_branch_local_compiler_freeze",
     "repository": "unchain",
-    "branch": "codex/context-memory-v2-core",
-    "base_head_sha": "a54050d726daee8e5573516a4fbc23f077fd0d16",
+    "branch": "dev",
+    "base_head_sha": "7569395ecbd0cc4b0e7068fbfc8428706740eb16",
     "dirty": true,
     "cross_repo_equivalence_claim": false,
-    "host_contract_manifest": "../pupu_p0/manifest.json"
+    "host_contract_manifest": "../pupu_p0/manifest.json",
+    "reason": "Issue #268: scoped assistant references preserve live user authority"
   },
   "comparison": {
-    "scope": ["messages", "diagnostics"],
+    "scope": [
+      "messages",
+      "diagnostics"
+    ],
     "encoding": "canonical_json_utf8",
     "exact_bytes": true
   },
@@ -25,22 +29,22 @@
     {
       "case": "core_below_pressure",
       "file": "below_pressure.json",
-      "sha256": "8b1726b63e68897d5fb06de1ec5d734d2e1c9d0f68b09ede3e1f7035a3ec3c0a"
+      "sha256": "d5f9bbd6b245f4961116b1645ceaddeff698fccdaa41e609e37690af275a38f8"
     },
     {
       "case": "core_over_pressure",
       "file": "over_pressure.json",
-      "sha256": "d3abb359d63fdc37b5d7288f68651d2d234f60303bc6fd913df5a16f8e456e25"
+      "sha256": "716c4f6219c7f96a7095bed76e3b5e522b5ba16167f4f492c998174488ac796e"
     },
     {
       "case": "core_cross_provider",
       "file": "cross_provider.json",
-      "sha256": "1e7176adc111986b7b75e7dba63e5fc400d119cfbda56d8bc320180e2acc29ed"
+      "sha256": "789faa80313eabe58e632478cb58abba8e9e5e28daab9e32287ae2bc56b1d973"
     },
     {
       "case": "core_recorded_refs",
       "file": "recorded_refs.json",
-      "sha256": "99e53c21cbb7f0c76176d64a45c0204064214658872c50757189cdf307c1b9f3"
+      "sha256": "2f426ee219578120d2553bf2b13a79d253aae3b4179a577921736374507d786c"
     }
   ]
 }

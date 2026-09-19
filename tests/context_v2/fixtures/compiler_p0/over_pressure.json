@@ -5,14 +5,24 @@
     "schema": "unchain.context_v2.request.v1",
     "case": "core_over_pressure",
     "source_messages": [
-      {"content": "current policy", "role": "system"},
+      {
+        "content": "current policy",
+        "role": "system"
+      },
       {
         "content": [
-          {"image_ref": "opaque-image", "media_type": "image/png", "type": "image"}
+          {
+            "image_ref": "opaque-image",
+            "media_type": "image/png",
+            "type": "image"
+          }
         ],
         "role": "user"
       },
-      {"content": "current request", "role": "user"}
+      {
+        "content": "current request",
+        "role": "user"
+      }
     ],
     "budget": {
       "schema": "unchain.context_budget.v1",

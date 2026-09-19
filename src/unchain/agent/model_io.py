@@ -4,12 +4,19 @@ import os
 from typing import Any, Callable
 
 from ..kernel.model_io import ModelIO
-from ..providers import AnthropicModelIO, HyperspaceModelIO, OllamaModelIO, OpenAIModelIO
+from ..providers import (
+    GeminiModelIO,
+    AnthropicModelIO,
+    HyperspaceModelIO,
+    OllamaModelIO,
+    OpenAIModelIO,
+)
 
 
 class ModelIOFactoryRegistry:
     def __init__(self) -> None:
         self._factories: dict[str, Callable[..., ModelIO]] = {
+            "gemini": self._create_gemini,
             "openai": self._create_openai,
             "anthropic": self._create_anthropic,
             "ollama": self._create_ollama,
@@ -63,3 +70,7 @@ class ModelIOFactoryRegistry:
         if base_url:
             kwargs["base_url"] = base_url
         return HyperspaceModelIO(**kwargs)
+
+    def _create_gemini(self, *, model: str, api_key: str | None) -> ModelIO:
+        key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        return GeminiModelIO(model=model, api_key=key or "")

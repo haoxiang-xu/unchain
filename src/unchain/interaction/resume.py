@@ -20,7 +20,13 @@ from ..tools.common import emit_loop_event
 from ..tools.messages import get_provider_message_builder
 from ..tools.types import ToolBatchState
 
-_SUPPORTED_HUMAN_INPUT_RESUME_PROVIDERS = {"openai", "anthropic", "ollama", "hyperspace"}
+_SUPPORTED_HUMAN_INPUT_RESUME_PROVIDERS = {
+    "openai",
+    "anthropic",
+    "ollama",
+    "hyperspace",
+    "gemini",
+}
 
 
 @dataclass(frozen=True)

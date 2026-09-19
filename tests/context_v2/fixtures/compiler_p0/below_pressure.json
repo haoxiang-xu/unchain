@@ -5,9 +5,18 @@
     "schema": "unchain.context_v2.request.v1",
     "case": "core_below_pressure",
     "source_messages": [
-      {"content": "current policy", "role": "system"},
-      {"content": "historical fact", "role": "user"},
-      {"content": "current request", "role": "user"}
+      {
+        "content": "current policy",
+        "role": "system"
+      },
+      {
+        "content": "historical fact",
+        "role": "user"
+      },
+      {
+        "content": "current request",
+        "role": "user"
+      }
     ],
     "budget": {
       "schema": "unchain.context_budget.v1",

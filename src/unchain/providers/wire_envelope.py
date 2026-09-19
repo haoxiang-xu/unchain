@@ -51,6 +51,10 @@ _EPHEMERAL = {"type": "ephemeral"}
 _ROUTE_NAMES = frozenset({"primary", "openai_previous_response_fallback"})
 _PROVIDER_PROFILES = MappingProxyType(
     {
+        "gemini": (
+            "unchain.gemini.contents.request.v1",
+            "gemini.models.generate_content_stream",
+        ),
         "openai": (
             "unchain.openai.responses.request.v1",
             "openai.responses.create",
@@ -480,6 +484,33 @@ def _validate_request(
         base_betas=base_betas,
         required_betas=required_betas,
     )
+
+    if provider == "gemini":
+        from google.genai import types
+
+        if set(request) not in (
+            {"model", "contents", "config"},
+            {"model", "contents", "config", "tools"},
+        ):
+            raise ProviderWireContractError("Unknown Gemini wire field")
+        if not isinstance(request["contents"], list) or not request["contents"]:
+            raise ProviderWireContractError("Gemini requires contents")
+        config = request["config"]
+        if (
+            not isinstance(config, dict)
+            or "tools" in config
+            or config.get("automatic_function_calling") != {"disable": True}
+        ):
+            raise ProviderWireContractError(
+                "Gemini tools are catalog-owned and automatic execution is disabled"
+            )
+        types.GenerateContentConfig.model_validate(config)
+        from .gemini import validate_gemini_contents
+
+        validate_gemini_contents(request["contents"])
+        for tool in request.get("tools", []):
+            types.FunctionDeclaration.model_validate(tool)
+        return
 
     if provider == "openai":
         if request.get("stream") is not True:
