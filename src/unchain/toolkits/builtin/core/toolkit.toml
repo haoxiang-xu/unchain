@@ -64,7 +64,7 @@ requires_confirmation = false
 [[tools]]
 name = "web_fetch"
 title = "Web Fetch"
-description = "Fetch a public web page over HTTP(S), return raw page content or run a runtime-configured extraction model."
+description = "Fetch a public web page over HTTP(S). Raw mode returns the page text converted to Markdown with scripts, styles and embedded data removed, paginated by offset/max_chars; a truncated result ends with a notice and next_offset — continue with offset=next_offset before answering."
 observe = false
 requires_confirmation = true
 
