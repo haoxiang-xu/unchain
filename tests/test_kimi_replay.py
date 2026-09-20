@@ -130,6 +130,12 @@ def test_kimi_cold_restart_preserves_replay_and_does_not_repeat_tool(tmp_path):
     assert calls == [2]
     assert completed.run("second message", session_id="kimi-cold", max_iterations=1).status == "completed"
     assert calls == [2]
+    # Completed legacy memory stores semantic history. Verify the next turn's
+    # tool pair remains intact; live Kimi acceptance of that history is separate.
+    later_blocks = [block for message in resumed_requests[1]["messages"]
+                    if isinstance(message.get("content"), list) for block in message["content"]]
+    assert [b["id"] for b in later_blocks if b.get("type") == "tool_use"] == ["toolu_1"]
+    assert [b["tool_use_id"] for b in later_blocks if b.get("type") == "tool_result"] == ["toolu_1"]
 
 
 @pytest.mark.parametrize("mutation", ["profile", "endpoint", "model", "extra", "native", "no-live-io", "malformed-endpoint", "active-endpoint", "active-model"])
@@ -169,6 +175,45 @@ def test_kimi_actual_wire_model_must_match_profile():
     with pytest.raises(ProviderReplayFrameError, match="wire model"):
         model_io.fetch_turn(ModelTurnRequest(messages=[{"role": "user", "content": "use tool"}]))
     assert requests == []
+
+
+@pytest.mark.parametrize("value", [123, False, [], {"x": 1}, None])
+@pytest.mark.parametrize("field", ["signature", "thinking"])
+def test_kimi_rejects_malformed_stream_delta_before_coercion(field, value):
+    events = _tool_events()
+    delta = events[2 if field == "signature" else 1].delta
+    setattr(delta, field, value)
+    with pytest.raises(ProviderReplayFrameError, match=field):
+        _io([events], []).fetch_turn(
+            ModelTurnRequest(messages=[{"role": "user", "content": "use tool"}])
+        )
+
+
+@pytest.mark.parametrize("signature", [None, "", "signed"])
+def test_kimi_sdk_final_message_thinking_shape(signature):
+    class Stream:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def __iter__(self):
+            return iter(())
+
+        def get_final_message(self):
+            return SimpleNamespace(id="kimi-final", content=[
+                {"type": "thinking", "thinking": "plan", "signature": signature},
+                {"type": "tool_use", "id": "toolu_1", "name": "demo_tool", "input": {"x": 2}},
+            ])
+
+    io = HyperspaceModelIO(model=MODEL, api_key="fixture-key", base_url=ENDPOINT,
+        client_factory=lambda **kwargs: SimpleNamespace(messages=SimpleNamespace(stream=lambda **kw: Stream())))
+    turn = io.fetch_turn(ModelTurnRequest(messages=[{"role": "user", "content": "use tool"}]))
+    expected = {"type": "thinking", "thinking": "plan"}
+    if signature:
+        expected["signature"] = signature
+    assert turn.provider_replay_frame["items"][-1]["content"][0] == expected
 
 
 def test_kimi_official_context_boundary_cold_approval_resume(tmp_path):
@@ -216,3 +261,45 @@ def test_kimi_official_context_boundary_cold_approval_resume(tmp_path):
     assert calls == ["durable"]
     assert len(requests) == 2
     _assert_wire_thinking(requests[1]["messages"], 1)
+
+
+def test_kimi_durable_owned_provider_branch_preserves_repeated_thinking(tmp_path):
+    from tests.context_v2.test_provider_turn_execution_service import _service, ATTEMPT
+    from unchain.providers.durable_turn_runtime import DurableProviderTurnMode
+    from unchain.providers.turn_ownership import ProviderTurnOwnership
+    from unchain.run_bundle import RunIdentity
+
+    identity = RunIdentity(
+        execution_id=ATTEMPT.generation.execution_id,
+        attempt_id=ATTEMPT.attempt_id,
+        root_run_id=ATTEMPT.attempt_id,
+        run_id=ATTEMPT.attempt_id,
+        parent_run_id=None, relation="root",
+    )
+
+    class Factory:
+        def bind(self, *, identity):
+            service = _service(tmp_path, DurableProviderTurnMode.ENFORCE_TEST)
+            return ProviderTurnOwnership(identity=identity, service=service, ledger=service.store, factory=self)
+
+    requests, calls = [], []
+
+    def demo_tool(x: int):
+        calls.append(x)
+        return {"value": x + 1}
+
+    io = _io([_tool_events(), _tool_events("toolu_2"), _done_events()], requests)
+    io.fetch_turn = lambda request: (_ for _ in ()).throw(AssertionError("legacy path"))
+    result = Agent(
+        name="kimi-owned", provider="hyperspace", model=MODEL,
+        modules=(ToolsModule(tools=(demo_tool,)),), model_io_factory=lambda spec, context: io,
+    ).run(
+        "use two tools", max_iterations=3, session_id=identity.execution_id,
+        run_id=identity.run_id, _run_bundle_identity=identity,
+        _provider_turn_ownership_factory=Factory(),
+    )
+    assert result.status == "completed"
+    assert calls == [2, 2]
+    assert len(requests) == 3
+    _assert_wire_thinking(requests[1]["messages"], 1)
+    _assert_wire_thinking(requests[2]["messages"], 2)

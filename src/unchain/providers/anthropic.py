@@ -242,6 +242,11 @@ class AnthropicModelIO(_NativeModelIOBase):
                         )
                     block = strict_json_copy(block_dict)
                     if block_type == "thinking":
+                        if replay_profile is not None:
+                            if not isinstance(block.get("thinking", ""), str):
+                                raise ProviderReplayFrameError("Kimi thinking must be a string")
+                            if block.get("signature") is not None and not isinstance(block["signature"], str):
+                                raise ProviderReplayFrameError("Kimi thinking signature must be a string")
                         block.setdefault("thinking", "")
                         block.setdefault("signature", "")
                     elif block_type == "text":
@@ -256,6 +261,8 @@ class AnthropicModelIO(_NativeModelIOBase):
                     delta_dict = self._as_dict(getattr(event, "delta", None))
                     delta_type = delta_dict.get("type", "")
                     if delta_type == "thinking_delta":
+                        if replay_profile is not None and not isinstance(delta_dict.get("thinking"), str):
+                            raise ProviderReplayFrameError("Kimi thinking delta must be a string")
                         index = resolve_index(event, block_type="thinking")
                         block = ensure_block(index, "thinking")
                         active_index = index
@@ -275,6 +282,8 @@ class AnthropicModelIO(_NativeModelIOBase):
                                 )
                         continue
                     if delta_type == "signature_delta":
+                        if replay_profile is not None and not isinstance(delta_dict.get("signature"), str):
+                            raise ProviderReplayFrameError("Kimi thinking signature delta must be a string")
                         index = resolve_index(event, block_type="thinking")
                         block = ensure_block(index, "thinking")
                         active_index = index
