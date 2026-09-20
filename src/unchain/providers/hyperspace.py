@@ -4,6 +4,8 @@ SAP Hyperspace exposes an Anthropic Messages API at a custom base URL with
 ``x-api-key`` authentication. Since the wire protocol is identical to
 Anthropic's, ``HyperspaceModelIO`` subclasses ``AnthropicModelIO`` and only
 overrides the default ``client_factory`` to point at the Hyperspace base URL.
+The two official Moonshot endpoints have a narrowly bound K2.7 Code replay
+profile; all other routes retain native Anthropic signature requirements.
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ from typing import Any, Callable
 import httpx
 
 from .anthropic import AnthropicModelIO
+from .replay_profile import kimi_replay_profile
 
 DEFAULT_HYPERSPACE_BASE_URL = "http://localhost:6655/anthropic"
 
@@ -37,10 +40,15 @@ class HyperspaceModelIO(AnthropicModelIO):
 
     Hyperspace speaks the Anthropic Messages API, so all parsing logic
     (thinking blocks, tool_use, prompt caching, token usage) is inherited
-    from ``AnthropicModelIO``. The only difference is the base URL.
+    from ``AnthropicModelIO``. Kimi K2.7 Code at the official Moonshot endpoints
+    additionally uses a route-bound unsigned-thinking replay profile.
     """
 
     provider = "hyperspace"
+
+    @property
+    def provider_replay_profile(self) -> dict[str, str] | None:
+        return kimi_replay_profile(endpoint=self.base_url, model=self.model)
 
     _ANTHROPIC_TIMEOUT = httpx.Timeout(connect=10.0, read=600.0, write=30.0, pool=10.0)
 
