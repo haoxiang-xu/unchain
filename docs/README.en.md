@@ -18,6 +18,7 @@ Language switch: [English](README.en.md) | [简体中文](README.zh-CN.md)
 - [Tool System Patterns](en/skills/tool-system-patterns.md)
 - [Memory System](en/skills/memory-system.md)
 - [Creating Builtin Toolkits](en/skills/creating-builtin-toolkits.md)
+- [Agent Skills](en/skills/agent-skills.md)
 - [Testing Conventions](en/skills/testing-conventions.md)
 
 ## Guides

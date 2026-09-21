@@ -1,8 +1,15 @@
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
-from .models import HistoryPayloadOptimizer, ToolConfirmationPolicy, ToolExecutionContext, ToolParameter, ToolPromptSpec
+from .models import (
+    HistoryPayloadOptimizer,
+    SkillDescriptor,
+    ToolConfirmationPolicy,
+    ToolExecutionContext,
+    ToolParameter,
+    ToolPromptSpec,
+)
 from .tool import Tool
 
 
@@ -12,9 +19,11 @@ class Toolkit:
         tools: dict[str, Tool] | None = None,
         *,
         prompt_sections: str | list[str] | tuple[str, ...] | None = None,
+        skills: Sequence[SkillDescriptor] | None = None,
     ):
         self.tools: dict[str, Tool] = {}
         self.prompt_sections = self._normalize_prompt_sections(prompt_sections)
+        self.skills: tuple[SkillDescriptor, ...] = self._normalize_skills(skills)
         for tool_name, tool_obj in (tools or {}).items():
             if isinstance(tool_obj, Tool):
                 self.tools[tool_name] = tool_obj
@@ -37,6 +46,15 @@ class Toolkit:
             "toolkit prompt_sections must be a string, list of strings, "
             "tuple of strings, or None"
         )
+
+    @staticmethod
+    def _normalize_skills(value: Sequence[SkillDescriptor] | None) -> tuple[SkillDescriptor, ...]:
+        if value is None:
+            return ()
+        skills = tuple(value)
+        if not all(isinstance(item, SkillDescriptor) for item in skills):
+            raise TypeError("toolkit skills must be SkillDescriptor instances")
+        return skills
 
     def register(
         self,

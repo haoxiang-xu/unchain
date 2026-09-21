@@ -36,7 +36,7 @@ This chapter explains how the package is layered, which modules are foundational
 ## Configuration surface
 
 - Provider/model/api key (on `Agent`).
-- Modules: `ToolsModule`, `MemoryModule`, `PoliciesModule`, `OptimizersModule`, `SubagentModule`, `InteractionModule`, `JobsModule`, `CharacterModule`, `ToolDiscoveryModule`, `ToolOptimizerModule`.
+- Modules: `ToolsModule`, `MemoryModule`, `PoliciesModule`, `OptimizersModule`, `SubagentModule`, `InteractionModule`, `JobsModule`, `CharacterModule`, `ToolDiscoveryModule`, `ToolOptimizerModule`, `SkillsModule`.
 - Per-call overrides on `Agent.run()` (`max_iterations`, `payload`, `callback`, `on_tool_confirm`, ...).
 
 ## Extension points
@@ -105,6 +105,7 @@ src/unchain/
 │   ├── discovery.py     #   ToolDiscoveryRuntime — per-tool deferred load
 │   ├── execution.py     #   ToolExecutionHook/ToolExecutionHarness — confirm/observe
 │   └── prompting.py     #   ToolPromptHook/ToolPromptHarness — tool spec rendering
+├── skills/              # SKILL.md registry, catalog/activation harnesses, skill tool
 ├── toolkits/            # Builtin + MCP toolkits
 │   ├── base.py          #   BuiltinToolkit — workspace-safe base
 │   ├── mcp.py           #   MCPToolkit — MCP server bridge
