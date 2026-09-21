@@ -216,6 +216,57 @@ def test_kimi_sdk_final_message_thinking_shape(signature):
     assert turn.provider_replay_frame["items"][-1]["content"][0] == expected
 
 
+@pytest.mark.parametrize("metadata", [{}, {"caller": None},
+    {"caller": {"type": "direct"}}, {"caller": ""}, {"future_metadata": None}])
+@pytest.mark.parametrize("kimi", [True, False])
+def test_sdk_tool_metadata_through_canonical_compiler(metadata, kimi):
+    from unchain.context.compiler import _native_tool_call_messages
+    from unchain.providers.context_assembler import (
+        ProviderContextProjectionError, _rehydrate, _segments_for,
+    )
+
+    tool = {"type": "tool_use", "id": "toolu_1", "name": "demo_tool", "input": {"x": 2}, **metadata}
+    thinking = {"type": "thinking", "thinking": "plan", "signature": "signed"}
+
+    class Stream:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def __iter__(self):
+            return iter(())
+
+        def get_final_message(self):
+            return SimpleNamespace(id="sdk-final", content=[thinking, tool])
+
+    cls = HyperspaceModelIO if kimi else AnthropicModelIO
+    kwargs = {"base_url": ENDPOINT} if kimi else {}
+    io = cls(model=MODEL if kimi else "claude-sonnet-4-5", api_key="fixture-key",
+        client_factory=lambda **kw: SimpleNamespace(messages=SimpleNamespace(stream=lambda **kw: Stream())),
+        **kwargs)
+    turn = io.fetch_turn(ModelTurnRequest(messages=[{"role": "user", "content": "use tool"}]))
+    expected_tool = copy.deepcopy(tool)
+    if kimi and expected_tool.get("caller") is None:
+        expected_tool.pop("caller", None)
+    frame = turn.provider_replay_frame
+    assert frame["items"][-1]["content"] == [thinking, expected_tool]
+    assert turn.assistant_messages[-1]["content"] == [expected_tool]
+    provider = "hyperspace" if kimi else "anthropic"
+    canonical = _native_tool_call_messages(provider, [({}, call) for call in turn.tool_calls])
+    result = {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "3"}]}
+    canonical.append(result)
+    segments = _segments_for(frame["format"], frame["items"], allow_unsigned_thinking=kimi)
+    if set(expected_tool) - {"type", "id", "name", "input"}:
+        with pytest.raises(ProviderContextProjectionError, match="mutated ambiguously"):
+            _rehydrate(provider, canonical, segments)
+    else:
+        assert _rehydrate(provider, canonical, segments) == [
+            {"role": "assistant", "content": [thinking, expected_tool]}, result,
+        ]
+
+
 def test_kimi_official_context_boundary_cold_approval_resume(tmp_path):
     from tests.context_v2.test_context_provider_turn_approval_cross_provider import _anthropic_approval_events
     from tests.context_v2.test_context_provider_turn_approval_resume import _approval_toolkit
