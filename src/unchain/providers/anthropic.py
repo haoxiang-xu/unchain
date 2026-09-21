@@ -24,6 +24,7 @@ class AnthropicModelIO(_NativeModelIOBase):
     """Native Anthropic Messages API adapter for the new kernel."""
 
     provider = "anthropic"
+    provider_replay_profile = None
 
     def __init__(
         self,
@@ -162,6 +163,9 @@ class AnthropicModelIO(_NativeModelIOBase):
         request: ModelTurnRequest,
         request_kwargs: dict[str, Any],
     ) -> ModelTurnResult:
+        replay_profile = self.provider_replay_profile
+        if replay_profile is not None and request_kwargs.get("model") != replay_profile["model"]:
+            raise ProviderReplayFrameError("provider replay profile does not match the wire model")
         collected_chunks: list[str] = []
         input_tokens = 0
         output_tokens = 0
@@ -238,6 +242,11 @@ class AnthropicModelIO(_NativeModelIOBase):
                         )
                     block = strict_json_copy(block_dict)
                     if block_type == "thinking":
+                        if replay_profile is not None:
+                            if not isinstance(block.get("thinking", ""), str):
+                                raise ProviderReplayFrameError("Kimi thinking must be a string")
+                            if block.get("signature") is not None and not isinstance(block["signature"], str):
+                                raise ProviderReplayFrameError("Kimi thinking signature must be a string")
                         block.setdefault("thinking", "")
                         block.setdefault("signature", "")
                     elif block_type == "text":
@@ -252,6 +261,8 @@ class AnthropicModelIO(_NativeModelIOBase):
                     delta_dict = self._as_dict(getattr(event, "delta", None))
                     delta_type = delta_dict.get("type", "")
                     if delta_type == "thinking_delta":
+                        if replay_profile is not None and not isinstance(delta_dict.get("thinking"), str):
+                            raise ProviderReplayFrameError("Kimi thinking delta must be a string")
                         index = resolve_index(event, block_type="thinking")
                         block = ensure_block(index, "thinking")
                         active_index = index
@@ -271,6 +282,8 @@ class AnthropicModelIO(_NativeModelIOBase):
                                 )
                         continue
                     if delta_type == "signature_delta":
+                        if replay_profile is not None and not isinstance(delta_dict.get("signature"), str):
+                            raise ProviderReplayFrameError("Kimi thinking signature delta must be a string")
                         index = resolve_index(event, block_type="thinking")
                         block = ensure_block(index, "thinking")
                         active_index = index
@@ -377,6 +390,18 @@ class AnthropicModelIO(_NativeModelIOBase):
                 [blocks_by_index[index] for index in sorted(blocks_by_index)]
             )
 
+        if replay_profile is not None:
+            for block in raw_blocks:
+                if block.get("type") != "thinking":
+                    continue
+                if not isinstance(block.get("thinking"), str):
+                    raise ProviderReplayFrameError("Kimi thinking must be a string")
+                signature = block.get("signature")
+                if signature is not None and not isinstance(signature, str):
+                    raise ProviderReplayFrameError("Kimi thinking signature must be a string")
+                if not signature:
+                    block.pop("signature", None)
+
         tool_calls: list[ToolCall] = []
         reasoning_items: list[dict[str, Any]] = []
         semantic_blocks: list[dict[str, Any]] = []
@@ -424,7 +449,7 @@ class AnthropicModelIO(_NativeModelIOBase):
                 )
                 semantic_blocks.append(copy.deepcopy(block))
 
-        if tool_calls:
+        if tool_calls and replay_profile is None:
             for block in raw_blocks:
                 if block.get("type") == "thinking":
                     if not isinstance(block.get("signature"), str) or not block.get(
@@ -464,6 +489,8 @@ class AnthropicModelIO(_NativeModelIOBase):
                 self.provider,
             ),
         }
+        if replay_profile is not None:
+            provider_replay_frame["replay_profile"] = copy.deepcopy(replay_profile)
 
         # Coerce input/output to ints via _normalize_token_usage (consumed_tokens
         # from it is intentionally ignored -- see total_consumed below).

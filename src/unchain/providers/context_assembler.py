@@ -12,6 +12,7 @@ from ..kernel.provider_replay import (
 )
 from ..kernel.state import RunState
 from ..tools.toolkit import Toolkit
+from .replay_profile import validate_replay_profile
 
 
 class ProviderContextProjectionError(ProviderReplayFrameError):
@@ -270,6 +271,7 @@ def _openai_segments(items: list[dict[str, Any]]) -> list[_ReplaySegment]:
 
 def _anthropic_semantic_assistant(
     item: dict[str, Any],
+    *, allow_unsigned_thinking: bool = False,
 ) -> tuple[dict[str, Any] | None, tuple[str, ...], bool]:
     content = item.get("content")
     if not isinstance(content, list):
@@ -283,7 +285,14 @@ def _anthropic_semantic_assistant(
         block = copy.deepcopy(raw_block)
         block_type = block.get("type")
         if block_type == "thinking":
-            if not isinstance(block.get("signature"), str) or not block.get("signature"):
+            if allow_unsigned_thinking:
+                if not isinstance(block.get("thinking"), str) or (
+                    "signature" in block and (
+                        not isinstance(block["signature"], str) or not block["signature"]
+                    )
+                ):
+                    raise ProviderContextProjectionError("Kimi thinking replay is malformed")
+            elif not isinstance(block.get("signature"), str) or not block.get("signature"):
                 raise ProviderContextProjectionError(
                     "Anthropic thinking replay is missing its signature"
                 )
@@ -315,14 +324,18 @@ def _anthropic_semantic_assistant(
     }, tuple(tool_ids), has_opaque
 
 
-def _anthropic_segments(items: list[dict[str, Any]]) -> list[_ReplaySegment]:
+def _anthropic_segments(
+    items: list[dict[str, Any]], *, allow_unsigned_thinking: bool = False,
+) -> list[_ReplaySegment]:
     segments: list[_ReplaySegment] = []
     for raw in items:
         item = copy.deepcopy(raw)
         if item.get("role") != "assistant":
             segments.append(_ReplaySegment(semantic=item, wire_items=(item,)))
             continue
-        semantic, tool_ids, has_opaque = _anthropic_semantic_assistant(item)
+        semantic, tool_ids, has_opaque = _anthropic_semantic_assistant(
+            item, allow_unsigned_thinking=allow_unsigned_thinking,
+        )
         if semantic is None:
             if has_opaque:
                 raise ProviderContextProjectionError(
@@ -370,7 +383,9 @@ def _ollama_segments(items: list[dict[str, Any]]) -> list[_ReplaySegment]:
     return segments
 
 
-def _segments_for(format_name: str, items: list[dict[str, Any]]) -> list[_ReplaySegment]:
+def _segments_for(
+    format_name: str, items: list[dict[str, Any]], *, allow_unsigned_thinking: bool = False,
+) -> list[_ReplaySegment]:
     if any(not isinstance(item, dict) for item in items):
         raise ProviderContextProjectionError(
             "provider replay items must be message dictionaries"
@@ -392,7 +407,7 @@ def _segments_for(format_name: str, items: list[dict[str, Any]]) -> list[_Replay
     if format_name == "openai.responses.v1":
         return _openai_segments(items)
     if format_name == "anthropic.messages.v1":
-        return _anthropic_segments(items)
+        return _anthropic_segments(items, allow_unsigned_thinking=allow_unsigned_thinking)
     if format_name == "ollama.chat.v1":
         return _ollama_segments(items)
     raise ProviderContextProjectionError(
@@ -1035,10 +1050,15 @@ class ProviderContextAssembler:
         state: RunState,
         *,
         toolkit: Toolkit,
+        replay_profile: dict[str, str] | None = None,
     ) -> ProviderContextAssembly:
         provider = str(state.provider_state.provider or "").strip().lower()
         target = state.latest_messages()
         frame = current_provider_replay_frame(state)
+        allow_unsigned_thinking = validate_replay_profile(
+            frame.get("replay_profile") if frame is not None else None,
+            active=replay_profile, provider=provider, model=state.provider_state.model,
+        )
         expected_format = _REPLAY_FORMATS.get(provider)
         remote_id = (
             state.provider_state.previous_response_id
@@ -1100,6 +1120,7 @@ class ProviderContextAssembler:
                 segments = _segments_for(
                     expected_format,
                     frame.get("items") or [],
+                    allow_unsigned_thinking=allow_unsigned_thinking,
                 )
                 projected = _project_segments(segments)
                 resolved_remote_input = remote_input
@@ -1131,7 +1152,9 @@ class ProviderContextAssembler:
             )
 
         raw_items = frame.get("items") or []
-        segments = _segments_for(expected_format, raw_items)
+        segments = _segments_for(
+            expected_format, raw_items, allow_unsigned_thinking=allow_unsigned_thinking,
+        )
         fallback_messages = _rehydrate(provider, target, segments)
         projected = _project_segments(segments)
         resolved_remote_input = remote_input
