@@ -392,6 +392,10 @@ class AnthropicModelIO(_NativeModelIOBase):
 
         if replay_profile is not None:
             for block in raw_blocks:
+                # The SDK materializes an omitted caller as None. Keep capture
+                # aligned with canonical tool calls without discarding metadata.
+                if block.get("type") == "tool_use" and block.get("caller") is None:
+                    block.pop("caller", None)
                 if block.get("type") != "thinking":
                     continue
                 if not isinstance(block.get("thinking"), str):
