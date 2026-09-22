@@ -39,7 +39,15 @@ class SkillsModule(BaseAgentModule):
                 description_max_length=self.config.catalog_description_max_length,
             )
         )
-        builder.add_harness(SkillActivationHarness(registry=registry, queue=queue))
+        # Resolve at execution time: module configuration order must not decide
+        # whether the active Context V2 owner persists the skill snapshot.
+        def journal_binding(context):
+            runtime = getattr(builder, "context_runtime", None)
+            return runtime.skill_activation_journal(context) if runtime is not None else None
+
+        builder.add_harness(SkillActivationHarness(
+            registry=registry, queue=queue, journal_binding=journal_binding,
+        ))
 
 
 __all__ = ["SkillsModule"]

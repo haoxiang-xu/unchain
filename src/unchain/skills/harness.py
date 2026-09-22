@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from ..kernel.delta import HarnessDelta, InsertMessagesOp, ReplaceSpanOp
 from ..tools.base import BaseToolHarness, ToolContext
@@ -15,6 +15,7 @@ from .activation import (
     user_turn_identity,
 )
 from .models import SkillDiagnostic
+from .journal import JournalSkillState
 from .registry import SkillRegistry
 from .rendering import (
     is_active_skills_message,
@@ -145,6 +146,7 @@ class SkillActivationHarness(BaseToolHarness):
 
     registry: SkillRegistry = field(kw_only=True)
     queue: ActivationQueue = field(kw_only=True)
+    journal_binding: Callable | None = field(default=None, kw_only=True, repr=False)
     name: str = "skill_activation"
     phases: tuple[str, ...] = ("before_model", "after_tool_batch")
     order: int = 262
@@ -152,12 +154,17 @@ class SkillActivationHarness(BaseToolHarness):
     def build_tool_delta(self, context: ToolContext) -> HarnessDelta | None:
         messages = context.latest_messages()
         active, existing = ActiveSkillSet.from_messages(messages)
+        binding = self.journal_binding(context.harness_context) if self.journal_binding else None
+        journal = JournalSkillState(*binding) if binding is not None else None
+        if journal is not None and journal.block is not None:
+            active = ActiveSkillSet.from_block(journal.block)
         diagnostics: list[SkillDiagnostic] = []
         changed = False
 
         if context.phase == "before_model":
             changed |= self._apply_user_invocations(
-                messages, active, diagnostics, transcript=context.state.transcript
+                messages, active, diagnostics, transcript=context.state.transcript,
+                journal=journal,
             )
         changed |= self._apply_queued(context, active, diagnostics)
 
@@ -168,6 +175,8 @@ class SkillActivationHarness(BaseToolHarness):
             bucket["activation_diagnostics"] = [_diagnostic_dict(item) for item in diagnostics]
         del changed  # the block comparisons below decide whether a delta is needed
         rendered = active.render()
+        if journal is not None:
+            journal.save(rendered)
         transcript = _transcript_with_block(
             context.state.transcript, rendered, is_active_skills_message
         )
@@ -187,12 +196,15 @@ class SkillActivationHarness(BaseToolHarness):
         diagnostics: list[SkillDiagnostic],
         *,
         transcript: Sequence[dict[str, Any]] = (),
+        journal: JournalSkillState | None = None,
     ) -> bool:
         located = latest_real_user_text(messages)
         if located is None:
             return False
         _index, text = located
-        turn = user_turn_identity(text, transcript=transcript, messages=messages)
+        turn = (journal.turn(text) if journal is not None else None) or user_turn_identity(
+            text, transcript=transcript, messages=messages
+        )
         if not is_new_user_turn(turn, active.processed_turn):
             # Replay of an already processed turn (tool loop, retry, resume,
             # cold restart): the persisted snapshot is authoritative. No live

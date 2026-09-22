@@ -77,3 +77,29 @@ Weaker-model assessment: **partially suitable**. S1, S2, S4, S6 have settled int
 - Prompt-cache prefix changes on every catalog/activation change (same as the reference harnesses).
 - The `skill` tool's presence is decided per run at configure time (D7).
 - Only one directory level per root is scanned (no recursive `**/SKILL.md`), matching dsh.
+
+## Close acceptance correction — canonical journal snapshots
+
+Real PuPu Memory V2 acceptance reproduced a missing active block on the second
+normal user turn. Transcript/checkpoint persistence alone does not satisfy
+BC-004: active Context V2 runs reconstruct each fresh turn from the canonical
+journal. The first provider wire had one loaded body; the second had none.
+
+SkillsModule now resolves the configured ContextRuntime's bound journal at run
+time, after module configuration and execution bootstrap. The harness restores
+the latest snapshot in the current execution/generation and appends changes
+before projecting them to the model. `skills.activation_snapshot` has CLOSED
+payload `{schema: "unchain.skills.activation_snapshot.v1", block: <validated
+active-skills v1 text>}`. Invalid keys, schema or block versions fail explicitly;
+no disk/registry re-resolution occurs on replay. Snapshot append uses a stable
+attempt/payload digest for idempotency. A new generation clears the activation
+scope. Actual user-message journal cursors supply turn identity, surviving
+trimmed transcripts and distinguishing identical new messages. Legacy runs
+without ContextModule keep their existing transcript path.
+
+BC-004 / AC-005, AC-006, AC-007 / SEQ-001: red-before-green SQLite regressions
+cover fresh turn + reopened store after source deletion, replay after source
+edit, identical new invocation with a trimmed context, reset generation,
+unknown/malformed snapshot rejection and repeated-write idempotency. Final
+candidate real-app sequence and package evidence must use a newly fixed wheel;
+the previous candidate is rejected, not reused as passing evidence.

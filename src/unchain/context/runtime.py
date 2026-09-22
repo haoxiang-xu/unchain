@@ -985,6 +985,16 @@ class ContextRuntime:
             ledger=bundle.run_bundle_ledger,
         )
 
+    def skill_activation_journal(self, context: HarnessContext):
+        """Return the current owner-bound journal and attempt for SkillsModule."""
+        if self.execution_factory is not None:
+            bundle = self._bundle_for_context(context)
+            return bundle.attempt, bundle.journal
+        factory = self.request_factory
+        if not hasattr(factory, "journal") or not hasattr(factory, "attempt"):
+            raise ContextExecutionBundleError("skills require a bound context journal")
+        return factory.attempt, factory.journal
+
     def compile_context(self, context: HarnessContext) -> ContextCompileResult:
         if self.execution_factory is None:
             request_factory = self.request_factory
