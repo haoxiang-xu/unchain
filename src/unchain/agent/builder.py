@@ -1285,6 +1285,11 @@ class AgentBuilder:
                 existing_sections = list(getattr(self.toolkit, "prompt_sections", ()) or ())
                 existing_sections.extend(prompt_sections)
                 self.toolkit.prompt_sections = tuple(existing_sections)
+            incoming_skills = tuple(getattr(entry, "skills", ()) or ())
+            if incoming_skills:
+                # Keep every source-qualified descriptor; the skills registry
+                # resolves duplicate names deterministically (rank, then identity).
+                self.toolkit.skills = tuple(getattr(self.toolkit, "skills", ()) or ()) + incoming_skills
             for tool_obj in entry.tools.values():
                 self.toolkit.register(tool_obj)
             return

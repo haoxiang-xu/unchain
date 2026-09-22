@@ -177,6 +177,12 @@ GEMINI_API_KEY=...
 
 Toolkits are also discoverable from local directories and entry-point plugins.
 
+## Skills
+
+Drop a `SKILL.md` (or flat `<name>.md`) file into `.unchain/skills/<name>/` or `.agents/skills/<name>/`, add `SkillsModule()` to the agent's modules, and it's discovered automatically — no registration code needed. `SkillsModule` renders a name+description catalog, exposes a `skill` tool the model can call to activate one by name, and lets the user activate one directly with `/name` in their own message. Activations are projected into a durable `<active_skills>` system block that survives compaction, resume, and cold restart.
+
+See [Agent Skills](docs/en/skills/agent-skills.md) for the full frontmatter contract, discovery roots, and wire format.
+
 ## Memory System
 
 Two-tier memory with pluggable backends:

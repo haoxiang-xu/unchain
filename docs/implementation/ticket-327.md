@@ -1,0 +1,105 @@
+# Ticket #327 — SKILL.md agent skills in Unchain (implementation handoff)
+
+Ticket: https://github.com/haoxiang-xu/PuPu/issues/327
+Clone: `/Users/red/Desktop/GITRepo/unchain-327` · branch `codex/ticket-327-agent-skills` · base `dev @ cecf5c36ad06cc6719f8c99c35f2cad626c1c95e`
+Companion: PuPu #291 (`/Users/red/Desktop/GITRepo/pupu-291`, consumes the wheel built once from this branch).
+Status date: 2026-09-21. This file is the execution plan for the ticket body's shared contract; the ticket body stays the outcome authority.
+
+## Goal / non-goals
+
+Goal: `SkillsModule` gives any Unchain agent (1) a name+description catalog of discovered skills, (2) a `skill` tool that activates one skill on demand, (3) `/name` explicit activation from the real user turn, with activations persisted as an immutable snapshot that survives compaction, interaction resume, retry/replay and cold restart, and (4) a versioned `skills` protocol in the runtime manifest so PuPu can admit the wheel.
+
+Non-goals (this ticket): recipe-subagent/graph adoption, executable skill bundles / resource stores, PuPu inventory HTTP surface (#291), implicit scanning of `.claude/skills` / `.codex/skills` (explicit `extra_dirs` only), file watchers.
+
+## Investigation results that fix the design
+
+1. **Context V2 replaces the whole message list** each `before_model` (`ContextCompilerHarness`, order 900, `context/harness.py:30`) but **copies every source `system`/`developer` message** (`compiler.py:2040`, `:2979`) and only compacts non-system turns by budget. `SlidingWindow`/`LastN` also split system vs non-system (`optimizers/common.py`). ⇒ anything that must survive compaction in both modes must be a **system-role message**.
+2. **Resume keeps checkpoint system messages** (`memory/checkpoint_state.py:655` `merge_checkpoint_transcript_with_incoming`): `[*checkpoint_systems, *checkpoint_conversation, *incoming_conversation]`; incoming systems must equal the persisted ones or be the single leading agent instruction. `RunState.component_state` is **not** in the checkpoint payload (`checkpoint_state.py:212-262`); the transcript is. ⇒ the durable activation snapshot is the rendered `<active_skills>` system block itself; runtime state is rebuilt from it.
+3. `ToolPromptHarness` (`tools/prompting.py:93`, order 250) already implements "one delimited system block, insert after leading systems, replace on change, remove when empty" with `HarnessDelta` ops and equality-based idempotence; `test_tool_discovery.py:131` proves it commits through `KernelLoop.dispatch_phase`. Reuse the pattern verbatim for two blocks (orders 260 and 262).
+4. Runtime manifest (`runtime/runtime_protocol.py:245`) is a canonically ordered protocol list; PuPu (`context_memory_v2_capability.py:186-340`) validates shape + digest and checks only its `_REQUIRED_PROTOCOLS` subset, so adding protocol `skills` (sorts after `run_bundle`) is admissible without a PuPu change; PuPu #291 adds it to its required set.
+5. `Tool.from_callable(..., always_load=True)` keeps a tool callable under catalog/discovery exposure (`tools/exposure.py:664`). PyYAML is present in the dev env but is not an Unchain or PuPu-sidecar dependency ⇒ bounded safe-subset parser, no new dependency.
+6. GitNexus (clone index 2026-09-21): `SkillDescriptor` upstream LOW (manifest parse + `to_summary`); `instantiate_toolkit` LOW; `add_tool` and `Toolkit` UNKNOWN (unresolved edges) — text search: `add_tool` 15 call sites in 5 modules, `Toolkit(` 16 constructor sites, all compatible with additive keyword-only fields. No HIGH/CRITICAL. Re-run `impact` for `_classify_message`, `_PROTOCOLS`, `AgentBuilder.add_tool`, `ToolkitRegistry._load_descriptor` before editing (S3/S5).
+
+## Settled decisions (workers must not re-decide these)
+
+- **D1 Frontmatter parser** (`skills/frontmatter.py`): safe YAML subset, no dependency. Accept: `key: value` at column 0; plain / 'single' / "double" (with `\"`, `\\`, `\n`) scalars; inline `#` comments outside quotes; block scalars `|`, `|-`, `|+`, `>`, `>-`, `>+` (folded joins lines with spaces, blank line → newline); nested mappings and `- item` lists by indentation, captured as inert `dict`/`list` of `str`; flow sequences `[a, "b", 'c']`; empty value → `""`; `true/false/yes/no/on/off` stay strings (booleans are coerced only for the two policy keys). Reject with `SkillParseError`: no leading `---`, unterminated fence, tab indentation, tags (`!`, `!!`), anchors/aliases (`&x`, `*x`), duplicate keys among `name`, `description`, `disable-model-invocation`, `user-invocable`, a non-`key: value` top-level line. Other duplicate keys: last wins. Output `ParsedSkillFile(fields: dict[str, object], body: str)`; `body` = text after the closing fence with leading/trailing blank lines stripped.
+- **D2 Canonical record**: `unchain.tools.models.SkillDescriptor(name, description, body, tools=(), base_dir=None, *, model_invocable=True, user_invocable=True, metadata=None→{}, aliases=(), source="toolkit", source_id="")` (frozen dataclass; first five positional keep the existing shape; `phase` and `title` removed). `SkillIdentity(source, source_id, name)` with `key` = `f"{source}:{source_id}:{name}"`. Filesystem source_id = resolved absolute `SKILL.md` path; toolkit source_id = toolkit descriptor id (set by `ToolkitRegistry.instantiate_toolkit`) or the caller-supplied value. **Revision** = `"sha256:" + sha256(canonical_json({"body", "tools", "model_invocable", "user_invocable"}))` hex (64). Name rule: `^[a-z0-9]+(?:-[a-z0-9]+)*$`, 1–64 chars; description non-empty, ≤1024 chars (persisted verbatim; collapsed/capped only when rendering the catalog).
+- **D3 Registry** (`skills/registry.py`): roots `100 <project>/.unchain/skills`, `200 <project>/.agents/skills`, `300 extra_dirs` (in order), `400 ~/.unchain/skills`, `500 ~/.agents/skills`, `600 runtime toolkit skills`. `SkillsConfig(project_root=None, include_project_dirs=True, extra_dirs=(), include_user_dirs=True, catalog_description_max_length=500, tool_name="skill", reserved_commands=(), home=None)`; `project_root` explicit → used as-is (no git walk); `None` → nearest `.git` ancestor of cwd, else cwd; `include_project_dirs=False` skips ranks 100/200 entirely (PuPu with no workspace). One directory level per root: `<name>/SKILL.md` or `<name>.md`; entries deduplicated by resolved real path; a root that resolves to an already-scanned real path is skipped. Winner per canonical name: lowest rank, then lexicographic identity key. Aliases (from descriptors only): alias equal to any canonical name → dropped (diagnostic `alias_shadowed`); alias claimed by two identities → disabled (diagnostic `alias_ambiguous`). Reserved commands apply to `/name` resolution only (diagnostic `reserved` when a skill's name collides; the skill still lists/loads). `list() -> SkillInventory(skills: tuple[SkillSummary,...], diagnostics: tuple[SkillDiagnostic,...], revision: str)` where `revision` = sha256 of the sorted `(identity.key, revision)` pairs. `get(name) -> LoadedSkill | None` re-reads the file (registry never caches bodies; the activation snapshot is the durable copy). `resolve(token) -> SkillSummary | None` case-insensitive over canonical names then aliases.
+- **D4 Rendering** (`skills/rendering.py`): catalog = system message `<available_skills>` / `# unchain generated skills catalog v1` / entries `- \`name\`: description` (model-invocable winners only, sorted by name) / rule text (see ticket) / `</available_skills>`. Active block = system message `<active_skills>` / `# unchain generated active skills v1` / one `<skill_content name="…" source="…" source_id="…" revision="sha256:…" activation="user|tool:<call_id>|tool">` … `<skill_resources>…</skill_resources>` `<skill_instructions>…</skill_instructions>` `</skill_content>` per active identity in activation order / `</active_skills>`. Attribute values are escaped (`&`, `"`, `<`, `>`); a body containing the literal `</skill_instructions>` is rejected at activation (diagnostic `body_delimiter`). Tool result envelope (no body): `<skill_loaded name="…" revision="…" status="activated|already_active|superseded">` + one sentence pointing at `<active_skills>` + `</skill_loaded>`; errors as `Error: …` text.
+- **D5 Activation lifecycle** (`skills/activation.py` + `skills/harness.py`): `SkillActivationHarness`, phases `("before_model", "after_tool_batch")`, order 262. Each run: (a) find the existing `<active_skills>` block among the leading system messages; parse it strictly (header version must be `v1`, else raise `SkillActivationStateError` — fail closed); (b) merge pending activations queued by the `skill` tool (registry-side queue, drained here) and by `/name` tokens found in the **latest real user message** (role user, string content or text blocks, not tool-result-only, not starting with `<skill_content`/`<skill_loaded`); (c) dedupe by identity key: same revision → no-op; different revision from an explicit activation → replace in place (`superseded`); (d) render; insert after the catalog/leading systems, replace on change, never remove once non-empty. The block is the durable snapshot: resume, retry, replay and cold restart never re-read files; a later user turn without `/name` changes nothing; a new run without a checkpoint starts empty (reset). Runtime mirror lives in `state.component_bucket("skills")` (`{"version": 1, "active": {key: {...}}, "diagnostics": [...]}`) and is rebuilt from the block, never the other way round.
+- **D6 `/name` grammar**: whitespace-delimited tokens matching `^/([A-Za-z0-9_-]+)$` (PuPu's tokenizer grammar, so legacy underscore spellings can resolve through aliases) anywhere in the text, in textual order, deduplicated by identity; resolution case-insensitive against canonical names then aliases; `reserved_commands` never resolve; unknown tokens are literal; `user_invocable=False` → diagnostic `user_invocation_denied`, no activation. User text is never modified.
+- **D7 Tool/catalog omission**: `SkillsModule.configure` registers the `skill` tool only when the inventory at configure time has ≥1 model-invocable skill (deterministic per run); the catalog block is rendered only when ≥1 model-invocable skill exists at that step. Document the per-run decision.
+- **D8 Manifest**: append `RuntimeProtocol(id="skills", major=1, minor=0, features=("active_skills_snapshot_v1", "catalog_v1", "skill_md_registry_v1", "skill_tool_v1", "toolkit_embedded_skills_v1", "user_invocation_v1"))` (features sorted). Export `SKILLS_PROTOCOL_ID = "skills"`, `SKILLS_CONTRACT_VERSION = 1`, `ACTIVE_SKILLS_SNAPSHOT_VERSION = 1` from `unchain.skills`.
+- **D9 Composition attribution**: `context/composition.py::_classify_message` returns `("skills", "catalog_metadata")` for a system message whose content starts with `<available_skills>` and `("skills", "loaded_body")` for `<active_skills>`; everything else unchanged.
+- **D10 Builder**: `AgentBuilder.add_tool(Toolkit)` appends all incoming `entry.skills` to `builder.toolkit.skills` (no dedupe); conflicts are the registry's job.
+- **D11 Manifest `[[skills]]` keys**: `name`, `description`, `body` required; optional `tools`, `disable-model-invocation`, `user-invocable`, `aliases`; unknown keys ignored (PuPu-only `title`/`phase` may stay in the file; `plan/toolkit.toml` keeps `title`, drops `phase`).
+
+## Slices, ownership, checkpoints
+
+| # | Slice | Files | Owner | Tests |
+|---|---|---|---|---|
+| S1 | Frontmatter parser (D1) | `src/unchain/skills/__init__.py` (docstring only), `skills/frontmatter.py`, `tests/test_skills_frontmatter.py`, `tests/fixtures/skills/*.md` | worker (Sonnet) | parser fixtures: plain/quoted/comment/block-scalar/nested/flow/unknown keys; rejects listed in D1 |
+| S2 | Models + rendering (D2 identity/revision, D4) | `skills/models.py`, `skills/rendering.py`, `tests/test_skills_rendering.py` | worker (Sonnet) | identity key, revision determinism, catalog/active/envelope rendering + strict parse round-trip of the active block |
+| S3 | Descriptor + manifest realignment (D2, D10, D11) | `tools/models.py`, `tools/registry.py`, `tools/toolkit.py`, `tools/__init__.py`, `agent/builder.py`, `toolkits/builtin/plan/toolkit.toml`, `tests/test_toolkit_skills.py` | strong agent | existing manifest tests realigned + policy-bearing fixture |
+| **CP1** | review S1–S3, `PYTHONPATH=src pytest tests/ -q` | | strong agent | |
+| S4 | Registry (D3) | `skills/registry.py`, `tests/test_skills_registry.py` | worker (Sonnet) | roots/ranks/identity/aliases/reserved/diagnostics/inventory revision/get re-read |
+| S5 | Tool, activation, harnesses, module, manifest, composition (D5–D9) | `skills/tools.py`, `skills/activation.py`, `skills/harness.py`, `agent/modules/skills.py`, `agent/modules/__init__.py`, `agent/__init__.py`, `skills/__init__.py`, `runtime/runtime_protocol.py`, `context/composition.py` | strong agent | `tests/test_skills_tool.py`, `test_skills_harness.py`, `test_skills_module.py` (KernelLoop end-to-end, checkpoint transcript round trip, Context V2 compile keeps both blocks, SlidingWindow keeps both blocks, provider wire on 3 adapters), manifest + composition tests |
+| **CP2** | review S4/S5 integration, SEQ-001 matrix, full suite, `detect-changes` | | strong agent | |
+| S6 | Docs (`docs/en|zh-CN/skills/agent-skills.md`, README index/section) | | worker (Sonnet) | link check |
+| Final | wheel build once, record SHA-256 + manifest digest on #327/#291 | | strong agent | |
+
+Weaker-model assessment: **partially suitable**. S1, S2, S4, S6 have settled interfaces, bounded files and observable tests → delegated to Sonnet with the strong agent reviewing at CP1/CP2. S3 (cross-cutting manifest/builder edits with impact obligations) and S5 (Context V2 / checkpoint / manifest / composition integration and the activation contract) stay with the strong agent. Workers: read `CLAUDE.md`, `.claude/CLAUDE.md`; run `node .gitnexus/run.cjs impact <symbol> --direction upstream --repo .` before editing any existing symbol; keep all edits in this clone; no commits/pushes; stop and report at the slice boundary with diff + test output; report any interface gap instead of inventing one.
+
+## Boundary evidence map (ticket BC/SEQ → tests)
+
+- BC-001 (SKILL.md → registry): S1 parser fixtures + S4 registry tests (AC-001/002/008).
+- BC-002 (manifest/PuPu descriptors → registry): S3 `test_toolkit_skills.py` incl. policy-bearing fixture; PuPu `normalize_skill_rows` smoke in the #291 clone against the wheel (AC-003/004/009).
+- BC-003 (blocks/envelope → provider wire): S5 provider-message test on OpenAI/Anthropic/Ollama builders, no private keys (AC-005/007).
+- BC-004 (activation snapshot → transcript/checkpoint → compaction/replay): S5 tests: checkpoint payload contains the block and `merge_checkpoint_transcript_with_incoming` restores it; Context V2 `compile_context` keeps both blocks while compacting old turns; unsupported header version raises (AC-006/009).
+- BC-005 (manifest → PuPu admission): S5 manifest test + PuPu strict validator run against the wheel's manifest in the #291 clone (AC-009).
+- SEQ-001 (1)–(11): `test_skills_harness.py` / `test_skills_module.py` drive `KernelLoop` through: explicit `/name`; tool activation; repeated step; later plain user turn; suspend/resume via checkpoint transcript merge (twice); retry (same state, no change); cold restore from checkpoint dict; compaction (SlidingWindow + Context V2 compile); source edit/delete before resume (block unchanged); explicit new activation after edit (superseded, one entry); reset (fresh seed state has no block).
+
+## CP1 corrections (2026-09-21, after S1–S4 landed)
+
+- **Transcript persistence.** `KernelLoop.step_once` rebuilds the working messages from `state.transcript` every iteration (`loop.py:417-434`); assistant/tool messages reach the transcript via `state_updates["transcript_append"]`. A model-context insert alone therefore evaporates at the next step. `SkillActivationHarness` now also writes the block into the transcript (`state_updates={"transcript": ...}`, inserted after the transcript's leading systems), which is exactly what execution checkpoints persist. The catalog stays model-context-only (stateless, like `<tools>`), so it is *not* in checkpoints and is re-rendered after resume.
+- **Same-turn guard (revised after the 2026-09-21 audit, U1/U2).** The block header carries `turn=<ordinal>:<hash>` — the last real user turn (count of real user messages in the durable transcript + text digest) whose `/name` tokens were resolved. A re-scan of that turn (tool loop, retry, resume, cold restart) is skipped *before* any registry lookup, so a source that was shadowed or edited in between is never picked up; a new turn (higher ordinal or different text) is resolved live, supersedes on a changed revision and refreshes provenance on an unchanged one. Entry provenance is `user:<ordinal>:<hash>`.
+- **Tool envelope status.** `ActivationQueue.known` mirrors the last projected `(identity → revision)`; `skill()` reports `activated` / `already_active` / `superseded` truthfully.
+- **Version-agnostic recognition.** `is_active_skills_message` recognises any `# unchain generated active skills v*` header so the strict parser can fail closed on unsupported versions (previously a `v2` block was silently ignored).
+- **Token grammar** aligned with PuPu's tokenizer: `/[A-Za-z0-9_-]+`, whitespace-delimited (a trailing comma makes the token literal, as in PuPu).
+- **Context V2 evidence.** Compaction of history in Context V2 is journal-cursor driven and cannot be exercised with source-only messages; `test_context_v2_compile_keeps_both_blocks_as_system_prefix` proves both blocks pass the compiler as the system prefix (the compiler copies every source system message unconditionally, `compiler.py:2040`, `:2979`), and the SlidingWindow test proves optimizer compaction keeps them.
+
+- **`SkillsConfig.extra_skills`** (added during #291 integration): programmatic descriptors without a toolkit (PuPu's installed packs) join the registry at rank 600 with their own `source`/`source_id`, so a host never has to inject a synthetic skills-only toolkit into `ToolsModule`.
+
+- **Audit U3/U4.** Inventory revision now covers the effective alias→identity map and the reserved-command set; summaries publish only aliases that actually resolve to them.
+
+## Known limitations to document
+
+- Prompt-cache prefix changes on every catalog/activation change (same as the reference harnesses).
+- The `skill` tool's presence is decided per run at configure time (D7).
+- Only one directory level per root is scanned (no recursive `**/SKILL.md`), matching dsh.
+
+## Close acceptance correction — canonical journal snapshots
+
+Real PuPu Memory V2 acceptance reproduced a missing active block on the second
+normal user turn. Transcript/checkpoint persistence alone does not satisfy
+BC-004: active Context V2 runs reconstruct each fresh turn from the canonical
+journal. The first provider wire had one loaded body; the second had none.
+
+SkillsModule now resolves the configured ContextRuntime's bound journal at run
+time, after module configuration and execution bootstrap. The harness restores
+the latest snapshot in the current execution/generation and appends changes
+before projecting them to the model. `skills.activation_snapshot` has CLOSED
+payload `{schema: "unchain.skills.activation_snapshot.v1", block: <validated
+active-skills v1 text>}`. Invalid keys, schema or block versions fail explicitly;
+no disk/registry re-resolution occurs on replay. Snapshot append uses a stable
+attempt/payload digest for idempotency. A new generation clears the activation
+scope. Actual user-message journal cursors supply turn identity, surviving
+trimmed transcripts and distinguishing identical new messages. Legacy runs
+without ContextModule keep their existing transcript path.
+
+BC-004 / AC-005, AC-006, AC-007 / SEQ-001: red-before-green SQLite regressions
+cover fresh turn + reopened store after source deletion, replay after source
+edit, identical new invocation with a trimmed context, reset generation,
+unknown/malformed snapshot rejection and repeated-write idempotency. Final
+candidate real-app sequence and package evidence must use a newly fixed wheel;
+the previous candidate is rejected, not reused as passing evidence.

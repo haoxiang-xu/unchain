@@ -417,6 +417,16 @@ def _classify_message(
     role = message.get("role")
     if not isinstance(role, str):
         return None
+    if role == "system":
+        # The skills harnesses render two delimited system blocks; attribute
+        # them to the reserved skills slots instead of core instructions.
+        content = message.get("content")
+        if isinstance(content, str):
+            stripped = content.lstrip()
+            if stripped.startswith("<available_skills>"):
+                return ("skills", "catalog_metadata")
+            if stripped.startswith("<active_skills>"):
+                return ("skills", "loaded_body")
     if role == "user":
         return (
             "conversation",
