@@ -148,6 +148,15 @@ class OllamaModelIO(_NativeModelIOBase):
 
                 if thinking_delta:
                     reasoning_chunks.append(thinking_delta)
+                    if request.emit_stream:
+                        self._emit(
+                            request.callback,
+                            "reasoning",
+                            request.run_id,
+                            iteration=request.iteration,
+                            provider=self.provider,
+                            delta=thinking_delta,
+                        )
 
                 if content_delta:
                     collected_chunks.append(content_delta)
