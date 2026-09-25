@@ -57,6 +57,9 @@ def _base_metadata(raw: dict[str, Any]) -> dict[str, Any]:
     provider = raw.get("provider")
     if isinstance(provider, str) and provider:
         metadata["provider"] = provider
+    preview_id = raw.get("provisional_reasoning_id")
+    if raw.get("type") == "reasoning" and isinstance(preview_id, str):
+        metadata["provisional_reasoning_id"] = preview_id
     return metadata
 
 
@@ -277,6 +280,29 @@ def normalize_raw_event(
     raw_type = _str_value(raw_event.get("type"))
     if not raw_type:
         return []
+    preview_id = raw_event.get("provisional_reasoning_id")
+    if "provisional_reasoning_id" in raw_event:
+        if (
+            raw_type not in {"reasoning", "reasoning_preview_discarded"}
+            or type(preview_id) is not str
+            or len(preview_id) != 32
+            or any(character not in "0123456789abcdef" for character in preview_id)
+            or raw_event.get("provider") != "ollama"
+            or type(raw_event.get("run_id")) is not str
+            or not raw_event["run_id"]
+            or type(raw_event.get("iteration")) is not int
+            or raw_event["iteration"] < 0
+            or (
+                raw_type == "reasoning"
+                and (
+                    set(raw_event)
+                    != {"type", "run_id", "iteration", "provider", "delta", "provisional_reasoning_id"}
+                    or type(raw_event.get("delta")) is not str
+                    or not raw_event["delta"]
+                )
+            )
+        ):
+            return []
 
     run_id = _base_run_id(raw_event, context)
     agent_id = context.root_agent_id
@@ -392,6 +418,32 @@ def normalize_raw_event(
                 surface=_debug_surface(),
                 visibility="debug",
                 payload=payload,
+                metadata=metadata,
+            )
+        ]
+
+    if raw_type == "reasoning_preview_discarded":
+        if (
+            set(raw_event)
+            != {"type", "run_id", "iteration", "provider", "provisional_reasoning_id"}
+            or turn_id is None
+        ):
+            return []
+        step_id = f"model:{turn_id}:response"
+        return [
+            RuntimeEventDraft(
+                type="step.delta",
+                run_id=run_id,
+                agent_id=agent_id,
+                turn_id=turn_id,
+                links=RuntimeEventLinks(step_id=step_id),
+                surface=_trace_surface("model"),
+                payload={
+                    "step_id": step_id,
+                    "step_type": "model_response",
+                    "kind": "reasoning_reset",
+                    "preview_id": preview_id,
+                },
                 metadata=metadata,
             )
         ]

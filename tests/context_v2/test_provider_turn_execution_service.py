@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -8,11 +9,12 @@ import pytest
 
 from unchain.journal import AttemptRef, GenerationRef
 from unchain.context.composition import CONTEXT_COMPOSITION_EXTENSION_KEY
+from unchain.context import ContextCompiler, ContextRuntime
 from unchain.kernel.run_ledger import build_model_attempt_receipt
 from unchain.kernel.state import RunState
 from unchain.kernel.types import ModelTurnResult
 from unchain.persistence import SQLiteContextV2Store
-from unchain.providers import OpenAIModelIO
+from unchain.providers import OllamaModelIO, OpenAIModelIO
 from unchain.providers.base import ModelTurnRequest
 from unchain.providers.durable_turn_runtime import (
     DurableProviderTurnError,
@@ -232,6 +234,65 @@ def _turn_result(text="composition result"):
         input_tokens=2,
         output_tokens=2,
     )
+
+
+def test_ollama_enforce_previews_before_result_cas_and_journals_afterward(tmp_path):
+    durable = []
+    external = []
+    context = ContextRuntime._for_test(
+        owner_id="context-v2",
+        compiler=ContextCompiler(),
+        request_factory=lambda _context: None,
+        durable_event_sink=durable.append,
+        partial_attempt_sink=lambda _event, _error: None,
+    )
+    service = _service(tmp_path, DurableProviderTurnMode.ENFORCE_TEST)
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        def iter_lines(self):
+            yield json.dumps({"message": {"thinking": "plan"}, "done": False})
+            assert [event["delta"] for event in external if event["type"] == "reasoning"] == ["plan"]
+            assert [event for event in durable if event["type"] == "reasoning"] == []
+            assert not any(
+                event.event_type == "provider.turn_result"
+                for event in service.store.capture_snapshot().events
+            )
+            yield json.dumps({"message": {"content": "ok"}, "done": True})
+
+    io = OllamaModelIO(
+        model="qwen3",
+        stream_factory=lambda *_args, **_kwargs: Response(),
+        default_payloads={},
+        model_capabilities={},
+    )
+    request = ModelTurnRequest(
+        messages=[{"role": "user", "content": "hello"}],
+        callback=context.compose_event_callback(external.append),
+        run_id=ATTEMPT.attempt_id,
+        iteration=2,
+        toolkit=Toolkit(),
+        emit_stream=True,
+    )
+    result = service.fetch_prepared(
+        model_io=io, request=request, retry_config=RetryConfig(max_retries=0)
+    )
+
+    assert result.final_text == "ok"
+    assert any(
+        event.event_type == "provider.turn_result"
+        for event in service.store.capture_snapshot().events
+    )
+    assert [event["delta"] for event in durable if event["type"] == "reasoning"] == ["plan"]
+    assert [event["delta"] for event in external if event["type"] == "reasoning"] == ["plan"]
 
 def test_off_is_a_read_only_legacy_fallthrough_without_durable_authority(tmp_path):
     send_calls: list[dict] = []

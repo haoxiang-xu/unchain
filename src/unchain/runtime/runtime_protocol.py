@@ -285,6 +285,7 @@ _PROTOCOLS = (
             "enforce_mode",
             "graph_runs",
             "memory_off",
+            "ollama_reasoning_preview_v1",
             "subagent_runs",
         ),
     ),
