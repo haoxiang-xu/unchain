@@ -83,6 +83,26 @@
       "effort": "medium"
     }
   },
+  "gpt-6-sol": {
+    "instructions": "",
+    "max_output_tokens": 128000,
+    "truncation": "auto",
+    "store": false,
+    "include": [],
+    "reasoning": {
+      "effort": "medium"
+    }
+  },
+  "gpt-6-luna": {
+    "instructions": "",
+    "max_output_tokens": 128000,
+    "truncation": "auto",
+    "store": false,
+    "include": [],
+    "reasoning": {
+      "effort": "medium"
+    }
+  },
   "deepseek-r1:14b": {
     "num_predict": -1,
     "temperature": 0.7,
@@ -109,6 +129,18 @@
   },
   "claude-fable-5": {
     "max_tokens": 128000
+  },
+  "claude-opus-5-5": {
+    "max_tokens": 128000,
+    "output_config": {
+      "effort": "medium"
+    }
+  },
+  "claude-sonnet-5": {
+    "max_tokens": 128000,
+    "output_config": {
+      "effort": "high"
+    }
   },
   "claude-fable-5-1": {
     "max_tokens": 128000
@@ -151,6 +183,27 @@
     "temperature": 1,
     "thinking_config": {
       "thinking_level": "medium",
+      "include_thoughts": true
+    }
+  },
+  "gemini-3.7-flash": {
+    "max_output_tokens": 65536,
+    "thinking_config": {
+      "thinking_level": "medium",
+      "include_thoughts": true
+    }
+  },
+  "gemini-3.8-flash": {
+    "max_output_tokens": 65536,
+    "thinking_config": {
+      "thinking_level": "medium",
+      "include_thoughts": true
+    }
+  },
+  "gemini-3.5-flash-lite": {
+    "max_output_tokens": 65536,
+    "thinking_config": {
+      "thinking_level": "minimal",
       "include_thoughts": true
     }
   },
