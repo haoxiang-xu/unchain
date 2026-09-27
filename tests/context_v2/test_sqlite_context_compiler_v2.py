@@ -107,6 +107,9 @@ def test_checkpoint_prepare_commit_and_read_survive_cold_restart(
         "checkpoint-a",
         {"source_range": source_range.to_dict(), "summary_sha256": "a" * 64},
     )
+    prospective_ref = capabilities.checkpoints.checkpoint_ref_for(
+        operation=operation
+    )
 
     prepared = capabilities.checkpoints.prepare(
         source_range=source_range,
@@ -122,6 +125,7 @@ def test_checkpoint_prepare_commit_and_read_survive_cold_restart(
     )
 
     assert prepared.status is CheckpointWriteStatus.PREPARED
+    assert prepared.checkpoint_ref == prospective_ref
     assert prepared.duplicate is False
     assert replay.checkpoint_ref == prepared.checkpoint_ref
     assert replay.duplicate is True
@@ -130,6 +134,9 @@ def test_checkpoint_prepare_commit_and_read_survive_cold_restart(
 
     committed = capabilities.checkpoints.commit(prepared=prepared)
     assert committed.status is CheckpointWriteStatus.COMMITTED
+    assert capabilities.checkpoints.list_committed_refs() == (
+        committed.checkpoint_ref,
+    )
     assert capabilities.checkpoints.read(ref=committed.checkpoint_ref) == (
         b'{"decision":"keep full history"}'
     )
@@ -139,9 +146,15 @@ def test_checkpoint_prepare_commit_and_read_survive_cold_restart(
     recommitted = reopened.checkpoints.commit(prepared=committed)
 
     assert recovered is not None
+    assert reopened.checkpoints.checkpoint_ref_for(
+        operation=operation
+    ) == prospective_ref
     assert recovered.status is CheckpointWriteStatus.COMMITTED
     assert recovered.checkpoint_ref == committed.checkpoint_ref
     assert recommitted.duplicate is True
+    assert reopened.checkpoints.list_committed_refs() == (
+        committed.checkpoint_ref,
+    )
     assert (
         reopened.checkpoints.read(
             ref=committed.checkpoint_ref,

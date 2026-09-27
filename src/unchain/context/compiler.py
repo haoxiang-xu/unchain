@@ -10,7 +10,7 @@ from bisect import bisect_right
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
-from typing import Any, ClassVar
+from typing import Any, Callable, ClassVar
 from urllib.parse import unquote, urlsplit
 
 from unchain.journal import EventCursor, EventRange, ResourceRef
@@ -66,6 +66,10 @@ _SOURCE_INDEX_KEY = "__unchain_context_source_index__"
 _INJECTED_MANDATORY_KEY = "__unchain_context_injected_mandatory__"
 _INJECTED_MANDATORY_TAIL_KEY = "__unchain_context_injected_mandatory_tail__"
 _CHECKPOINT_MARKER_KEY = "__unchain_context_checkpoint_request_id__"
+# ResourceRef identifiers are capped at 256 characters.  Official repositories
+# provide the exact prospective ref; this maximum-sized ref keeps older custom
+# repositories safe when they cannot preview the identity before preparation.
+_CHECKPOINT_PLANNING_REF = ResourceRef("checkpoint", "x" * 256, 1)
 _NATIVE_TOOL_RESULT_INLINE_LIMIT = 16_000
 _NATIVE_TOOL_PROVIDERS = frozenset(
     {"openai", "anthropic", "hyperspace", "ollama", "gemini"}
@@ -1977,12 +1981,15 @@ def _canonical_journal_message_projection(
 
 def project_canonical_journal_messages(
     request: ContextCompileRequest,
+    *,
+    journal_projection: _JournalMessageProjection | None = None,
 ) -> ContextCompileRequest:
     """Merge canonical journal chat messages without content-based guessing."""
 
     if not isinstance(request, ContextCompileRequest):
         raise TypeError("request must be a ContextCompileRequest")
-    candidates = _canonical_journal_message_projection(request).candidates
+    projection = journal_projection or _canonical_journal_message_projection(request)
+    candidates = projection.candidates
     original_messages = tuple(_plain(message) for message in request.source_messages)
     original_cursor_map = _source_cursor_map(request)
     candidate_messages = {cursor: message for cursor, message in candidates}
@@ -2615,11 +2622,18 @@ def _is_durable_handoff_event(event: Mapping[str, Any]) -> bool:
 
 def _neutral_context(
     request: ContextCompileRequest,
+    *,
+    checkpoint_covered_through_store_seq: int | None = None,
+    journal_projection: _JournalMessageProjection | None = None,
 ) -> tuple[dict[str, Any], list[str], tuple[int, ...], _NativeToolBatch | None,]:
-    message_projection = _canonical_journal_message_projection(request)
+    message_projection = journal_projection or _canonical_journal_message_projection(
+        request
+    )
     message_dependency_indexes = set(message_projection.dependency_event_indexes)
     calls: dict[str, dict[str, Any]] = {}
     results: dict[str, dict[str, Any]] = {}
+    call_store_seqs: dict[str, int] = {}
+    result_store_seqs: dict[str, int] = {}
     pending_interactions: dict[str, dict[str, Any]] = {}
     resolved_human_interaction_call_ids: set[str] = set()
     resolved_human_interactions: list[dict[str, Any]] = []
@@ -2638,7 +2652,7 @@ def _neutral_context(
         pending_inputs=pending_inputs,
     )
     native_call_ids = set(native_batch.call_ids if native_batch is not None else ())
-    for event_index, _raw, event in projection_events:
+    for event_index, raw, event in projection_events:
         event_type = str(event.get("type") or "")
         if (
             _interaction_is_child(
@@ -2658,6 +2672,7 @@ def _neutral_context(
                     pending_interactions.pop(interaction_id, None)
         if event_type == "tool_call" and call_id:
             consumed = True
+            call_store_seqs[call_id] = _required_semantic_event_cursor(raw, event)[1]
             calls[call_id] = {
                 "call_id": call_id,
                 "tool_name": str(event.get("tool_name") or ""),
@@ -2670,6 +2685,7 @@ def _neutral_context(
             }
         elif event_type == "tool_result" and call_id:
             consumed = True
+            result_store_seqs[call_id] = _required_semantic_event_cursor(raw, event)[1]
             full_output_ref = _compact_ref(event.get("full_output_ref"))
             result_bytes = event.get("result_bytes")
             result_sha256 = event.get("result_sha256")
@@ -2769,8 +2785,19 @@ def _neutral_context(
 
     closed = []
     shadow_observed_tool_exchange_count = 0
-    for call_id in sorted(calls.keys() & results.keys()):
+    for call_id in sorted(
+        calls.keys() & results.keys(),
+        key=lambda item: (
+            result_store_seqs[item],
+            call_store_seqs[item],
+            item,
+        ),
+    ):
         if call_id in native_call_ids:
+            continue
+        if checkpoint_covered_through_store_seq is not None and max(
+            call_store_seqs[call_id], result_store_seqs[call_id]
+        ) <= checkpoint_covered_through_store_seq:
             continue
         result = results[call_id]
         call_observation = calls[call_id].get("observation")
@@ -2846,6 +2873,10 @@ def _neutral_context(
 
 def _assemble(
     request: ContextCompileRequest,
+    *,
+    checkpoint_covered_through_store_seq: int | None = None,
+    journal_projection: _JournalMessageProjection | None = None,
+    include_optional_history: bool = True,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], list[str], tuple[int, ...]]:
     source: list[dict[str, Any]] = []
     for index, raw_message in enumerate(request.source_messages):
@@ -2867,7 +2898,11 @@ def _assemble(
         atomic_call_ids,
         consumed_event_indexes,
         native_batch,
-    ) = _neutral_context(request)
+    ) = _neutral_context(
+        request,
+        checkpoint_covered_through_store_seq=checkpoint_covered_through_store_seq,
+        journal_projection=journal_projection,
+    )
     optional_payload = {
         "schema_version": _CONTEXT_SCHEMA,
         **{
@@ -2879,7 +2914,7 @@ def _assemble(
                 "handoff_refs",
                 "resolved_human_interactions",
             )
-            if neutral.get(key)
+            if include_optional_history and neutral.get(key)
         },
     }
     pinned_payload = {
@@ -2944,7 +2979,16 @@ def _reduce(
     *,
     request: ContextCompileRequest,
     budget: ContextBudget,
+    journal_projection: _JournalMessageProjection | None = None,
+    minimum_cutoff: int = 0,
+    checkpoint_ref_resolver: (
+        Callable[[CheckpointRequest], ResourceRef | None] | None
+    ) = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], tuple[CheckpointRequest, ...]]:
+    if isinstance(minimum_cutoff, bool) or not isinstance(minimum_cutoff, int):
+        raise TypeError("minimum_cutoff must be an integer")
+    if minimum_cutoff < 0:
+        raise ValueError("minimum_cutoff must be non-negative")
     message_budget = budget.pressure_threshold_tokens - max(
         0, int(request.fixed_overhead_tokens or 0)
     )
@@ -2959,7 +3003,15 @@ def _reduce(
         "multimodal_pdf_page_count": before.pdf_page_count,
         "multimodal_provisional_token_charge": before.multimodal_tokens,
     }
-    if before.total_tokens <= message_budget:
+    # A coordinator-bound checkpoint is already committed and independently
+    # verified.  Prefer its exact covered prefix even when the raw history
+    # would fit: that keeps the default context as a checkpoint plus one
+    # contiguous recent suffix instead of re-inlining archived messages.
+    if (
+        before.total_tokens <= message_budget
+        and request.checkpoint_ref is None
+        and minimum_cutoff == 0
+    ):
         return (
             copy.deepcopy(messages),
             {
@@ -3073,11 +3125,18 @@ def _reduce(
     reduced: list[dict[str, Any]] = []
     source_cursor_map = _source_cursor_map(request)
     checkpoint_journal_projection = (
-        _canonical_journal_message_projection(request)
-        if request.semantic_events is not None
-        else None
+        journal_projection
+        if journal_projection is not None
+        else (
+            _canonical_journal_message_projection(request)
+            if request.semantic_events is not None
+            else None
+        )
     )
-    for cutoff in range(0, len(turns) + 1):
+    cutoff_order = range(minimum_cutoff, len(turns) + 1)
+    if request.checkpoint_ref is not None:
+        cutoff_order = range(max(1, minimum_cutoff), len(turns) + 1)
+    for cutoff in cutoff_order:
         if any(index < cutoff for index in pinned_indexes):
             continue
         if any(
@@ -3121,24 +3180,58 @@ def _reduce(
             and candidate_checkpoint_request is not None
             and request.checkpoint_request_id == candidate_checkpoint_request.request_id
         )
-        if binding_matches:
-            candidate_with_checkpoint = copy.deepcopy(candidate)
-            checkpoint_message = project_checkpoint_message(
-                checkpoint_ref=request.checkpoint_ref,
-                request=candidate_checkpoint_request,
-                omitted_complete_turns=cutoff,
+        candidate_checkpoint_projection = candidate
+        if candidate_checkpoint_request is not None:
+            price_checkpoint_projection = True
+            projection_ref = (
+                request.checkpoint_ref
+                if binding_matches
+                else _CHECKPOINT_PLANNING_REF
             )
-            checkpoint_message[
-                _CHECKPOINT_MARKER_KEY
-            ] = candidate_checkpoint_request.request_id
-            candidate_with_checkpoint.insert(
-                len(systems),
-                checkpoint_message,
-            )
+            if not binding_matches and checkpoint_ref_resolver is not None:
+                resolved_ref = checkpoint_ref_resolver(
+                    candidate_checkpoint_request
+                )
+                if resolved_ref is not None:
+                    if (
+                        not isinstance(resolved_ref, ResourceRef)
+                        or resolved_ref.kind != "checkpoint"
+                        or resolved_ref.fragment
+                    ):
+                        raise ContextCompilerError(
+                            "checkpoint_projection_ref_invalid"
+                        )
+                    projection_ref = resolved_ref
+                else:
+                    # The coordinator is present, but this retained repository
+                    # cannot preview its deterministic ref. Plan the complete
+                    # omitted prefix without guessing an identifier size; the
+                    # coordinator will bind the prepared ref and retry with a
+                    # larger cutoff if the real marker does not fit.
+                    price_checkpoint_projection = False
+            if price_checkpoint_projection:
+                candidate_checkpoint_projection = copy.deepcopy(candidate)
+                checkpoint_message = project_checkpoint_message(
+                    checkpoint_ref=projection_ref,
+                    request=candidate_checkpoint_request,
+                    omitted_complete_turns=cutoff,
+                )
+                checkpoint_message[
+                    _CHECKPOINT_MARKER_KEY
+                ] = candidate_checkpoint_request.request_id
+                candidate_checkpoint_projection.insert(
+                    len(systems),
+                    checkpoint_message,
+                )
+                if binding_matches:
+                    candidate_with_checkpoint = candidate_checkpoint_projection
         candidate_with_checkpoint_estimate = candidate_estimate
-        if binding_matches:
+        if (
+            candidate_checkpoint_request is not None
+            and price_checkpoint_projection
+        ):
             candidate_with_checkpoint_estimate = _estimate(
-                candidate_with_checkpoint
+                candidate_checkpoint_projection
             ).total_tokens
             if candidate_with_checkpoint_estimate > message_budget:
                 continue
@@ -3147,10 +3240,7 @@ def _reduce(
             and request.checkpoint_ref is not None
             and not binding_matches
         ):
-            selected_cutoff = cutoff
-            selected_checkpoint_request = candidate_checkpoint_request
-            reduced = candidate
-            break
+            continue
         if candidate_with_checkpoint_estimate <= message_budget:
             selected_cutoff = cutoff
             selected_checkpoint_request = candidate_checkpoint_request
@@ -3159,6 +3249,8 @@ def _reduce(
             break
 
     if selected_cutoff is None:
+        if request.checkpoint_ref is not None:
+            raise ContextCompilerError("checkpoint_consumption_invalid")
         if any(_is_pinned_message(message) for message in mandatory):
             raise PinnedTaskStateBudgetError(
                 "pinned task state exceeds the input budget"
@@ -3288,8 +3380,8 @@ def _portable_projection(
             if event.get("type") == "tool_result"
         }
         closed_tool_exchanges = []
-        for call_id in sorted(
-            item.get("call_id")
+        for call_id in (
+            str(item["call_id"])
             for item in neutral.get("tool_exchanges", [])
             if isinstance(item, Mapping) and item.get("call_id")
         ):
@@ -3583,9 +3675,20 @@ class ContextCompiler:
             raise ContextCompilerError("checkpoint_binding_requires_coordinator")
         return self._compile_core(request).result
 
-    def _compile_core(self, request: ContextCompileRequest) -> _CoreCompilation:
+    def _compile_core(
+        self,
+        request: ContextCompileRequest,
+        *,
+        checkpoint_covered_through_store_seq: int | None = None,
+        journal_projection: _JournalMessageProjection | None = None,
+        minimum_checkpoint_cutoff: int = 0,
+        checkpoint_ref_resolver: (
+            Callable[[CheckpointRequest], ResourceRef | None] | None
+        ) = None,
+    ) -> _CoreCompilation:
         _validate_generation_scope(request)
-        request = project_canonical_journal_messages(request)
+        if journal_projection is None:
+            request = project_canonical_journal_messages(request)
         budget = request.budget or self._default_budget
         if request.task_state_unavailable is not None:
             diagnostics = {
@@ -3643,22 +3746,103 @@ class ContextCompiler:
                 neutral,
                 atomic_call_ids,
                 consumed_semantic_event_indexes,
-            ) = _assemble(request)
+            ) = _assemble(
+                request,
+                checkpoint_covered_through_store_seq=(
+                    checkpoint_covered_through_store_seq
+                ),
+                journal_projection=journal_projection,
+            )
             messages, reduction, checkpoint_requests = _reduce(
                 combined,
                 request=request,
                 budget=budget,
+                journal_projection=journal_projection,
+                minimum_cutoff=minimum_checkpoint_cutoff,
+                checkpoint_ref_resolver=checkpoint_ref_resolver,
             )
-        except ContextBudgetExceededError as exc:
-            # Preserve the error subtype while carrying the actual graph/agent
-            # model and window to hosts; they cannot infer it from the root run.
-            exc.code = "context_budget_exceeded"
-            exc.args = (
-                f"{request.provider or 'model'}:{request.model or 'unknown'} "
-                f"has a {budget.context_window_tokens}-token context window: {exc}. "
-                "Reduce the input or selected tools, or choose a model with a larger context window.",
+        except ContextBudgetExceededError as original_error:
+            if checkpoint_covered_through_store_seq is not None:
+                raise ContextCompilerError(
+                    "checkpoint_consumption_invalid"
+                ) from original_error
+            planning_request = replace(
+                request,
+                checkpoint_ref=None,
+                checkpoint_request_id=None,
             )
-            raise
+            (
+                planning_messages,
+                _planning_neutral,
+                _planning_atomic_call_ids,
+                _planning_consumed_event_indexes,
+            ) = _assemble(
+                planning_request,
+                journal_projection=journal_projection,
+                include_optional_history=False,
+            )
+            recovered = False
+            for minimum_cutoff in range(
+                max(1, minimum_checkpoint_cutoff),
+                len(request.source_messages) + 1,
+            ):
+                try:
+                    (
+                        _planned_messages,
+                        planned_reduction,
+                        planned_checkpoints,
+                    ) = _reduce(
+                        planning_messages,
+                        request=planning_request,
+                        budget=budget,
+                        journal_projection=journal_projection,
+                        minimum_cutoff=minimum_cutoff,
+                        checkpoint_ref_resolver=checkpoint_ref_resolver,
+                    )
+                except ContextBudgetExceededError:
+                    continue
+                if (
+                    planned_reduction.get("status") != "checkpoint_required"
+                    or len(planned_checkpoints) != 1
+                ):
+                    continue
+                planned_checkpoint = planned_checkpoints[0]
+                try:
+                    (
+                        combined,
+                        neutral,
+                        atomic_call_ids,
+                        consumed_semantic_event_indexes,
+                    ) = _assemble(
+                        planning_request,
+                        checkpoint_covered_through_store_seq=(
+                            planned_checkpoint.source_range.end.store_seq
+                        ),
+                        journal_projection=journal_projection,
+                    )
+                    messages, reduction, checkpoint_requests = _reduce(
+                        combined,
+                        request=planning_request,
+                        budget=budget,
+                        journal_projection=journal_projection,
+                        minimum_cutoff=int(
+                            planned_reduction["dropped_turn_count"]
+                        ),
+                        checkpoint_ref_resolver=checkpoint_ref_resolver,
+                    )
+                except ContextBudgetExceededError:
+                    continue
+                recovered = True
+                break
+            if not recovered:
+                original_error.code = "context_budget_exceeded"
+                original_error.args = (
+                    f"{request.provider or 'model'}:{request.model or 'unknown'} "
+                    f"has a {budget.context_window_tokens}-token context window: "
+                    f"{original_error}. Reduce the input or selected tools, or choose "
+                    "a model with a larger context window.",
+                )
+                raise original_error
         diagnostics = {
             **reduction,
             "provider": request.provider or "",
@@ -3716,6 +3900,11 @@ class ContextCompiler:
         request: ContextCompileRequest,
         *,
         checkpoint_binding: _CheckpointBinding | None = None,
+        journal_projection: _JournalMessageProjection | None = None,
+        minimum_checkpoint_cutoff: int = 0,
+        checkpoint_ref_resolver: (
+            Callable[[CheckpointRequest], ResourceRef | None] | None
+        ) = None,
     ) -> _ContextCompilePass:
         """Compile one coordinator-owned pass with private durable evidence."""
 
@@ -3735,7 +3924,17 @@ class ContextCompiler:
                 checkpoint_ref=checkpoint_binding.checkpoint_ref,
                 checkpoint_request_id=checkpoint_binding.request.request_id,
             )
-        compiled = self._compile_core(bound_request)
+        compiled = self._compile_core(
+            bound_request,
+            checkpoint_covered_through_store_seq=(
+                checkpoint_binding.request.source_range.end.store_seq
+                if checkpoint_binding is not None
+                else None
+            ),
+            journal_projection=journal_projection,
+            minimum_checkpoint_cutoff=minimum_checkpoint_cutoff,
+            checkpoint_ref_resolver=checkpoint_ref_resolver,
+        )
         result = compiled.result
         if checkpoint_binding is None:
             if compiled.checkpoint_markers:
@@ -3743,7 +3942,11 @@ class ContextCompiler:
             return _ContextCompilePass(result=result)
         if result.checkpoint_requests:
             raise ContextCompilerError("checkpoint_consumption_invalid")
-        projected_request = project_canonical_journal_messages(bound_request)
+        projected_request = (
+            bound_request
+            if journal_projection is not None
+            else project_canonical_journal_messages(bound_request)
+        )
         omitted_indexes = tuple(
             int(index) for index in result.diagnostics.get("omitted_source_indexes", ())
         )
@@ -3758,6 +3961,7 @@ class ContextCompiler:
         checkpoint_request = _checkpoint_request_for_indexes(
             projected_request,
             omitted_indexes,
+            journal_projection=journal_projection,
         )
         if checkpoint_request != checkpoint_binding.request:
             raise ContextCompilerError("checkpoint_consumption_invalid")

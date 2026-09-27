@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Any, Callable
@@ -29,15 +29,18 @@ from .checkpoints import (
 from .compiler import (
     ContextCompileResult,
     ContextCompiler,
+    ContextCompilerError,
     _CheckpointBinding,
     _CheckpointConsumption,
     _ContextCompilePass,
+    _JournalMessageProjection,
     _canonical_journal_message_projection,
     project_canonical_journal_messages,
 )
 from .models import ContextCompileRequest
 from .artifacts import ArtifactService
 from .request_factory import _graph_seed_projections
+from .journal_view_cache import JournalSnapshotSource, RunLocalJournalViewCache
 from .model_projection import (
     ContextModelProjectionError,
     ModelContextProjection,
@@ -52,6 +55,7 @@ from .ports import (
 
 
 MAX_CHECKPOINT_PAYLOAD_BYTES = 32 * 1024 * 1024
+CHECKPOINT_READ_PAGE_BYTES = 64 * 1024
 _CURRENT_ATTEMPT_INPUT_EVENT_TYPES = frozenset(
     {"message.user", "interaction.resolved", "tool_result"}
 )
@@ -126,6 +130,7 @@ class _PreparedJournalView:
     snapshot: JournalSnapshot
     generation_events: tuple[JournalEvent, ...]
     semantic_events: tuple[Mapping[str, Any], ...]
+    journal_projection: _JournalMessageProjection
     events_by_cursor: Mapping[tuple[str, int], JournalEvent]
     input_receipt: JournalEvent
 
@@ -409,6 +414,7 @@ def _prepare_journal_view(
         pending_task_inputs=pending_task_inputs,
     )
     projected_request = project_canonical_journal_messages(snapshot_request)
+    journal_projection = _canonical_journal_message_projection(projected_request)
     bound_source_indexes = {
         cursor.message_index for cursor in projected_request.source_message_cursors
     }
@@ -505,6 +511,7 @@ def _prepare_journal_view(
             snapshot=snapshot,
             generation_events=generation_events,
             semantic_events=tuple(semantic_events),
+            journal_projection=journal_projection,
             events_by_cursor=MappingProxyType(events_by_cursor),
             input_receipt=admitted_input_receipts[-1],
         ),
@@ -526,7 +533,7 @@ def _checkpoint_materialization(
     checkpoint: CheckpointRequest,
     view: _PreparedJournalView,
 ) -> _CheckpointMaterialization:
-    projection = _canonical_journal_message_projection(request)
+    projection = view.journal_projection
     messages_by_cursor = dict(projection.candidates)
     source_cursors = tuple(
         zip(
@@ -638,6 +645,92 @@ def _checkpoint_materialization(
     )
 
 
+def _verified_committed_checkpoint_bindings(
+    *,
+    repository: BoundCheckpointRepository,
+    request: ContextCompileRequest,
+    view: _PreparedJournalView,
+    read_payload: Callable[[ResourceRef], bytes] | None = None,
+) -> Iterator[_CheckpointBinding]:
+    """Yield verified newest-first candidates and stop once the caller selects one."""
+
+    discover = getattr(repository, "list_committed_refs", None)
+    if not callable(discover):
+        # Third-party pre-v3 adapters did not implement discovery.  They are
+        # still safe because the coordinator falls back to the established
+        # pressure-triggered checkpoint path.
+        return
+    for ref in discover(limit=32):
+        try:
+            raw = (
+                read_payload(ref)
+                if read_payload is not None
+                else _read_checkpoint_payload(repository=repository, ref=ref)
+            )
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ContextCompileCoordinatorError(
+                "committed checkpoint payload is invalid"
+            ) from error
+        if not isinstance(payload, Mapping) or payload.get("schema") != (
+            "unchain.context_checkpoint_payload.v2"
+        ):
+            # A legacy or host-written checkpoint is durable but cannot be a
+            # V2 compiler binding.  It remains available to its original API.
+            continue
+        try:
+            checkpoint = CheckpointRequest.from_dict(payload.get("checkpoint_request"))
+        except (TypeError, ValueError) as error:
+            raise ContextCompileCoordinatorError(
+                "committed checkpoint request is invalid"
+            ) from error
+        try:
+            materialization = _checkpoint_materialization(
+                request=request, checkpoint=checkpoint, view=view
+            )
+        except ContextCompileCoordinatorError:
+            # A valid checkpoint from an earlier source head is not a match
+            # for this model request; it is safe to consider the next one.
+            continue
+        if raw != materialization.summary.encode("utf-8"):
+            raise ContextCompileCoordinatorError(
+                "committed checkpoint payload failed exact verification"
+            )
+        yield _CheckpointBinding(request=checkpoint, checkpoint_ref=ref)
+
+
+def _read_checkpoint_payload(
+    *,
+    repository: BoundCheckpointRepository,
+    ref: ResourceRef,
+) -> bytes:
+    """Read a checkpoint through the bounded page contract, never one huge read."""
+
+    chunks: list[bytes] = []
+    offset = 0
+    while offset <= MAX_CHECKPOINT_PAYLOAD_BYTES:
+        page_limit = min(
+            CHECKPOINT_READ_PAGE_BYTES,
+            MAX_CHECKPOINT_PAYLOAD_BYTES + 1 - offset,
+        )
+        page = repository.read(ref=ref, offset=offset, limit=page_limit)
+        if not isinstance(page, bytes):
+            raise ContextCompileCoordinatorError(
+                "checkpoint repository returned invalid content"
+            )
+        if not page:
+            break
+        chunks.append(page)
+        offset += len(page)
+        if offset > MAX_CHECKPOINT_PAYLOAD_BYTES:
+            raise ContextCompileCoordinatorError(
+                "committed checkpoint payload exceeds the durable object limit"
+            )
+        if len(page) < page_limit:
+            break
+    return b"".join(chunks)
+
+
 def _verify_checkpoint_consumption(
     *,
     compiled: _ContextCompilePass,
@@ -740,6 +833,7 @@ class ContextCompileCoordinator:
         partial_attempt_sink: Callable[[ContextCompileRequest, Exception], None],
         model_projection: ModelContextProjection | None = None,
         artifacts: ArtifactService | None = None,
+        journal_snapshot_source: JournalSnapshotSource | None = None,
     ) -> None:
         if not isinstance(journal, BoundExecutionJournal):
             raise TypeError("journal must be a BoundExecutionJournal")
@@ -776,6 +870,16 @@ class ContextCompileCoordinator:
         self._build_repository = build_repository
         self._partial_attempt_sink = partial_attempt_sink
         self._model_projection = model_projection
+        if journal_snapshot_source is None:
+            journal_snapshot_source = RunLocalJournalViewCache.for_journal(journal)
+        if (
+            not callable(getattr(journal_snapshot_source, "capture_snapshot", None))
+            or getattr(journal_snapshot_source, "journal", None) is not journal
+        ):
+            raise ContextCompileCoordinatorError(
+                "journal snapshot source does not match the bound journal"
+            )
+        self._journal_snapshot_source = journal_snapshot_source
 
     @property
     def journal(self) -> BoundExecutionJournal:
@@ -810,33 +914,105 @@ class ContextCompileCoordinator:
                     "context repository execution scope does not match the request"
                 )
         try:
-            snapshot = self._journal.capture_snapshot()
+            snapshot = self._journal_snapshot_source.capture_snapshot()
             prepared_request, journal_view = _prepare_journal_view(
                 request=request,
                 snapshot=snapshot,
                 artifacts=self._artifacts,
             )
             self._verify_input_trigger_claim(request, journal_view.input_receipt)
-            first = self._compile_pass(prepared_request)
         except Exception as error:
             self._mark_partial(request, error)
             raise
-        if first.consumptions:
-            error = ContextCompileCoordinatorError(
-                "the first compiler pass returned an unexpected consumption proof"
-            )
-            self._mark_partial(request, error)
-            raise error
-        if len(first.result.checkpoint_requests) > 1:
-            error = ContextCompileCoordinatorError(
-                "the P0 compiler produced multiple checkpoint requests"
-            )
-            self._mark_partial(request, error)
-            raise error
 
-        final = first
+        first: _ContextCompilePass | None = None
+        final: _ContextCompilePass | None = None
         consumptions: tuple[_CheckpointConsumption, ...] = ()
-        if first.result.checkpoint_requests:
+        planned_checkpoint_refs: dict[str, ResourceRef] = {}
+
+        def prospective_checkpoint_ref(
+            checkpoint: CheckpointRequest,
+        ) -> ResourceRef | None:
+            existing = planned_checkpoint_refs.get(checkpoint.request_id)
+            if existing is not None:
+                return existing
+            resolver = getattr(
+                self._checkpoint_repository,
+                "checkpoint_ref_for",
+                None,
+            )
+            if not callable(resolver):
+                return None
+            materialization = _checkpoint_materialization(
+                request=prepared_request,
+                checkpoint=checkpoint,
+                view=journal_view,
+            )
+            try:
+                resolved = resolver(operation=materialization.operation)
+            except NotImplementedError:
+                return None
+            if (
+                not isinstance(resolved, ResourceRef)
+                or resolved.kind != "checkpoint"
+                or resolved.fragment
+            ):
+                raise ContextCompileCoordinatorError(
+                    "checkpoint repository returned an invalid prospective ref"
+                )
+            planned_checkpoint_refs[checkpoint.request_id] = resolved
+            return resolved
+
+        try:
+            for binding in _verified_committed_checkpoint_bindings(
+                repository=self._checkpoint_repository,
+                request=prepared_request,
+                view=journal_view,
+                read_payload=self._read_checkpoint_payload,
+            ):
+                try:
+                    candidate = self._compile_pass(
+                        prepared_request,
+                        checkpoint_binding=binding,
+                        journal_projection=journal_view.journal_projection,
+                    )
+                except ContextCompilerError as error:
+                    if str(error) != "checkpoint_consumption_invalid":
+                        raise
+                    continue
+                if candidate.consumptions:
+                    final = candidate
+                    consumptions = candidate.consumptions
+                    break
+        except Exception as error:
+            self._mark_partial(request, error)
+            raise
+
+        if final is None:
+            try:
+                first = self._compile_pass(
+                    prepared_request,
+                    journal_projection=journal_view.journal_projection,
+                    checkpoint_ref_resolver=prospective_checkpoint_ref,
+                )
+            except Exception as error:
+                self._mark_partial(request, error)
+                raise
+            if first.consumptions:
+                error = ContextCompileCoordinatorError(
+                    "the first compiler pass returned an unexpected consumption proof"
+                )
+                self._mark_partial(request, error)
+                raise error
+            if len(first.result.checkpoint_requests) > 1:
+                error = ContextCompileCoordinatorError(
+                    "the P0 compiler produced multiple checkpoint requests"
+                )
+                self._mark_partial(request, error)
+                raise error
+            final = first
+
+        while first is not None and final is first and first.result.checkpoint_requests:
             checkpoint_request = first.result.checkpoint_requests[0]
             try:
                 materialization = _checkpoint_materialization(
@@ -857,19 +1033,67 @@ class ContextCompileCoordinator:
                 if boundary_error is error:
                     raise
                 raise boundary_error from None
+            prospective_ref = planned_checkpoint_refs.get(
+                checkpoint_request.request_id
+            )
+            if (
+                prospective_ref is not None
+                and prepared.checkpoint_ref != prospective_ref
+            ):
+                error = ContextCompileCoordinatorError(
+                    "checkpoint repository changed its prospective ref"
+                )
+                boundary_error = self._mark_durable_partial(request, error)
+                raise boundary_error from None
             try:
-                final = self._compile_pass(
+                bound = self._compile_pass(
                     prepared_request,
                     checkpoint_binding=_CheckpointBinding(
                         request=checkpoint_request,
                         checkpoint_ref=prepared.checkpoint_ref,
                     ),
+                    journal_projection=journal_view.journal_projection,
                 )
                 consumption = _verify_checkpoint_consumption(
-                    compiled=final,
+                    compiled=bound,
                     checkpoint=checkpoint_request,
                     prepared=prepared,
                 )
+            except ContextCompilerError as error:
+                if str(error) != "checkpoint_consumption_invalid":
+                    self._mark_partial(request, error)
+                    raise
+                dropped_turn_count = first.result.diagnostics.get(
+                    "dropped_turn_count"
+                )
+                if (
+                    isinstance(dropped_turn_count, bool)
+                    or not isinstance(dropped_turn_count, int)
+                    or dropped_turn_count < 1
+                ):
+                    boundary_error = ContextCompileCoordinatorError(
+                        "checkpoint retry has no valid cutoff"
+                    )
+                    self._mark_partial(request, boundary_error)
+                    raise boundary_error from error
+                try:
+                    first = self._compile_pass(
+                        prepared_request,
+                        journal_projection=journal_view.journal_projection,
+                        minimum_checkpoint_cutoff=dropped_turn_count + 1,
+                        checkpoint_ref_resolver=prospective_checkpoint_ref,
+                    )
+                except Exception as retry_error:
+                    self._mark_partial(request, retry_error)
+                    raise
+                if first.consumptions or len(first.result.checkpoint_requests) != 1:
+                    retry_error = ContextCompileCoordinatorError(
+                        "checkpoint retry did not produce one boundary request"
+                    )
+                    self._mark_partial(request, retry_error)
+                    raise retry_error
+                final = first
+                continue
             except Exception as error:
                 self._mark_partial(request, error)
                 raise
@@ -887,6 +1111,7 @@ class ContextCompileCoordinator:
                 )
                 boundary_error = self._mark_durable_partial(request, error)
                 raise boundary_error from None
+            final = bound
             consumptions = (consumption,)
 
         if final.result.envelope is None:
@@ -949,16 +1174,30 @@ class ContextCompileCoordinator:
         request: ContextCompileRequest,
         *,
         checkpoint_binding: _CheckpointBinding | None = None,
+        journal_projection: _JournalMessageProjection | None = None,
+        minimum_checkpoint_cutoff: int = 0,
+        checkpoint_ref_resolver: (
+            Callable[[CheckpointRequest], ResourceRef | None] | None
+        ) = None,
     ) -> _ContextCompilePass:
         result = self._compiler._compile_for_coordinator(
             request,
             checkpoint_binding=checkpoint_binding,
+            journal_projection=journal_projection,
+            minimum_checkpoint_cutoff=minimum_checkpoint_cutoff,
+            checkpoint_ref_resolver=checkpoint_ref_resolver,
         )
         if not isinstance(result, _ContextCompilePass):
             raise TypeError("compiler must return the internal compile pass")
         if not isinstance(result.result, ContextCompileResult):
             raise TypeError("compiler pass must contain ContextCompileResult")
         return result
+
+    def _read_checkpoint_payload(self, ref: ResourceRef) -> bytes:
+        return _read_checkpoint_payload(
+            repository=self._checkpoint_repository,
+            ref=ref,
+        )
 
     def _record_build(
         self,
