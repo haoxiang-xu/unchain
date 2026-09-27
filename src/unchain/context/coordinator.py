@@ -56,6 +56,7 @@ from .ports import (
 
 MAX_CHECKPOINT_PAYLOAD_BYTES = 32 * 1024 * 1024
 CHECKPOINT_READ_PAGE_BYTES = 64 * 1024
+_COMPILER_CHECKPOINT_OPERATION_PREFIX = "context-checkpoint."
 _CURRENT_ATTEMPT_INPUT_EVENT_TYPES = frozenset(
     {"message.user", "interaction.resolved", "tool_result"}
 )
@@ -655,12 +656,44 @@ def _verified_committed_checkpoint_bindings(
     """Yield verified newest-first candidates and stop once the caller selects one."""
 
     discover = getattr(repository, "list_committed_refs", None)
-    if not callable(discover):
+    metadata_for = getattr(repository, "get_by_ref", None)
+    if not callable(discover) or not callable(metadata_for):
         # Third-party pre-v3 adapters did not implement discovery.  They are
         # still safe because the coordinator falls back to the established
         # pressure-triggered checkpoint path.
         return
     for ref in discover(limit=32):
+        try:
+            receipt = metadata_for(ref=ref)
+        except NotImplementedError:
+            # Metadata-free adapters cannot safely distinguish compiler-owned
+            # JSON from arbitrary summaries accepted by the public port.
+            return
+        if receipt is None:
+            raise ContextCompileCoordinatorError(
+                "committed checkpoint metadata is unavailable"
+            )
+        if (
+            not isinstance(receipt, PreparedCheckpoint)
+            or receipt.checkpoint_ref != ref
+            or receipt.status is not CheckpointWriteStatus.COMMITTED
+        ):
+            raise ContextCompileCoordinatorError(
+                "committed checkpoint metadata is invalid"
+            )
+        operation_id = receipt.operation.operation_id
+        if not operation_id.startswith(_COMPILER_CHECKPOINT_OPERATION_PREFIX):
+            continue
+        request_id = operation_id[len(_COMPILER_CHECKPOINT_OPERATION_PREFIX) :]
+        request_digest = request_id.removeprefix("checkpoint-")
+        if (
+            not request_id.startswith("checkpoint-")
+            or len(request_digest) != 64
+            or any(character not in "0123456789abcdef" for character in request_digest)
+        ):
+            # Only the exact compiler operation namespace is reserved.  A
+            # host may otherwise choose any valid operation identifier.
+            continue
         try:
             raw = (
                 read_payload(ref)
@@ -675,15 +708,19 @@ def _verified_committed_checkpoint_bindings(
         if not isinstance(payload, Mapping) or payload.get("schema") != (
             "unchain.context_checkpoint_payload.v2"
         ):
-            # A legacy or host-written checkpoint is durable but cannot be a
-            # V2 compiler binding.  It remains available to its original API.
-            continue
+            raise ContextCompileCoordinatorError(
+                "committed checkpoint payload is invalid"
+            )
         try:
             checkpoint = CheckpointRequest.from_dict(payload.get("checkpoint_request"))
         except (TypeError, ValueError) as error:
             raise ContextCompileCoordinatorError(
                 "committed checkpoint request is invalid"
             ) from error
+        if checkpoint.request_id != request_id:
+            raise ContextCompileCoordinatorError(
+                "committed checkpoint operation identity is invalid"
+            )
         try:
             materialization = _checkpoint_materialization(
                 request=request, checkpoint=checkpoint, view=view
@@ -695,6 +732,10 @@ def _verified_committed_checkpoint_bindings(
         if raw != materialization.summary.encode("utf-8"):
             raise ContextCompileCoordinatorError(
                 "committed checkpoint payload failed exact verification"
+            )
+        if receipt.operation != materialization.operation:
+            raise ContextCompileCoordinatorError(
+                "committed checkpoint operation failed exact verification"
             )
         yield _CheckpointBinding(request=checkpoint, checkpoint_ref=ref)
 

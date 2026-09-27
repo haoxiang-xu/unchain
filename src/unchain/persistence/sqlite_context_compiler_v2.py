@@ -775,6 +775,52 @@ class _SQLiteBoundCheckpointRepository(
                 "checkpoint receipt read failed"
             ) from error
 
+    def get_by_ref(self, *, ref: ResourceRef) -> PreparedCheckpoint | None:
+        if not isinstance(ref, ResourceRef):
+            ref = ResourceRef.from_dict(ref)
+        if ref.kind != "checkpoint" or ref.fragment or ref.revision != 1:
+            raise ContextScopeError("checkpoint ref is outside the bound repository")
+        try:
+            with self._store._transaction(immediate=False) as connection:
+                row = connection.execute(
+                    """
+                    SELECT * FROM checkpoints
+                    WHERE execution_id = ? AND checkpoint_id = ? AND revision = 1
+                    """,
+                    (self.execution_id, ref.resource_id),
+                ).fetchone()
+                if row is None:
+                    return None
+                receipt, _semantic, _artifact = self._decode(
+                    row,
+                    duplicate=False,
+                )
+                if receipt.checkpoint_ref != ref:
+                    raise SQLiteContextCompilerV2IntegrityError(
+                        "checkpoint ref changed outside the bound repository"
+                    )
+                claimed = self._operation_row(
+                    connection,
+                    receipt.operation.operation_id,
+                )
+                if (
+                    claimed is None
+                    or claimed["payload_sha256"]
+                    != receipt.operation.payload_sha256
+                    or claimed["target_kind"] != "checkpoint"
+                    or claimed["target_key"] != ref.resource_id
+                ):
+                    raise SQLiteContextCompilerV2IntegrityError(
+                        "checkpoint operation claim is invalid"
+                    )
+                return receipt
+        except ContextRepositoryError:
+            raise
+        except sqlite3.Error as error:
+            raise SQLiteContextCompilerV2Error(
+                "checkpoint metadata read failed"
+            ) from error
+
     def read(
         self,
         *,

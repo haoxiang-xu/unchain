@@ -285,6 +285,16 @@ class RecordingCheckpointRepository:
             raise RuntimeError("checkpoint operation conflict")
         return receipt
 
+    def get_by_ref(self, *, ref):
+        return next(
+            (
+                receipt
+                for receipt in self.receipts.values()
+                if receipt.checkpoint_ref == ref
+            ),
+            None,
+        )
+
     def list_committed_refs(self, *, limit=32):
         committed = [
             receipt.checkpoint_ref
@@ -738,6 +748,48 @@ def test_same_execution_rejects_a_checkpoint_corrupted_after_warm_reuse() -> Non
         match="committed checkpoint payload is invalid",
     ):
         coordinator.compile(request)
+
+
+def test_host_plain_text_checkpoint_is_skipped_before_payload_validation() -> None:
+    checkpoints = RecordingCheckpointRepository()
+    operation = OperationRef("host-checkpoint", "a" * 64)
+    checkpoint_ref = ResourceRef("checkpoint", "host-checkpoint", 1)
+    checkpoints.receipts[operation.operation_id] = PreparedCheckpoint(
+        preparation_id="preparation-host-checkpoint",
+        checkpoint_ref=checkpoint_ref,
+        operation=operation,
+        status=CheckpointWriteStatus.COMMITTED,
+    )
+    checkpoints.contents[checkpoint_ref] = b"A valid historical plain-text summary."
+    request = _request(pressured=False)
+
+    result = _coordinator(request=request, checkpoints=checkpoints).compile(request)
+
+    assert tuple(message["content"] for message in result.messages) == (
+        "constraint",
+        "acknowledged",
+        "current",
+    )
+    assert checkpoints.read_calls == []
+
+
+def test_compiler_checkpoint_operation_identity_is_reverified() -> None:
+    checkpoints = RecordingCheckpointRepository()
+    request = _request(pressured=True)
+    _coordinator(request=request, checkpoints=checkpoints).compile(request)
+    committed = checkpoints.receipts[
+        checkpoints.commit_calls[0].operation.operation_id
+    ]
+    checkpoints.receipts[committed.operation.operation_id] = replace(
+        committed,
+        operation=OperationRef(committed.operation.operation_id, "f" * 64),
+    )
+
+    with pytest.raises(
+        ContextCompileCoordinatorError,
+        match="operation failed exact verification",
+    ):
+        _coordinator(request=request, checkpoints=checkpoints).compile(request)
 
 
 def test_checkpoint_reuse_reads_large_payload_in_bounded_pages() -> None:

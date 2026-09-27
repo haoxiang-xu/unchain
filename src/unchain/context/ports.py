@@ -194,6 +194,19 @@ class BoundCheckpointRepository(_ExecutionBoundPort):
             raise ValueError("limit must be a positive integer")
         return ()
 
+    def get_by_ref(self, *, ref: ResourceRef) -> PreparedCheckpoint | None:
+        """Return durable checkpoint metadata for one exact local ref.
+
+        Automatic compiler reuse requires this metadata to distinguish its
+        reserved operation identities from host-authored checkpoint content.
+        Older adapters can leave the method unsupported; the coordinator then
+        disables automatic reuse instead of interpreting arbitrary summaries.
+        """
+
+        raise NotImplementedError(
+            "checkpoint repository cannot resolve checkpoint metadata by ref"
+        )
+
     @abstractmethod
     def prepare(
         self,
