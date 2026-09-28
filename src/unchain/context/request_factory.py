@@ -13,7 +13,6 @@ from unchain.journal import (
     BoundExecutionJournal,
     EventCursor,
     JournalEvent,
-    JournalSnapshot,
     ResourceRef,
     journal_event_sha256,
     journal_event_to_semantic_event,
@@ -26,6 +25,11 @@ from .attachments import normalize_host_resolved_attachments
 from .budget import estimate_context_tokens, resolve_context_budget
 from .models import ContextCompileRequest, HandoffEnvelope, SourceMessageCursor
 from .graph_checkpoint import GraphExecutionPlan
+from .journal_view_cache import (
+    JournalSnapshotSource,
+    JournalViewCacheError,
+    RunLocalJournalViewCache,
+)
 
 
 _CURRENT_INPUT_EVENT_TYPES = frozenset(
@@ -134,26 +138,10 @@ def _current_tool_schema(
     return estimate.total_tokens
 
 
-def _validated_snapshot(
-    journal: BoundExecutionJournal,
-    *,
-    max_events: int,
-    max_bytes: int,
-) -> JournalSnapshot:
-    snapshot = journal.capture_snapshot(
-        max_events=max_events,
-        max_bytes=max_bytes,
-    )
-    if not isinstance(snapshot, JournalSnapshot):
-        raise JournalContextRequestFactoryError(
-            "journal did not return a stable snapshot"
-        )
-    snapshot = JournalSnapshot.from_dict(snapshot.to_dict())
-    if snapshot.execution_id != journal.execution_id:
-        raise JournalContextRequestFactoryError(
-            "journal snapshot escaped its execution scope"
-        )
-    return snapshot
+def _invalidate_snapshot_source(source: JournalSnapshotSource) -> None:
+    invalidate = getattr(source, "invalidate", None)
+    if callable(invalidate):
+        invalidate()
 
 
 def _canonical_user_message(event: JournalEvent) -> dict[str, Any]:
@@ -565,6 +553,7 @@ class JournalContextRequestFactory:
         transport_margin_tokens: int | None = None,
         snapshot_max_events: int = 10_000,
         snapshot_max_bytes: int = 32 * 1024 * 1024,
+        journal_snapshot_source: JournalSnapshotSource | None = None,
     ) -> None:
         if not isinstance(attempt, AttemptRef):
             attempt = AttemptRef.from_dict(attempt)
@@ -595,6 +584,20 @@ class JournalContextRequestFactory:
             snapshot_max_bytes,
             "snapshot_max_bytes",
         )
+        if journal_snapshot_source is None:
+            journal_snapshot_source = RunLocalJournalViewCache.for_journal(
+                journal,
+                max_events=self._snapshot_max_events,
+                max_bytes=self._snapshot_max_bytes,
+            )
+        if (
+            not callable(getattr(journal_snapshot_source, "capture_snapshot", None))
+            or getattr(journal_snapshot_source, "journal", None) is not journal
+        ):
+            raise JournalContextRequestFactoryError(
+                "journal snapshot source does not match the bound journal"
+            )
+        self._journal_snapshot_source = journal_snapshot_source
 
     @property
     def attempt(self) -> AttemptRef:
@@ -618,11 +621,12 @@ class JournalContextRequestFactory:
             context,
             provider=provider,
         )
-        snapshot = _validated_snapshot(
-            self._journal,
-            max_events=self._snapshot_max_events,
-            max_bytes=self._snapshot_max_bytes,
-        )
+        try:
+            snapshot = self._journal_snapshot_source.capture_snapshot()
+        except JournalViewCacheError as exc:
+            raise JournalContextRequestFactoryError(
+                "journal snapshot is unavailable"
+            ) from exc
         generation_events = tuple(
             event
             for event in snapshot.events
@@ -649,6 +653,7 @@ class JournalContextRequestFactory:
             trigger,
             generation_events=generation_events,
         ):
+            _invalidate_snapshot_source(self._journal_snapshot_source)
             raise JournalContextRequestFactoryError(
                 "latest input receipt belongs to a foreign attempt"
             )

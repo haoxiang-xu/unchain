@@ -169,6 +169,44 @@ class ContextBuildReceipt:
 
 
 class BoundCheckpointRepository(_ExecutionBoundPort):
+    def checkpoint_ref_for(self, *, operation: OperationRef) -> ResourceRef:
+        """Return the deterministic ref a checkpoint preparation will receive.
+
+        This read-only preview lets the context compiler price the exact
+        checkpoint marker before ``prepare()`` performs a durable write.  A
+        repository that cannot guarantee the future identity raises rather
+        than returning an estimate.
+        """
+
+        raise NotImplementedError(
+            "checkpoint repository cannot pre-compute checkpoint refs"
+        )
+
+    def list_committed_refs(self, *, limit: int = 32) -> tuple[ResourceRef, ...]:
+        """Return a bounded newest-first list of committed local checkpoints.
+
+        Older implementations do not expose discovery.  They remain safe: the
+        coordinator simply compiles without reuse and may create a new
+        checkpoint under pressure.
+        """
+
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise ValueError("limit must be a positive integer")
+        return ()
+
+    def get_by_ref(self, *, ref: ResourceRef) -> PreparedCheckpoint | None:
+        """Return durable checkpoint metadata for one exact local ref.
+
+        Automatic compiler reuse requires this metadata to distinguish its
+        reserved operation identities from host-authored checkpoint content.
+        Older adapters can leave the method unsupported; the coordinator then
+        disables automatic reuse instead of interpreting arbitrary summaries.
+        """
+
+        raise NotImplementedError(
+            "checkpoint repository cannot resolve checkpoint metadata by ref"
+        )
+
     @abstractmethod
     def prepare(
         self,
