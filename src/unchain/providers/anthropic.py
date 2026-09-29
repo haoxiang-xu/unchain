@@ -426,7 +426,7 @@ class AnthropicModelIO(_NativeModelIOBase):
                 text = str(block.get("text") or "")
                 if text:
                     text_parts.append(text)
-                    semantic_blocks.append({"type": "text", "text": text})
+                semantic_blocks.append(copy.deepcopy(block))
                 continue
             if block_type == "tool_use":
                 call_id = block.get("id")
