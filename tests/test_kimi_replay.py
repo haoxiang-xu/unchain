@@ -250,15 +250,18 @@ def test_sdk_tool_metadata_through_canonical_compiler(metadata, kimi):
     expected_tool = copy.deepcopy(tool)
     if kimi and expected_tool.get("caller") is None:
         expected_tool.pop("caller", None)
+    semantic_tool = copy.deepcopy(expected_tool)
+    if semantic_tool.get("caller") == {"type": "direct"}:
+        semantic_tool.pop("caller")
     frame = turn.provider_replay_frame
     assert frame["items"][-1]["content"] == [thinking, expected_tool]
-    assert turn.assistant_messages[-1]["content"] == [expected_tool]
+    assert turn.assistant_messages[-1]["content"] == [semantic_tool]
     provider = "hyperspace" if kimi else "anthropic"
     canonical = _native_tool_call_messages(provider, [({}, call) for call in turn.tool_calls])
     result = {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "3"}]}
     canonical.append(result)
     segments = _segments_for(frame["format"], frame["items"], allow_unsigned_thinking=kimi)
-    if set(expected_tool) - {"type", "id", "name", "input"}:
+    if set(semantic_tool) - {"type", "id", "name", "input"}:
         with pytest.raises(ProviderContextProjectionError, match="mutated ambiguously"):
             _rehydrate(provider, canonical, segments)
     else:

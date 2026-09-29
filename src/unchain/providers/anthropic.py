@@ -451,7 +451,14 @@ class AnthropicModelIO(_NativeModelIOBase):
                         arguments=copy.deepcopy(arguments),
                     )
                 )
-                semantic_blocks.append(copy.deepcopy(block))
+                semantic_block = copy.deepcopy(block)
+                # The SDK's direct-caller marker is transport metadata. It is
+                # required in the provider-native replay frame but has no
+                # counterpart in a durable ToolCall, whose canonical compiler
+                # reconstructs only id/name/input.
+                if semantic_block.get("caller") == {"type": "direct"}:
+                    semantic_block.pop("caller")
+                semantic_blocks.append(semantic_block)
 
         if tool_calls and replay_profile is None:
             for block in raw_blocks:
