@@ -20,10 +20,16 @@ from unchain.tools import Toolkit
 
 
 def _tool_blocks(*, call_id: str, texts: list[TextBlock]):
+    # Model the 0.83 tool wire shape even when CI has a newer SDK whose
+    # default dump adds toolset_name=None outside this provider's contract.
+    tool_block = ToolUseBlock(
+        type="tool_use", id=call_id, name="demo_tool", input={"x": 2},
+    ).model_dump(exclude_unset=True)
+    tool_block["caller"] = None
     return [
         ThinkingBlock(type="thinking", thinking="plan", signature="signed-data"),
         *texts,
-        ToolUseBlock(type="tool_use", id=call_id, name="demo_tool", input={"x": 2}),
+        tool_block,
     ]
 
 
@@ -67,6 +73,7 @@ def test_sdk_text_blocks_survive_tool_replay_and_followup(model):
         )]),
     ]
     expected_texts = [block.model_dump() for block in texts]
+    assert expected_texts[0]["citations"] is None
     responses = [
         _tool_blocks(call_id="toolu_1", texts=texts),
         [TextBlock(type="text", text="first done")],
