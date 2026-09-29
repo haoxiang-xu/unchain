@@ -2109,6 +2109,62 @@ class ContextRuntime:
             )
         return _thaw_json(projection["result"])
 
+    def emit_persisted_tool_result(
+        self,
+        context: HarnessContext,
+        receipt,
+        *,
+        result: dict[str, Any],
+    ) -> None:
+        """Forward one verified durable completion to the host callback.
+
+        The executor has already persisted the receipt. Sending the same event
+        through the ordinary composed callback would attempt to persist a
+        second ``tool_result`` and fail closed, so this path only forwards a
+        receipt that is bound to the active context and tool call.
+        """
+
+        from .tool_executor import DurableToolCompletionReceipt
+        from ..kernel.types import ToolCall
+
+        if not isinstance(context, HarnessContext):
+            raise TypeError("persisted tool result requires a HarnessContext")
+        if type(receipt) is not DurableToolCompletionReceipt:
+            raise TypeError("persisted tool result requires a durable receipt")
+        if not isinstance(result, dict):
+            raise TypeError("persisted tool result must be an object")
+        tool_call = context.event.get("tool_call")
+        if not isinstance(tool_call, ToolCall):
+            raise ContextExecutionBundleError(
+                "persisted tool result has no bound tool call"
+            )
+        bundle = self._bundle_for_context(context)
+        if (
+            receipt.attempt != bundle.attempt
+            or receipt.tool_name != tool_call.name
+            or receipt.call_id != tool_call.call_id
+            or receipt.iteration != context.state.iteration
+        ):
+            raise ContextExecutionBundleError(
+                "persisted tool result does not match the active tool context"
+            )
+        callback = context.event.get("callback")
+        if callback is None:
+            return
+        event = {
+            "type": "tool_result",
+            "run_id": str(context.event.get("run_id") or "kernel"),
+            "iteration": int(context.state.iteration),
+            "tool_name": tool_call.name,
+            "call_id": tool_call.call_id,
+            "result": copy.deepcopy(result),
+        }
+        deliver = getattr(callback, "deliver_persisted_tool_result", None)
+        if callable(deliver):
+            deliver(event)
+        else:
+            callback(event)
+
     def materialize_tool_transition(self, context: HarnessContext, receipt):
         """Resolve a receipt transition through this attempt's capabilities."""
 
@@ -2515,9 +2571,40 @@ class ContextRuntime:
             finally:
                 _ACTIVE_DURABLE_EVENTS.reset(token)
 
+        def deliver_persisted_tool_result(event: dict[str, Any]) -> Any:
+            """Forward a receipt-backed tool completion without persisting it again."""
+
+            if (
+                type(event) is not dict
+                or event.get("type") != "tool_result"
+                or not isinstance(event.get("run_id"), str)
+                or not event["run_id"]
+                or not isinstance(event.get("iteration"), int)
+                or event["iteration"] < 0
+                or not isinstance(event.get("tool_name"), str)
+                or not event["tool_name"]
+                or not isinstance(event.get("call_id"), str)
+                or not event["call_id"]
+                or not isinstance(event.get("result"), dict)
+            ):
+                raise ValueError("persisted tool result event is invalid")
+            if host_callback is None:
+                return None
+            nested_delivery = getattr(
+                host_callback,
+                "deliver_persisted_tool_result",
+                None,
+            )
+            if callable(nested_delivery):
+                return nested_delivery(event)
+            return host_callback(event)
+
         persist_before_host.emit_provisional_reasoning = emit_provisional_reasoning
         persist_before_host.commit_provisional_reasoning = commit_provisional_reasoning
         persist_before_host.discard_provisional_reasoning = discard_provisional_reasoning
+        persist_before_host.deliver_persisted_tool_result = (
+            deliver_persisted_tool_result
+        )
         return persist_before_host
 
     @staticmethod

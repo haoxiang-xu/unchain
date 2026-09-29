@@ -109,6 +109,28 @@ class ContextToolAuthorityHarness(BaseRuntimeHarness):
                 tool_result=visible_result,
             )
         )
+        emit_persisted_tool_result = getattr(
+            self.runtime,
+            "emit_persisted_tool_result",
+            None,
+        )
+        if callable(emit_persisted_tool_result):
+            emit_persisted_tool_result(
+                context,
+                receipt,
+                result=visible_result,
+            )
+        else:  # pragma: no cover - compatibility for isolated harness fakes
+            emit_loop_event(
+                context.event.get("loop"),
+                context.event.get("callback"),
+                "tool_result",
+                str(context.event.get("run_id") or "kernel"),
+                iteration=int(context.state.iteration),
+                tool_name=tool_call.name,
+                call_id=tool_call.call_id,
+                result=copy.deepcopy(visible_result),
+            )
         state_updates = {
             "tool_batch_state": ToolBatchState(
                 result_messages=result_messages,

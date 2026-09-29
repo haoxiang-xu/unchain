@@ -162,6 +162,21 @@ def test_tool_authority_harness_projects_only_the_durable_completion():
         _bundles,
     ) = _factory_tool_runtime(attempt_id="attempt-harness")
     context.state.provider_state.provider = "openai"
+    emitted = []
+
+    class Loop:
+        @staticmethod
+        def emit_event(callback, event_type, run_id, *, iteration, **extra):
+            callback(
+                {
+                    "type": event_type,
+                    "run_id": run_id,
+                    "iteration": iteration,
+                    **extra,
+                }
+            )
+
+    context.event.update({"loop": Loop(), "callback": emitted.append})
     try:
         harness = runtime.build_harnesses()[1]
         delta = harness.build_delta(context)
@@ -176,6 +191,25 @@ def test_tool_authority_harness_projects_only_the_durable_completion():
             "tool_call",
             "tool.started",
             "tool_result",
+        ]
+        assert emitted == [
+            {
+                "type": "tool_call",
+                "run_id": "attempt-harness",
+                "iteration": 0,
+                "tool_name": "lookup",
+                "call_id": "call-1",
+                "arguments": {"query": "journal-owned"},
+                "source_provider": "openai",
+            },
+            {
+                "type": "tool_result",
+                "run_id": "attempt-harness",
+                "iteration": 0,
+                "tool_name": "lookup",
+                "call_id": "call-1",
+                "result": {"seen": "journal-owned"},
+            },
         ]
     finally:
         guard.release()

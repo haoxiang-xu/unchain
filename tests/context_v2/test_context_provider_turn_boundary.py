@@ -713,10 +713,11 @@ def test_tool_bearing_turn_persists_result_and_continues_through_same_boundary(
         harnesses=list(runtime.build_harnesses()),
         execution_runtime=ExecutionRuntime(InMemorySessionStore()),
     )
+    emitted: list[dict] = []
 
     result = loop.run(
         messages=[{"role": "user", "content": "call the probe"}],
-        callback=runtime.compose_event_callback(None),
+        callback=runtime.compose_event_callback(emitted.append),
         session_id="execution-boundary-tool",
         provider="openai",
         model="gpt-boundary",
@@ -736,5 +737,15 @@ def test_tool_bearing_turn_persists_result_and_continues_through_same_boundary(
     assert event_types.count("provider.turn_result") == 2
     assert event_types.count("tool_call") == 1
     assert event_types.count("tool_result") == 1
+    tool_results = [
+        event
+        for event in emitted
+        if event.get("type") == "tool_result"
+        and event.get("call_id") == "call-provider-probe"
+    ]
+    assert len(tool_results) == 1
+    assert tool_results[0]["run_id"] == "attempt-boundary-tool"
+    assert tool_results[0]["tool_name"] == "probe"
+    assert isinstance(tool_results[0].get("result"), dict)
     assert raw_result_marker not in repr(send_calls[1])
     assert "artifact_only" in repr(send_calls[1])
