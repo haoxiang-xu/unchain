@@ -590,6 +590,7 @@ class KernelLoop:
                     execution_guard.assert_active()
                 request = build_model_turn_request(
                     state,
+                    model_io=self._model_io,
                     payload=payload,
                     toolkit=preparation.model_toolkit,
                     callback=callback,
@@ -663,6 +664,7 @@ class KernelLoop:
                     )
                     request = build_model_turn_request(
                         state,
+                        model_io=self._model_io,
                         payload=payload,
                         toolkit=runtime_toolkit,
                         callback=callback,

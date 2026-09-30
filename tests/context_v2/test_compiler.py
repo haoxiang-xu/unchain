@@ -370,6 +370,226 @@ def test_closed_tool_exchange_and_open_call_are_neutral_and_atomic() -> None:
     assert not any(item.get("type") == "function_call" for item in result.messages)
 
 
+def test_closed_tool_exchanges_follow_durable_completion_order() -> None:
+    first_ref = ResourceRef("artifact", "artifact-first", 1)
+    second_ref = ResourceRef("artifact", "artifact-second", 1)
+    result = ContextCompiler().compile(
+        _request(
+            [{"role": "user", "content": "current"}],
+            events=[
+                {
+                    "type": "tool_call",
+                    "event_id": "call-b-event",
+                    "store_seq": 1,
+                    "call_id": "call-b",
+                    "tool_name": "lookup",
+                    "arguments": {"query": "b"},
+                },
+                {
+                    "type": "tool_call",
+                    "event_id": "call-a-event",
+                    "store_seq": 2,
+                    "call_id": "call-a",
+                    "tool_name": "lookup",
+                    "arguments": {"query": "a"},
+                },
+                {
+                    "type": "tool_result",
+                    "event_id": "result-b-event",
+                    "store_seq": 3,
+                    "call_id": "call-b",
+                    "tool_name": "lookup",
+                    "result": {"preview": "b"},
+                    "full_output_ref": first_ref.to_dict(),
+                    "result_bytes": 1,
+                    "result_sha256": "b" * 64,
+                },
+                {
+                    "type": "tool_result",
+                    "event_id": "result-a-event",
+                    "store_seq": 4,
+                    "call_id": "call-a",
+                    "tool_name": "lookup",
+                    "result": {"preview": "a"},
+                    "full_output_ref": second_ref.to_dict(),
+                    "result_bytes": 1,
+                    "result_sha256": "a" * 64,
+                },
+            ],
+        )
+    )
+
+    history = _marker_payload(result.messages, "MEMORY_V2_UNTRUSTED_HISTORY")
+    assert [item["call_id"] for item in history["tool_exchanges"]] == [
+        "call-b",
+        "call-a",
+    ]
+
+
+def test_checkpoint_covered_tool_exchange_is_not_reinjected() -> None:
+    artifact_ref = ResourceRef("artifact", "covered-tool-output", 1)
+    result = _compile_coordinator_bound(
+        _request(
+            [
+                {"role": "user", "content": "old " + ("x" * 30_000)},
+                {"role": "assistant", "content": "old answer"},
+                {"role": "user", "content": "current"},
+            ],
+            events=[
+                {
+                    "type": "message.user",
+                    "event_id": "source-old",
+                    "store_seq": 10,
+                    "execution_id": "execution-1",
+                    "generation_id": "generation-1",
+                    "attempt_id": "attempt-history",
+                    "run_id": "attempt-history",
+                    "message": {"role": "user", "content": "old " + ("x" * 30_000)},
+                },
+                {
+                    "type": "message.assistant",
+                    "event_id": "source-answer",
+                    "store_seq": 20,
+                    "execution_id": "execution-1",
+                    "generation_id": "generation-1",
+                    "attempt_id": "attempt-history",
+                    "run_id": "attempt-history",
+                    "message": {"role": "assistant", "content": "old answer"},
+                },
+                {
+                    "type": "message.user",
+                    "event_id": "source-current",
+                    "store_seq": 30,
+                    "execution_id": "execution-1",
+                    "generation_id": "generation-1",
+                    "attempt_id": "attempt-1",
+                    "run_id": "attempt-1",
+                    "message": {"role": "user", "content": "current"},
+                },
+                {
+                    "type": "tool_call",
+                    "event_id": "covered-call",
+                    "store_seq": 1,
+                    "execution_id": "execution-1",
+                    "generation_id": "generation-1",
+                    "call_id": "covered-call",
+                    "tool_name": "lookup",
+                    "arguments": {"query": "old"},
+                },
+                {
+                    "type": "tool_result",
+                    "event_id": "covered-result",
+                    "store_seq": 2,
+                    "execution_id": "execution-1",
+                    "generation_id": "generation-1",
+                    "call_id": "covered-call",
+                    "tool_name": "lookup",
+                    "result": {"preview": "old result"},
+                    "full_output_ref": artifact_ref.to_dict(),
+                    "result_bytes": 10,
+                    "result_sha256": "c" * 64,
+                },
+            ],
+            source_event_ids=("source-old", "source-answer", "source-current"),
+            source_event_store_seqs=(10, 20, 30),
+            window=8_192,
+            checkpoint_ref=ResourceRef("checkpoint", "checkpoint-covered", 1),
+            build_identity=True,
+        )
+    )
+
+    assert not any(
+        "MEMORY_V2_UNTRUSTED_HISTORY" in str(message.get("content") or "")
+        for message in result.messages
+    )
+
+
+def test_completed_tool_exchange_remains_until_checkpoint_coverage() -> None:
+    old_ref = ResourceRef("artifact", "old-tool-output", 1)
+    current_ref = ResourceRef("artifact", "current-tool-output", 1)
+    result = ContextCompiler().compile(
+        _request(
+            [
+                {"role": "user", "content": "old task"},
+                {"role": "assistant", "content": "old answer"},
+                {"role": "user", "content": "current task"},
+            ],
+            events=[
+                {
+                    "type": "message.user",
+                    "event_id": "old-user",
+                    "store_seq": 1,
+                    "attempt_id": "attempt-history",
+                    "run_id": "attempt-history",
+                    "message": {"role": "user", "content": "old task"},
+                },
+                {
+                    "type": "tool_call",
+                    "event_id": "old-call",
+                    "store_seq": 2,
+                    "call_id": "old-call",
+                    "tool_name": "lookup",
+                    "arguments": {"query": "old"},
+                },
+                {
+                    "type": "tool_result",
+                    "event_id": "old-result",
+                    "store_seq": 3,
+                    "call_id": "old-call",
+                    "tool_name": "lookup",
+                    "result": {"preview": "old result"},
+                    "full_output_ref": old_ref.to_dict(),
+                    "result_bytes": 10,
+                    "result_sha256": "a" * 64,
+                },
+                {
+                    "type": "message.assistant",
+                    "event_id": "old-assistant",
+                    "store_seq": 4,
+                    "attempt_id": "attempt-history",
+                    "run_id": "attempt-history",
+                    "message": {"role": "assistant", "content": "old answer"},
+                },
+                {
+                    "type": "message.user",
+                    "event_id": "current-user",
+                    "store_seq": 5,
+                    "attempt_id": "attempt-1",
+                    "run_id": "attempt-1",
+                    "message": {"role": "user", "content": "current task"},
+                },
+                {
+                    "type": "tool_call",
+                    "event_id": "current-call",
+                    "store_seq": 6,
+                    "call_id": "current-call",
+                    "tool_name": "lookup",
+                    "arguments": {"query": "current"},
+                },
+                {
+                    "type": "tool_result",
+                    "event_id": "current-result",
+                    "store_seq": 7,
+                    "call_id": "current-call",
+                    "tool_name": "lookup",
+                    "result": {"preview": "current result"},
+                    "full_output_ref": current_ref.to_dict(),
+                    "result_bytes": 14,
+                    "result_sha256": "b" * 64,
+                },
+            ],
+            source_event_ids=("old-user", "old-assistant", "current-user"),
+            source_event_store_seqs=(1, 4, 5),
+        )
+    )
+
+    history = _marker_payload(result.messages, "MEMORY_V2_UNTRUSTED_HISTORY")
+    assert [item["call_id"] for item in history["tool_exchanges"]] == [
+        "old-call",
+        "current-call",
+    ]
+
+
 @pytest.mark.parametrize(
     ("provider", "expected_call", "expected_result"),
     [

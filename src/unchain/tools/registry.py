@@ -21,6 +21,7 @@ try:  # pragma: no cover - Python 3.10+
 except ImportError:  # pragma: no cover - Python 3.9 fallback
     from importlib_metadata import entry_points
 
+from .models import SkillDescriptor
 from .toolkit import Toolkit as RuntimeToolkit
 
 _ICON_SUFFIXES = {".svg", ".png"}
@@ -96,8 +97,8 @@ _BUILTIN_ARTIFACT_KIND_NAMES = {
     item["kind"] for item in _BUILTIN_ARTIFACT_KIND_DEFINITIONS
 }
 
-_SKILL_PHASES = frozenset({"composer", "streaming", "always"})
-_SKILL_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
+_SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_SKILL_NAME_MAX_LENGTH = 64
 
 
 def _read_markdown(path: Path) -> str:
@@ -323,26 +324,6 @@ class ToolDescriptor:
 
 
 @dataclass
-class SkillDescriptor:
-    name: str
-    title: str
-    description: str
-    body: str
-    tools: tuple[str, ...] = ()
-    phase: str = "composer"
-
-    def to_summary(self) -> dict[str, Any]:
-        return {
-            "name": self.name,
-            "title": self.title,
-            "description": self.description,
-            "body": self.body,
-            "tools": list(self.tools),
-            "phase": self.phase,
-        }
-
-
-@dataclass
 class IconDescriptor:
     type: str
     path: Path | None = None
@@ -449,10 +430,7 @@ class ToolkitDescriptor:
         )
 
     def sorted_skills(self) -> list[SkillDescriptor]:
-        return sorted(
-            self.skills.values(),
-            key=lambda item: (item.title.casefold(), item.name.casefold()),
-        )
+        return sorted(self.skills.values(), key=lambda item: item.name.casefold())
 
     def to_summary(self, *, include_tools: bool = True) -> dict[str, Any]:
         payload = {
@@ -706,6 +684,7 @@ class ToolkitRegistry:
                 "did not return a unchain.tools.Toolkit"
             )
         self._apply_runtime_tool_metadata(runtime_toolkit, descriptor)
+        runtime_toolkit.skills = tuple(descriptor.sorted_skills())
         return runtime_toolkit
 
     def _apply_runtime_tool_metadata(
@@ -913,30 +892,38 @@ class ToolkitRegistry:
             if not isinstance(skill_item, dict):
                 raise ValueError(f"{manifest_path}: invalid [[skills]] entry")
             skill_name = _require_str(skill_item, "name", manifest_path)
-            if not _SKILL_NAME_RE.match(skill_name):
+            if len(skill_name) > _SKILL_NAME_MAX_LENGTH or not _SKILL_NAME_RE.match(skill_name):
                 raise ValueError(
-                    f"{manifest_path}: skill name '{skill_name}' must match [a-zA-Z0-9_-]+"
+                    f"{manifest_path}: skill name '{skill_name}' must be kebab-case "
+                    "([a-z0-9]+(-[a-z0-9]+)*) and at most 64 characters"
                 )
             if skill_name in skills:
                 raise ValueError(f"{manifest_path}: duplicate skill '{skill_name}'")
-            skill_phase = _optional_str(skill_item, "phase") or "composer"
-            if skill_phase not in _SKILL_PHASES:
-                raise ValueError(
-                    f"{manifest_path}: skill '{skill_name}' has invalid phase '{skill_phase}'"
-                )
             skill_tools = _string_list(skill_item, "tools")
             for tool_ref in skill_tools:
                 if tool_ref not in tools:
                     raise ValueError(
                         f"{manifest_path}: skill '{skill_name}' references unknown tool '{tool_ref}'"
                     )
+            skill_aliases = _string_list(skill_item, "aliases")
+            for alias in skill_aliases:
+                if len(alias) > _SKILL_NAME_MAX_LENGTH or not _SKILL_NAME_RE.match(alias):
+                    raise ValueError(
+                        f"{manifest_path}: skill '{skill_name}' alias '{alias}' must be kebab-case"
+                    )
             skills[skill_name] = SkillDescriptor(
                 name=skill_name,
-                title=_optional_str(skill_item, "title") or skill_name,
                 description=_require_str(skill_item, "description", manifest_path),
                 body=_require_str(skill_item, "body", manifest_path),
                 tools=tuple(skill_tools),
-                phase=skill_phase,
+                base_dir=root_path,
+                model_invocable=not _coerce_bool(
+                    skill_item.get("disable-model-invocation"), default=False
+                ),
+                user_invocable=_coerce_bool(skill_item.get("user-invocable"), default=True),
+                aliases=skill_aliases,
+                source="toolkit",
+                source_id=toolkit_id,
             )
 
         artifact_kinds = _parse_artifact_kinds(

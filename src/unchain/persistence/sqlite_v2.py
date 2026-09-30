@@ -520,7 +520,13 @@ class SQLiteContextV2Store:
             connection = self._connect()
             try:
                 existing_versions = self._existing_schema_versions(connection)
-                if existing_versions not in (None, {1}, {1, 2}):
+                if existing_versions not in (
+                    None,
+                    {1},
+                    {1, 2},
+                    {1, 3},
+                    {1, 2, 3},
+                ):
                     raise SQLiteContextV2StoreIntegrityError(
                         "SQLite Context V2 schema version is unsupported"
                     )
@@ -542,7 +548,9 @@ class SQLiteContextV2Store:
                     CREATE TABLE IF NOT EXISTS executions (
                         execution_id TEXT PRIMARY KEY,
                         next_store_seq INTEGER NOT NULL DEFAULT 1
-                            CHECK(next_store_seq >= 1)
+                            CHECK(next_store_seq >= 1),
+                        integrity_revision INTEGER NOT NULL DEFAULT 0
+                            CHECK(integrity_revision >= 0)
                     );
 
                     CREATE TABLE IF NOT EXISTS operations (
@@ -821,6 +829,94 @@ class SQLiteContextV2Store:
                         );
                     """
                 )
+                execution_columns = {
+                    str(row["name"])
+                    for row in connection.execute("PRAGMA table_info(executions)")
+                }
+                if "integrity_revision" not in execution_columns:
+                    connection.execute(
+                        "ALTER TABLE executions ADD COLUMN integrity_revision "
+                        "INTEGER NOT NULL DEFAULT 0 CHECK(integrity_revision >= 0)"
+                    )
+                for statement in (
+                    """
+                    CREATE TRIGGER IF NOT EXISTS context_v2_event_integrity_replace
+                    BEFORE INSERT ON events
+                    WHEN EXISTS (
+                        SELECT 1 FROM events
+                        WHERE execution_id = NEW.execution_id
+                          AND (
+                              store_seq = NEW.store_seq
+                              OR event_id = NEW.event_id
+                              OR operation_id = NEW.operation_id
+                          )
+                    )
+                    BEGIN
+                        UPDATE executions
+                        SET integrity_revision = integrity_revision + 1
+                        WHERE execution_id = NEW.execution_id;
+                    END
+                    """,
+                    """
+                    CREATE TRIGGER IF NOT EXISTS context_v2_event_integrity_delete
+                    AFTER DELETE ON events
+                    BEGIN
+                        UPDATE executions
+                        SET integrity_revision = integrity_revision + 1
+                        WHERE execution_id = OLD.execution_id;
+                    END
+                    """,
+                    """
+                    CREATE TRIGGER IF NOT EXISTS context_v2_operation_integrity_replace
+                    BEFORE INSERT ON operations
+                    WHEN EXISTS (
+                        SELECT 1 FROM operations
+                        WHERE execution_id = NEW.execution_id
+                          AND operation_id = NEW.operation_id
+                    )
+                    BEGIN
+                        UPDATE executions
+                        SET integrity_revision = integrity_revision + 1
+                        WHERE execution_id = NEW.execution_id;
+                    END
+                    """,
+                    """
+                    CREATE TRIGGER IF NOT EXISTS context_v2_operation_integrity_delete
+                    AFTER DELETE ON operations
+                    BEGIN
+                        UPDATE executions
+                        SET integrity_revision = integrity_revision + 1
+                        WHERE execution_id = OLD.execution_id;
+                    END
+                    """,
+                ):
+                    connection.execute(statement)
+                update_triggers_changed = False
+                for entity, table in (("event", "events"), ("operation", "operations")):
+                    name = f"context_v2_{entity}_integrity_update"
+                    statement = f"""CREATE TRIGGER {name}
+                    AFTER UPDATE ON {table}
+                    BEGIN
+                        UPDATE executions
+                        SET integrity_revision = integrity_revision + 1
+                        WHERE execution_id IN (OLD.execution_id, NEW.execution_id);
+                    END"""
+                    existing = connection.execute(
+                        "SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?",
+                        (name,),
+                    ).fetchone()
+                    if existing is not None and existing["sql"] == statement:
+                        continue
+                    connection.execute(f"DROP TRIGGER IF EXISTS {name}")
+                    connection.execute(statement)
+                    update_triggers_changed = True
+                if update_triggers_changed:
+                    connection.execute(
+                        "UPDATE executions SET integrity_revision = integrity_revision + 1"
+                    )
+                connection.execute(
+                    "INSERT OR IGNORE INTO context_v2_schema(version) VALUES (3)"
+                )
                 self._upgrade_provider_request_leases(connection)
                 self._validate_provider_request_lease_heads(connection)
                 self._validate_provider_request_evidence(connection)
@@ -828,7 +924,7 @@ class SQLiteContextV2Store:
                     int(row[0])
                     for row in connection.execute("SELECT version FROM context_v2_schema")
                 }
-                if versions != {1, 2}:
+                if versions != {1, 2, 3}:
                     raise SQLiteContextV2StoreIntegrityError(
                         "SQLite Context V2 schema version is unsupported"
                     )
@@ -2518,6 +2614,70 @@ class _SQLiteBoundContextV2Repository(
         except sqlite3.Error as exc:
             raise JournalRepositoryError("SQLite journal read failed") from exc
 
+    def snapshot_integrity_revision(self) -> int | None:
+        """Return the trigger-backed revision for journal mutation detection."""
+
+        try:
+            with self._store._transaction(immediate=False) as connection:
+                row = connection.execute(
+                    "SELECT integrity_revision FROM executions WHERE execution_id = ?",
+                    (self.execution_id,),
+                ).fetchone()
+        except sqlite3.Error as exc:
+            raise JournalRepositoryError(
+                "SQLite journal integrity revision read failed"
+            ) from exc
+        return 0 if row is None else int(row["integrity_revision"])
+
+    def snapshot_prefix_is_current(
+        self,
+        *,
+        snapshot: JournalSnapshot,
+        integrity_revision: int | None = None,
+    ) -> bool:
+        """Cheaply prove no durable mutation changed a cached prefix."""
+
+        if not isinstance(snapshot, JournalSnapshot):
+            raise TypeError("snapshot must be a JournalSnapshot")
+        if snapshot.execution_id != self.execution_id:
+            return False
+        if integrity_revision is None or type(integrity_revision) is not int:
+            return False
+        if snapshot.event_count == 0:
+            return (
+                snapshot.high_water is None
+                and integrity_revision == self.snapshot_integrity_revision()
+            )
+        if snapshot.high_water is None:
+            return False
+        try:
+            with self._store._transaction(immediate=False) as connection:
+                revision_row = connection.execute(
+                    "SELECT integrity_revision FROM executions WHERE execution_id = ?",
+                    (self.execution_id,),
+                ).fetchone()
+                current_revision = (
+                    0 if revision_row is None else int(revision_row["integrity_revision"])
+                )
+                if current_revision != integrity_revision:
+                    return False
+                prefix = connection.execute(
+                    """
+                    SELECT COUNT(*) AS event_count, MAX(store_seq) AS high_water
+                    FROM events
+                    WHERE execution_id = ? AND store_seq <= ?
+                    """,
+                    (self.execution_id, snapshot.high_water.store_seq),
+                ).fetchone()
+        except sqlite3.Error as exc:
+            raise JournalRepositoryError(
+                "SQLite journal prefix verification failed"
+            ) from exc
+        return (
+            int(prefix["event_count"]) == snapshot.event_count
+            and int(prefix["high_water"]) == snapshot.high_water.store_seq
+        )
+
     def _snapshot_with_connection(
         self,
         connection: sqlite3.Connection,
@@ -2566,6 +2726,31 @@ class _SQLiteBoundContextV2Repository(
                 )
         except sqlite3.Error as exc:
             raise JournalRepositoryError("SQLite journal snapshot failed") from exc
+
+    def capture_snapshot_with_integrity_revision(
+        self,
+        *,
+        max_events: int = 10_000,
+        max_bytes: int = 32 * 1024 * 1024,
+    ) -> tuple[JournalSnapshot, int | None]:
+        """Atomically pair a journal snapshot with its mutation revision."""
+
+        try:
+            with self._store._transaction(immediate=False) as connection:
+                snapshot = self._snapshot_with_connection(
+                    connection,
+                    max_events=max_events,
+                    max_bytes=max_bytes,
+                )
+                row = connection.execute(
+                    "SELECT integrity_revision FROM executions WHERE execution_id = ?",
+                    (self.execution_id,),
+                ).fetchone()
+        except sqlite3.Error as exc:
+            raise JournalRepositoryError(
+                "SQLite journal snapshot revision read failed"
+            ) from exc
+        return snapshot, 0 if row is None else int(row["integrity_revision"])
 
     def _lookup_receipt_events(
         self,

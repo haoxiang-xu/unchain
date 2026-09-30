@@ -255,7 +255,7 @@ def test_store_status_is_database_scoped_read_only_and_fails_closed(
     assert status.to_dict() == {
         "schema": "unchain.sqlite_context_v2_store_read_status.v1",
         "available": True,
-        "schema_version": 2,
+        "schema_version": 3,
         "journal_mode": "wal",
         "lexical_backend": "fts5",
         "vector_status": "disabled",

@@ -285,6 +285,7 @@ _PROTOCOLS = (
             "enforce_mode",
             "graph_runs",
             "memory_off",
+            "ollama_reasoning_preview_v1",
             "subagent_runs",
         ),
     ),
@@ -302,6 +303,19 @@ _PROTOCOLS = (
             "provider_call_usage_v1",
             "run_bundle_v1",
             "run_bundle_v2",
+        ),
+    ),
+    RuntimeProtocol(
+        id="skills",
+        major=1,
+        minor=0,
+        features=(
+            "active_skills_snapshot_v1",
+            "catalog_v1",
+            "skill_md_registry_v1",
+            "skill_tool_v1",
+            "toolkit_embedded_skills_v1",
+            "user_invocation_v1",
         ),
     ),
 )

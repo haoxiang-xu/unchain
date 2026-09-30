@@ -60,6 +60,55 @@ class BoundExecutionJournal(ABC):
     ) -> JournalSnapshot:
         """Atomically capture a bounded execution high-water snapshot."""
 
+    def snapshot_integrity_revision(self) -> int | None:
+        """Return a durable mutation revision when the adapter exposes one.
+
+        `None` preserves the generic safe behavior: callers must validate a
+        full durable snapshot before reusing a cached prefix.
+        """
+
+        return None
+
+    def capture_snapshot_with_integrity_revision(
+        self,
+        *,
+        max_events: int = 10_000,
+        max_bytes: int = 32 * 1024 * 1024,
+    ) -> tuple[JournalSnapshot, int | None]:
+        """Capture a snapshot together with its durable mutation revision.
+
+        Adapters with a compact revision should override this so both values
+        come from one durable read transaction. The default remains safe for
+        adapters without one because later prefix validation rehydrates the
+        durable prefix instead of trusting the revision.
+        """
+
+        return (
+            self.capture_snapshot(max_events=max_events, max_bytes=max_bytes),
+            self.snapshot_integrity_revision(),
+        )
+
+    def snapshot_prefix_is_current(
+        self,
+        *,
+        snapshot: JournalSnapshot,
+        integrity_revision: int | None = None,
+    ) -> bool:
+        """Check whether a previously captured durable prefix is still exact.
+
+        Implementations with a compact journal identity should override this
+        method. The generic fallback deliberately rehydrates from durable
+        authority so a cache cannot turn an unknown adapter into a stale
+        history source.
+        """
+
+        if not isinstance(snapshot, JournalSnapshot):
+            raise TypeError("snapshot must be a JournalSnapshot")
+        if snapshot.execution_id != self.execution_id:
+            return False
+        current = self.capture_snapshot()
+        return current.events[: snapshot.event_count] == snapshot.events
+
     def append_with_artifacts(
         self,
         *,

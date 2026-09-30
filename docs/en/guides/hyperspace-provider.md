@@ -81,6 +81,22 @@ The `anthropic` SDK already sends `X-Api-Key: <key>` and `anthropic-version: 202
 
 ## Tests
 
+### Kimi K2.7 Code replay compatibility
+
+For `kimi-k2.7-code` at `https://api.moonshot.ai/anthropic` or
+`https://api.moonshot.cn/anthropic`, the adapter preserves unsigned thinking in
+provider-private replay using `kimi.unsigned-thinking.v1`. The persisted profile
+is bound to the exact model and endpoint; the next request must have the same
+live adapter profile. Native Anthropic, other models and other proxy endpoints
+continue to require signed thinking. This is not a generic unsigned-thinking
+switch. Payload model overrides and mismatched/unknown replay profiles fail
+before provider execution. Existing unprofiled frames retain the old strict
+rules; broken historical checkpoints are not rewritten.
+
+`tests/test_kimi_replay.py` covers repeated tools, route identity rejection and
+cold restart, including the official Context v2 approval path. These deterministic
+tests do not substitute for real provider qualification.
+
 See `tests/test_hyperspace_model_io.py` for the full test suite (request building, streaming, tool use, extended thinking, validation).
 
 ```bash

@@ -985,6 +985,16 @@ class ContextRuntime:
             ledger=bundle.run_bundle_ledger,
         )
 
+    def skill_activation_journal(self, context: HarnessContext):
+        """Return the current owner-bound journal and attempt for SkillsModule."""
+        if self.execution_factory is not None:
+            bundle = self._bundle_for_context(context)
+            return bundle.attempt, bundle.journal
+        factory = self.request_factory
+        if not hasattr(factory, "journal") or not hasattr(factory, "attempt"):
+            raise ContextExecutionBundleError("skills require a bound context journal")
+        return factory.attempt, factory.journal
+
     def compile_context(self, context: HarnessContext) -> ContextCompileResult:
         if self.execution_factory is None:
             request_factory = self.request_factory
@@ -2397,6 +2407,98 @@ class ContextRuntime:
         self,
         host_callback: Callable[[dict[str, Any]], Any] | None,
     ) -> Callable[[dict[str, Any]], Any]:
+        def validate_provisional_reasoning(event: dict[str, Any]) -> None:
+            if (
+                type(event) is not dict
+                or set(event) != {"type", "run_id", "iteration", "provider", "delta"}
+                or event["type"] != "reasoning"
+                or type(event["run_id"]) is not str
+                or not event["run_id"]
+                or type(event["iteration"]) is not int
+                or event["iteration"] < 0
+                or event["provider"] != "ollama"
+                or type(event["delta"]) is not str
+                or not event["delta"]
+            ):
+                raise ValueError("provisional reasoning requires an exact Ollama event")
+
+        def validate_preview_id(preview_id: str) -> None:
+            if (
+                type(preview_id) is not str
+                or len(preview_id) != 32
+                or any(character not in "0123456789abcdef" for character in preview_id)
+            ):
+                raise ValueError("provisional reasoning ID must be lowercase hex")
+
+        def emit_provisional_reasoning(event: dict[str, Any], preview_id: str) -> Any:
+            validate_provisional_reasoning(event)
+            validate_preview_id(preview_id)
+            if self.execution_factory is not None:
+                bundle = self._bundle_for_event(event)
+                attempt_key = (
+                    bundle.attempt.generation.execution_id,
+                    bundle.attempt.attempt_id,
+                )
+            else:
+                attempt_key = self._attempt_key(event)
+            self._raise_latched_failure(attempt_key)
+            if host_callback is None:
+                return None
+            nested_preview = getattr(host_callback, "emit_provisional_reasoning", None)
+            if callable(nested_preview):
+                return nested_preview(event, preview_id)
+            preview = copy.deepcopy(event)
+            preview["provisional_reasoning_id"] = preview_id
+            return host_callback(preview)
+
+        def commit_provisional_reasoning(event: dict[str, Any]) -> None:
+            validate_provisional_reasoning(event)
+            active_events = _ACTIVE_DURABLE_EVENTS.get()
+            event_key = (self.owner_id, id(event))
+            if event_key in active_events:
+                return
+            token = _ACTIVE_DURABLE_EVENTS.set((*active_events, event_key))
+            try:
+                self.persist_event(event)
+                nested_commit = getattr(
+                    host_callback, "commit_provisional_reasoning", None
+                )
+                if callable(nested_commit):
+                    try:
+                        nested_commit(event)
+                    except BaseException as error:
+                        # Another owner may fail after this journal has accepted
+                        # the event. Its live preview must remain replayable.
+                        error._unchain_provisional_reasoning_journaled = True
+                        raise
+            finally:
+                _ACTIVE_DURABLE_EVENTS.reset(token)
+
+        def discard_provisional_reasoning(
+            *, preview_id: str, run_id: str, iteration: int
+        ) -> Any:
+            validate_preview_id(preview_id)
+            if type(run_id) is not str or not run_id:
+                raise ValueError("provisional reasoning reset requires a run ID")
+            if type(iteration) is not int or iteration < 0:
+                raise ValueError("provisional reasoning reset requires an iteration")
+            if host_callback is None:
+                return None
+            nested_discard = getattr(host_callback, "discard_provisional_reasoning", None)
+            if callable(nested_discard):
+                return nested_discard(
+                    preview_id=preview_id, run_id=run_id, iteration=iteration
+                )
+            return host_callback(
+                {
+                    "type": "reasoning_preview_discarded",
+                    "run_id": run_id,
+                    "iteration": iteration,
+                    "provider": "ollama",
+                    "provisional_reasoning_id": preview_id,
+                }
+            )
+
         def persist_before_host(event: dict[str, Any]) -> Any:
             active_events = _ACTIVE_DURABLE_EVENTS.get()
             event_key = (self.owner_id, id(event))
@@ -2413,6 +2515,9 @@ class ContextRuntime:
             finally:
                 _ACTIVE_DURABLE_EVENTS.reset(token)
 
+        persist_before_host.emit_provisional_reasoning = emit_provisional_reasoning
+        persist_before_host.commit_provisional_reasoning = commit_provisional_reasoning
+        persist_before_host.discard_provisional_reasoning = discard_provisional_reasoning
         return persist_before_host
 
     @staticmethod

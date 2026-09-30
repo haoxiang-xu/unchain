@@ -263,6 +263,7 @@ def _with_fallback_replay_frame(
 def build_model_turn_request(
     state: RunState,
     *,
+    model_io: ModelIO | None = None,
     payload: dict[str, Any] | None = None,
     toolkit: Toolkit | None = None,
     callback: Any = None,
@@ -276,6 +277,7 @@ def build_model_turn_request(
     assembly = ProviderContextAssembler().assemble(
         state,
         toolkit=resolved_toolkit,
+        replay_profile=getattr(model_io, "provider_replay_profile", None),
     )
     from ..optimizers.context_usage import context_usage_request_note
 
@@ -407,6 +409,7 @@ def fetch_model_turn(
 ) -> ModelTurnResult:
     request = build_model_turn_request(
         state,
+        model_io=model_io,
         payload=payload,
         toolkit=toolkit,
         callback=callback,

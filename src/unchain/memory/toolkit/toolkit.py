@@ -5,6 +5,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from unchain.journal import ResourceRef
+from unchain.memory.workspace import MemoryEntry
 from unchain.tools import Tool, Toolkit
 
 from .capabilities import (
@@ -85,6 +86,87 @@ def _bounded_response_items(
     return values
 
 
+def _project_entry(
+    value: Any,
+    *,
+    expected_space_id: str,
+    references: Any,
+    expected_entry_id: str | None = None,
+    expected_entry_revision: int | None = None,
+) -> dict[str, Any]:
+    """Build the model-facing entry shape without exposing content storage refs."""
+
+    if isinstance(value, MemoryEntry):
+        visible = value.to_dict()
+    elif isinstance(value, Mapping):
+        visible = dict(value)
+    else:
+        raise MemoryToolkitError("memory entry result is invalid")
+
+    if visible.get("schema") == MemoryEntry.SCHEMA:
+        visible.pop("schema")
+    visible.pop("content_ref", None)
+
+    raw_ref = visible.get("entry_ref")
+    if raw_ref is None:
+        try:
+            entry_ref = ResourceRef(
+                "memory",
+                visible["entry_id"],
+                visible["revision"],
+                visible["space_id"],
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MemoryToolkitError(
+                "memory entry result has no canonical entry ref"
+            ) from exc
+    elif isinstance(raw_ref, ResourceRef):
+        entry_ref = raw_ref
+    elif isinstance(raw_ref, Mapping):
+        try:
+            entry_ref = ResourceRef.from_dict(raw_ref)
+        except (TypeError, ValueError) as exc:
+            raise MemoryToolkitError(
+                "memory entry result has an invalid entry ref"
+            ) from exc
+    elif isinstance(raw_ref, str):
+        entry_ref = decode_memory_ref(
+            references,
+            raw_ref,
+            error_message="memory entry result has an invalid entry ref",
+        )
+    else:
+        raise MemoryToolkitError("memory entry result has an invalid entry ref")
+
+    if entry_ref.kind != "memory" or entry_ref.fragment != expected_space_id:
+        raise MemoryToolkitError(
+            "memory entry result is outside this toolkit's bound scope"
+        )
+    if (
+        expected_entry_id is not None
+        and entry_ref.resource_id != expected_entry_id
+    ):
+        raise MemoryToolkitError(
+            "memory entry result does not match the requested entry"
+        )
+    if (
+        expected_entry_revision is not None
+        and entry_ref.revision != expected_entry_revision
+    ):
+        raise MemoryToolkitError("memory entry result has unexpected revision")
+    for field_name, expected in (
+        ("entry_id", entry_ref.resource_id),
+        ("space_id", entry_ref.fragment),
+        ("revision", entry_ref.revision),
+    ):
+        if field_name in visible and visible[field_name] != expected:
+            raise MemoryToolkitError(
+                "memory entry result diverges from its canonical entry ref"
+            )
+    visible["entry_ref"] = entry_ref
+    return visible
+
+
 def _register(
     toolkit: Toolkit,
     callables: list[tuple[str, str, Any]],
@@ -146,6 +228,40 @@ def build_memory_toolkit(
                 | frozenset({"lease_fence", "mutation_guard"})
             ),
         )
+
+    def present_entry(
+        value: Any,
+        *,
+        capability: Any,
+        expected_entry_id: str | None = None,
+        expected_entry_revision: int | None = None,
+    ) -> dict[str, Any]:
+        projected = _project_entry(
+            value,
+            expected_space_id=capability.space_id,
+            references=references,
+            expected_entry_id=expected_entry_id,
+            expected_entry_revision=expected_entry_revision,
+        )
+        visible = present(projected)
+        if not isinstance(visible, dict):
+            raise MemoryToolkitError("memory entry result is invalid")
+        return visible
+
+    def present_search_result(value: Any, *, capability: Any) -> dict[str, Any]:
+        if isinstance(value, Mapping) and "entry" in value:
+            projected = dict(value)
+            projected["entry"] = _project_entry(
+                value["entry"],
+                expected_space_id=capability.space_id,
+                references=references,
+            )
+            visible = present(projected)
+        else:
+            visible = present_entry(value, capability=capability)
+        if not isinstance(visible, dict):
+            raise MemoryToolkitError("memory search result is invalid")
+        return visible
 
     def authorize_context_ref(
         ref: ResourceRef,
@@ -467,9 +583,10 @@ def build_memory_toolkit(
                 label="memory listing",
             )
             for entry in page_entries:
-                visible_entry = present(entry)
-                if isinstance(visible_entry, Mapping):
-                    visible_entry = {**visible_entry, "scope_kind": location}
+                visible_entry = {
+                    **present_entry(entry, capability=capability),
+                    "scope_kind": location,
+                }
                 entries.append(visible_entry)
             spaces.append(
                 {
@@ -493,7 +610,7 @@ def build_memory_toolkit(
             minimum=1,
             maximum=MAX_SEARCH_RESULTS,
         )
-        responses: list[tuple[str, Mapping[str, Any]]] = []
+        responses: list[tuple[str, Any, Mapping[str, Any]]] = []
         chat_response = capabilities.chat.search_entries(
             query=needle,
             limit=page_size,
@@ -506,7 +623,7 @@ def build_memory_toolkit(
             limit=page_size,
             label="memory search",
         )
-        responses.append(("chat", chat_response))
+        responses.append(("chat", capabilities.chat, chat_response))
         if isinstance(capabilities, CuratorMemoryToolkitCapabilities):
             long_term = capabilities.long_term
             if long_term is not None:
@@ -519,19 +636,21 @@ def build_memory_toolkit(
                     limit=page_size,
                     label="memory search",
                 )
-                responses.append(("long_term", response))
+                responses.append(("long_term", long_term, response))
         results: list[Any] = []
-        for location, response in responses:
+        for location, capability, response in responses:
             for item in response.get("results", ()):
-                visible = present(item)
-                if isinstance(visible, Mapping):
-                    visible = {**visible, "scope_kind": location}
+                visible = {
+                    **present_search_result(item, capability=capability),
+                    "scope_kind": location,
+                }
                 results.append(visible)
-        chat_visible = present(chat_response)
         return {
             "query": needle,
-            "backend": chat_visible.get("backend", "hybrid"),
-            "vector_status": chat_visible.get("vector_status", "degraded"),
+            "backend": present(chat_response.get("backend", "hybrid")),
+            "vector_status": present(
+                chat_response.get("vector_status", "degraded")
+            ),
             "results": results[:page_size],
         }
 
@@ -1045,7 +1164,20 @@ def build_memory_toolkit(
                 payload=payload,
             ),
         )
-        return present(capabilities.chat.upsert(request=request))
+        return present_entry(
+            capabilities.chat.upsert(request=request),
+            capability=capabilities.chat,
+            expected_entry_id=(
+                normalized_entry_ref.resource_id
+                if normalized_entry_ref is not None
+                else None
+            ),
+            expected_entry_revision=(
+                normalized_entry_ref.revision + 1
+                if normalized_entry_ref is not None
+                else 1
+            ),
+        )
 
     def memory_move(
         entry_ref: str,
@@ -1075,7 +1207,7 @@ def build_memory_toolkit(
             "new_path": path,
             "expected_space_revision": expected_space,
         }
-        return present(
+        return present_entry(
             capabilities.chat.move(
                 ref=normalized_ref,
                 new_path=path,
@@ -1086,6 +1218,9 @@ def build_memory_toolkit(
                     payload=payload,
                 ),
             ),
+            capability=capabilities.chat,
+            expected_entry_id=normalized_ref.resource_id,
+            expected_entry_revision=normalized_ref.revision + 1,
         )
 
     def memory_link(
@@ -1219,7 +1354,12 @@ def build_memory_toolkit(
                 payload=payload,
             ),
         )
-        return present(capabilities.chat.upsert(request=request))
+        return present_entry(
+            capabilities.chat.upsert(request=request),
+            capability=capabilities.chat,
+            expected_entry_id=normalized_ref.resource_id,
+            expected_entry_revision=normalized_ref.revision + 1,
+        )
 
     def memory_archive(
         entry_ref: str,
@@ -1250,7 +1390,7 @@ def build_memory_toolkit(
             "expected_space_revision": expected_space,
             "recursive": recursive,
         }
-        return present(
+        return present_entry(
             capabilities.chat.archive(
                 ref=normalized_ref,
                 expected_space_revision=expected_space,
@@ -1261,6 +1401,9 @@ def build_memory_toolkit(
                     payload=payload,
                 ),
             ),
+            capability=capabilities.chat,
+            expected_entry_id=normalized_ref.resource_id,
+            expected_entry_revision=normalized_ref.revision + 1,
         )
 
     def memory_history(entry_ref: str, limit: int = 20) -> dict[str, Any]:
@@ -1284,10 +1427,29 @@ def build_memory_toolkit(
             revisions, (str, bytes, bytearray)
         ):
             raise MemoryToolkitError("memory history is invalid")
+        if len(revisions) > page_size:
+            raise MemoryToolkitError("memory history exceeded the requested limit")
+        visible_revisions: list[dict[str, Any]] = []
+        previous_revision = normalized_ref.revision + 1
+        for revision in revisions:
+            projected = _project_entry(
+                revision,
+                expected_space_id=capability.space_id,
+                references=references,
+                expected_entry_id=normalized_ref.resource_id,
+            )
+            projected_ref = projected["entry_ref"]
+            if projected_ref.revision >= previous_revision:
+                raise MemoryToolkitError("memory history is not in revision order")
+            previous_revision = projected_ref.revision
+            visible = present(projected)
+            if not isinstance(visible, dict):
+                raise MemoryToolkitError("memory entry result is invalid")
+            visible_revisions.append(visible)
         first_revision = max(1, normalized_ref.revision - page_size + 1)
         return {
             "ref": references.encode(normalized_ref),
-            "revisions": present(revisions),
+            "revisions": visible_revisions,
             "truncated": first_revision > 1,
             "next_revision": first_revision - 1 if first_revision > 1 else None,
         }

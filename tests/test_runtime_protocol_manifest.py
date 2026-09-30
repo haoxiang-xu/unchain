@@ -86,6 +86,7 @@ def test_runtime_protocol_manifest_advertises_every_frozen_required_feature() ->
         "interaction_resolution_atomic_acceptance_v1"
         in protocols["durable_interaction"]
     )
+    assert "ollama_reasoning_preview_v1" in protocols["provider_turn_ownership"]
     assert {
         "canonical_metrics",
         "completion_diagnostics_ref",

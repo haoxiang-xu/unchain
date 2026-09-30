@@ -4,7 +4,8 @@ import inspect
 import json
 import re
 import types
-from dataclasses import dataclass, field
+from dataclasses import KW_ONLY, dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Union, get_args, get_origin, get_type_hints
 
 _UNION_TYPE = getattr(types, "UnionType", None)
@@ -357,11 +358,51 @@ class ToolConfirmationResponse:
         return cls(approved=bool(raw))
 
 
+@dataclass(frozen=True)
+class SkillDescriptor:
+    """One skill embedded in a toolkit (`[[skills]]` manifest table or `Toolkit(skills=...)`).
+
+    The first five fields keep the historical positional shape; policy and
+    source fields are keyword-only so existing callers stay valid. `source` /
+    `source_id` identify where the skill came from (a toolkit id for manifest
+    skills); the skills registry never merges descriptors by name alone.
+    """
+
+    name: str
+    description: str
+    body: str
+    tools: tuple[str, ...] = ()
+    base_dir: Path | None = None
+    _: KW_ONLY
+    model_invocable: bool = True
+    user_invocable: bool = True
+    metadata: dict[str, Any] = field(default_factory=dict)
+    aliases: tuple[str, ...] = ()
+    source: str = "toolkit"
+    source_id: str = ""
+
+    def to_summary(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "body": self.body,
+            "tools": list(self.tools),
+            "base_dir": str(self.base_dir) if self.base_dir is not None else "",
+            "model_invocable": self.model_invocable,
+            "user_invocable": self.user_invocable,
+            "metadata": dict(self.metadata),
+            "aliases": list(self.aliases),
+            "source": self.source,
+            "source_id": self.source_id,
+        }
+
+
 __all__ = [
     "HistoryPayloadOptimizer",
     "ToolConfirmationPolicy",
     "ToolExecutionContext",
     "NormalizedToolHistoryRecord",
+    "SkillDescriptor",
     "ToolConfirmationRequest",
     "ToolConfirmationResponse",
     "ToolHistoryOptimizationContext",

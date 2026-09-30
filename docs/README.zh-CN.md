@@ -18,6 +18,7 @@ Language switch: [English](README.en.md) | [简体中文](README.zh-CN.md)
 - [工具系统模式](zh-CN/skills/tool-system-patterns.md)
 - [Memory 系统](zh-CN/skills/memory-system.md)
 - [创建内置 Toolkit](zh-CN/skills/creating-builtin-toolkits.md)
+- [Agent Skills](zh-CN/skills/agent-skills.md)
 - [测试约定](zh-CN/skills/testing-conventions.md)
 
 ## 操作指南

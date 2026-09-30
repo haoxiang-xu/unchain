@@ -137,7 +137,7 @@ _EXPORT_TO_MODULE = {
     "ToolExposureRuntime": ".exposure",
     "ToolOptimizerConfig": ".exposure",
     "ToolDescriptor": ".registry",
-    "SkillDescriptor": ".registry",
+    "SkillDescriptor": ".models",
     "ArtifactKindDescriptor": ".registry",
     "ToolRegistryConfig": ".registry",
     "ToolResultBudgetConfig": ".result_budget",

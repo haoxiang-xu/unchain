@@ -35,7 +35,7 @@
 ## 配置面
 
 - Provider/model/api key（在 `Agent` 上）。
-- Modules：`ToolsModule`、`MemoryModule`、`PoliciesModule`、`OptimizersModule`、`SubagentModule`、`InteractionModule`、`JobsModule`、`CharacterModule`、`ToolDiscoveryModule`、`ToolOptimizerModule`。
+- Modules：`ToolsModule`、`MemoryModule`、`PoliciesModule`、`OptimizersModule`、`SubagentModule`、`InteractionModule`、`JobsModule`、`CharacterModule`、`ToolDiscoveryModule`、`ToolOptimizerModule`、`SkillsModule`。
 - `Agent.run()` 的 per-call 覆盖（`max_iterations`、`payload`、`callback`、`on_tool_confirm`、…）。
 
 ## 扩展点
@@ -104,6 +104,7 @@ src/unchain/
 │   ├── discovery.py     #   ToolDiscoveryRuntime — 工具级 deferred load
 │   ├── execution.py     #   ToolExecutionHarness — 跑工具，处理 confirm/observe
 │   └── prompting.py     #   ToolPromptHarness — prompt 端工具 spec 渲染
+├── skills/              # SKILL.md registry、catalog/activation harness、skill 工具
 ├── toolkits/            # Builtin + MCP toolkits
 │   ├── base.py          #   BuiltinToolkit — workspace-safe 基类
 │   ├── mcp.py           #   MCPToolkit — MCP server bridge

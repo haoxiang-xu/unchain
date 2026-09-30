@@ -8,6 +8,7 @@ Retries and route transitions belong to ``DurableProviderTurnRuntime``.
 from __future__ import annotations
 
 import copy
+import uuid
 from typing import Any, Callable
 
 from unchain.context.tool_catalog import ToolCatalogEnvelope
@@ -378,6 +379,81 @@ class OllamaExactRouteTransport(_BufferedExactRouteTransport):
             run_id=run_id,
             emit_stream=emit_stream,
         )
+        self._provisional_reasoning_id: str | None = None
+        self._provisional_iteration: int | None = None
+        self._preview_ids_by_index: dict[int, str] = {}
+
+    def _capture_event(self, event: dict[str, Any]) -> None:
+        super()._capture_event(event)
+        if event.get("type") != "reasoning" or not self._emit_stream:
+            return
+        preview = getattr(self._callback, "emit_provisional_reasoning", None)
+        commit = getattr(self._callback, "commit_provisional_reasoning", None)
+        discard = getattr(self._callback, "discard_provisional_reasoning", None)
+        if not all(callable(method) for method in (preview, commit, discard)):
+            return
+        if self._provisional_reasoning_id is None:
+            raise RuntimeError("Ollama reasoning preview has no physical send identity")
+        index = len(self._buffered_events) - 1
+        preview_id = uuid.uuid5(
+            uuid.UUID(hex=self._provisional_reasoning_id), str(index)
+        ).hex
+        self._preview_ids_by_index[index] = preview_id
+        preview(copy.deepcopy(self._buffered_events[index]), preview_id)
+
+    def discard_buffered_events(self) -> None:
+        try:
+            if self._preview_ids_by_index:
+                discard = getattr(self._callback, "discard_provisional_reasoning", None)
+                if callable(discard):
+                    first_error = None
+                    for preview_id in self._preview_ids_by_index.values():
+                        try:
+                            discard(
+                                preview_id=preview_id,
+                                run_id=self._run_id,
+                                iteration=self._provisional_iteration,
+                            )
+                        except BaseException as error:
+                            if first_error is None:
+                                first_error = error
+                    if first_error is not None:
+                        raise first_error
+        finally:
+            super().discard_buffered_events()
+            self._preview_ids_by_index.clear()
+            self._provisional_reasoning_id = None
+            self._provisional_iteration = None
+
+    def release_buffered_events(self) -> None:
+        events = self.buffered_events
+        try:
+            if self._callback is not None:
+                commit = getattr(self._callback, "commit_provisional_reasoning", None)
+                for index, event in enumerate(events):
+                    if index in self._preview_ids_by_index and callable(commit):
+                        try:
+                            commit(event)
+                        except BaseException as error:
+                            if getattr(
+                                error, "_unchain_provisional_reasoning_journaled", False
+                            ):
+                                self._preview_ids_by_index.pop(index)
+                            raise
+                        self._preview_ids_by_index.pop(index)
+                    else:
+                        self._callback(event)
+        except BaseException:
+            try:
+                self.discard_buffered_events()
+            except Exception:
+                # Preserve the persistence/host failure if reset is unavailable.
+                pass
+            raise
+        self._buffered_events.clear()
+        self._preview_ids_by_index.clear()
+        self._provisional_reasoning_id = None
+        self._provisional_iteration = None
 
     def send(
         self,
@@ -392,6 +468,8 @@ class OllamaExactRouteTransport(_BufferedExactRouteTransport):
             retry_ordinal=retry_ordinal,
             configured_model=self._model_io.model,
         )
+        self._provisional_reasoning_id = uuid.uuid4().hex
+        self._provisional_iteration = envelope.iteration
         messages = request_body.get("messages")
         if type(messages) is not list:
             raise TypeError("persisted Ollama messages must be an exact list")
@@ -409,7 +487,16 @@ class OllamaExactRouteTransport(_BufferedExactRouteTransport):
                 tools if isinstance(tools, list) else []
             ),
         )
-        return self._model_io._fetch_turn_streaming(request_body, request)
+        try:
+            return self._model_io._fetch_turn_streaming(request_body, request)
+        except BaseException:
+            try:
+                self.discard_buffered_events()
+            except Exception:
+                # A closed/cancelled host stream may reject its preview reset.
+                # Preserve the provider failure and still clear local buffers.
+                pass
+            raise
 
 
 __all__ = [

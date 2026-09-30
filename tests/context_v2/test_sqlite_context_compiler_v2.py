@@ -10,11 +10,13 @@ from unchain.context import (
     ArtifactService,
     CheckpointWriteStatus,
     ContextBuildEnvelope,
+    ContextCompileRequest,
     ContextConflictError,
     ContextRepositoryError,
     ContextScopeError,
     resolve_context_budget,
 )
+from unchain.context.coordinator import ContextCompileCoordinator
 from unchain.journal import (
     AttemptRef,
     EventCursor,
@@ -23,10 +25,12 @@ from unchain.journal import (
     JournalAppendRequest,
     OperationRef,
     ResourceRef,
+    SemanticEventDraft,
 )
 from unchain.journal.runtime import build_operation_ref
 from unchain.persistence.sqlite_context_compiler_v2 import (
     SQLiteContextCompilerV2Store,
+    SQLiteContextCompilerV2IntegrityError,
 )
 from unchain.persistence.sqlite_v2 import SQLiteContextV2Store
 
@@ -107,6 +111,9 @@ def test_checkpoint_prepare_commit_and_read_survive_cold_restart(
         "checkpoint-a",
         {"source_range": source_range.to_dict(), "summary_sha256": "a" * 64},
     )
+    prospective_ref = capabilities.checkpoints.checkpoint_ref_for(
+        operation=operation
+    )
 
     prepared = capabilities.checkpoints.prepare(
         source_range=source_range,
@@ -122,7 +129,9 @@ def test_checkpoint_prepare_commit_and_read_survive_cold_restart(
     )
 
     assert prepared.status is CheckpointWriteStatus.PREPARED
+    assert prepared.checkpoint_ref == prospective_ref
     assert prepared.duplicate is False
+    assert capabilities.checkpoints.get_by_ref(ref=prepared.checkpoint_ref) == prepared
     assert replay.checkpoint_ref == prepared.checkpoint_ref
     assert replay.duplicate is True
     with pytest.raises(ContextScopeError, match="committed"):
@@ -130,6 +139,10 @@ def test_checkpoint_prepare_commit_and_read_survive_cold_restart(
 
     committed = capabilities.checkpoints.commit(prepared=prepared)
     assert committed.status is CheckpointWriteStatus.COMMITTED
+    assert capabilities.checkpoints.get_by_ref(ref=committed.checkpoint_ref) == committed
+    assert capabilities.checkpoints.list_committed_refs() == (
+        committed.checkpoint_ref,
+    )
     assert capabilities.checkpoints.read(ref=committed.checkpoint_ref) == (
         b'{"decision":"keep full history"}'
     )
@@ -139,9 +152,15 @@ def test_checkpoint_prepare_commit_and_read_survive_cold_restart(
     recommitted = reopened.checkpoints.commit(prepared=committed)
 
     assert recovered is not None
+    assert reopened.checkpoints.checkpoint_ref_for(
+        operation=operation
+    ) == prospective_ref
     assert recovered.status is CheckpointWriteStatus.COMMITTED
     assert recovered.checkpoint_ref == committed.checkpoint_ref
     assert recommitted.duplicate is True
+    assert reopened.checkpoints.list_committed_refs() == (
+        committed.checkpoint_ref,
+    )
     assert (
         reopened.checkpoints.read(
             ref=committed.checkpoint_ref,
@@ -150,6 +169,138 @@ def test_checkpoint_prepare_commit_and_read_survive_cold_restart(
         )
         == b"keep"
     )
+
+
+def test_public_plain_text_checkpoint_does_not_block_context_compile(
+    tmp_path: Path,
+) -> None:
+    _, journal, capabilities = _open(tmp_path)
+    attempt = AttemptRef(
+        GenerationRef("execution-a", "generation-a"),
+        "attempt-a",
+    )
+    event = journal.append(
+        request=SemanticEventDraft(
+            event_id="event-current",
+            event_type="message.user",
+            attempt=attempt,
+            operation_id="message-current",
+            payload={
+                "run_id": attempt.attempt_id,
+                "message": {"role": "user", "content": "current"},
+            },
+        ).to_append_request()
+    ).event
+    source_range = EventRange(
+        EventCursor(event.store_seq, event.event_id),
+        EventCursor(event.store_seq, event.event_id),
+    )
+    prepared = capabilities.checkpoints.prepare(
+        source_range=source_range,
+        summary="A valid historical plain-text summary.",
+        refs=(),
+        operation=_operation("host-checkpoint", {"summary": "plain text"}),
+    )
+    capabilities.checkpoints.commit(prepared=prepared)
+    partials = []
+    request = ContextCompileRequest(
+        case="legacy-checkpoint-compatibility",
+        source_messages=({"role": "user", "content": "current"},),
+        current_generation="generation-a",
+        source_event_ids=(event.event_id,),
+        source_event_store_seqs=(event.store_seq,),
+        fixed_overhead_tokens=0,
+        budget=resolve_context_budget(context_window_tokens=8_192),
+        provider="openai",
+        model="synthetic",
+        build_id="build-plain-text-compatibility",
+        execution_id="execution-a",
+        generation_id="generation-a",
+        attempt_id="attempt-a",
+    )
+
+    result = ContextCompileCoordinator(
+        journal=journal,
+        checkpoint_repository=capabilities.checkpoints,
+        build_repository=capabilities.context_builds,
+        partial_attempt_sink=lambda _request, error: partials.append(error),
+    ).compile(request)
+
+    assert tuple(message["content"] for message in result.messages) == ("current",)
+    assert partials == []
+
+
+def test_checkpoint_metadata_lookup_is_bound_to_the_exact_ref(tmp_path: Path) -> None:
+    _, journal, capabilities = _open(tmp_path)
+    event = _append_trigger(journal)
+    source_range = EventRange(
+        EventCursor(event.store_seq, event.event_id),
+        EventCursor(event.store_seq, event.event_id),
+    )
+    prepared = capabilities.checkpoints.prepare(
+        source_range=source_range,
+        summary="stable",
+        refs=(),
+        operation=_operation("checkpoint-metadata", {"version": 1}),
+    )
+
+    assert (
+        capabilities.checkpoints.get_by_ref(
+            ref=ResourceRef("checkpoint", "unknown-checkpoint", 1)
+        )
+        is None
+    )
+    with pytest.raises(ContextScopeError, match="outside"):
+        capabilities.checkpoints.get_by_ref(
+            ref=ResourceRef(
+                "checkpoint",
+                prepared.checkpoint_ref.resource_id,
+                1,
+                "fragment",
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("column", "tampered_value"),
+    (
+        ("payload_sha256", "f" * 64),
+        ("target_kind", "context_build"),
+        ("target_key", "wrong-checkpoint"),
+    ),
+)
+def test_checkpoint_metadata_lookup_rejects_tampered_operation_claim(
+    tmp_path: Path,
+    column: str,
+    tampered_value: str,
+) -> None:
+    database_path, journal, capabilities = _open(tmp_path)
+    event = _append_trigger(journal)
+    source_range = EventRange(
+        EventCursor(event.store_seq, event.event_id),
+        EventCursor(event.store_seq, event.event_id),
+    )
+    operation = _operation("checkpoint-metadata-tamper", {"version": 1})
+    prepared = capabilities.checkpoints.prepare(
+        source_range=source_range,
+        summary="stable",
+        refs=(),
+        operation=operation,
+    )
+    committed = capabilities.checkpoints.commit(prepared=prepared)
+
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            f"UPDATE operations SET {column} = ? "
+            "WHERE execution_id = ? AND operation_id = ?",
+            (tampered_value, "execution-a", operation.operation_id),
+        )
+
+    with pytest.raises(
+        SQLiteContextCompilerV2IntegrityError,
+        match="operation claim",
+    ):
+        capabilities.checkpoints.get_by_ref(ref=committed.checkpoint_ref)
 
 
 def test_checkpoint_operation_and_semantic_drift_fail_closed(tmp_path: Path) -> None:

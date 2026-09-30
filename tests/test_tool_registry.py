@@ -134,7 +134,9 @@ def test_builtin_registry_lists_expected_toolkits_and_tools():
     assert registry.require("plan").to_summary()["tool_count"] == 5
     plan_skills = registry.require("plan").to_summary()["skills"]
     assert [skill["name"] for skill in plan_skills] == ["plan"]
-    assert plan_skills[0]["phase"] == "composer"
+    assert plan_skills[0]["model_invocable"] is True
+    assert plan_skills[0]["user_invocable"] is True
+    assert plan_skills[0]["source_id"] == "plan"
     assert plan_skills[0]["tools"] == [
         "plan_start",
         "plan_update",

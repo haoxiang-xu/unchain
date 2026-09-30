@@ -25,6 +25,7 @@ from unchain.journal import (
     AttemptRef,
     GenerationRef,
     JournalEvent,
+    JournalPage,
     ModelValidationError,
     ResourceRef,
     SemanticEventDraft,
@@ -231,7 +232,10 @@ class _EmptyJournal(BoundExecutionJournal):
         raise AssertionError(f"unexpected append: {request}")
 
     def read(self, *, after=None, limit=100):
-        raise AssertionError(f"unexpected live read: {after}, {limit}")
+        snapshot = self.capture_snapshot()
+        if after not in (None, snapshot.high_water):
+            raise AssertionError(f"unexpected live read: {after}, {limit}")
+        return JournalPage(events=(), next_cursor=after, has_more=False)
 
     def capture_snapshot(self, *, max_events=10_000, max_bytes=32 * 1024 * 1024):
         del max_events, max_bytes

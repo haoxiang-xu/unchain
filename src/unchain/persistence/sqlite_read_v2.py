@@ -142,7 +142,10 @@ def read_sqlite_context_v2_store_status(
                     "index_state",
                 }
                 if (
-                    context_versions != {1, 2}
+                    # Status is queried before runtime construction/migration.
+                    # These schemas share the read-only health surface; report
+                    # the actual version without upgrading the database here.
+                    context_versions not in ({1, 2}, {1, 2, 3})
                     or memory_versions != {1}
                     or not required.issubset(tables)
                 ):

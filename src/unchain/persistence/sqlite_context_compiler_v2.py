@@ -446,6 +446,33 @@ class _SQLiteBoundCheckpointRepository(
     def _checkpoint_ref(checkpoint_id: str) -> ResourceRef:
         return ResourceRef("checkpoint", checkpoint_id, 1)
 
+    def checkpoint_ref_for(self, *, operation: OperationRef) -> ResourceRef:
+        if not isinstance(operation, OperationRef):
+            operation = OperationRef.from_dict(operation)
+        return self._checkpoint_ref(
+            _checkpoint_identity(self.execution_id, operation)
+        )
+
+    def list_committed_refs(self, *, limit: int = 32) -> tuple[ResourceRef, ...]:
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 0 < limit <= 64:
+            raise ValueError("limit must be between 1 and 64")
+        try:
+            with self._store._transaction(immediate=False) as connection:
+                rows = connection.execute(
+                    """
+                    SELECT checkpoint_id FROM checkpoints
+                    WHERE execution_id = ? AND revision = 1 AND status = 'committed'
+                    ORDER BY committed_at DESC, checkpoint_id DESC
+                    LIMIT ?
+                    """,
+                    (self.execution_id, limit),
+                ).fetchall()
+            return tuple(self._checkpoint_ref(str(row["checkpoint_id"])) for row in rows)
+        except sqlite3.Error as error:
+            raise SQLiteContextCompilerV2Error(
+                "checkpoint discovery failed"
+            ) from error
+
     def _row_by_operation(
         self,
         connection: sqlite3.Connection,
@@ -746,6 +773,52 @@ class _SQLiteBoundCheckpointRepository(
         except sqlite3.Error as error:
             raise SQLiteContextCompilerV2Error(
                 "checkpoint receipt read failed"
+            ) from error
+
+    def get_by_ref(self, *, ref: ResourceRef) -> PreparedCheckpoint | None:
+        if not isinstance(ref, ResourceRef):
+            ref = ResourceRef.from_dict(ref)
+        if ref.kind != "checkpoint" or ref.fragment or ref.revision != 1:
+            raise ContextScopeError("checkpoint ref is outside the bound repository")
+        try:
+            with self._store._transaction(immediate=False) as connection:
+                row = connection.execute(
+                    """
+                    SELECT * FROM checkpoints
+                    WHERE execution_id = ? AND checkpoint_id = ? AND revision = 1
+                    """,
+                    (self.execution_id, ref.resource_id),
+                ).fetchone()
+                if row is None:
+                    return None
+                receipt, _semantic, _artifact = self._decode(
+                    row,
+                    duplicate=False,
+                )
+                if receipt.checkpoint_ref != ref:
+                    raise SQLiteContextCompilerV2IntegrityError(
+                        "checkpoint ref changed outside the bound repository"
+                    )
+                claimed = self._operation_row(
+                    connection,
+                    receipt.operation.operation_id,
+                )
+                if (
+                    claimed is None
+                    or claimed["payload_sha256"]
+                    != receipt.operation.payload_sha256
+                    or claimed["target_kind"] != "checkpoint"
+                    or claimed["target_key"] != ref.resource_id
+                ):
+                    raise SQLiteContextCompilerV2IntegrityError(
+                        "checkpoint operation claim is invalid"
+                    )
+                return receipt
+        except ContextRepositoryError:
+            raise
+        except sqlite3.Error as error:
+            raise SQLiteContextCompilerV2Error(
+                "checkpoint metadata read failed"
             ) from error
 
     def read(

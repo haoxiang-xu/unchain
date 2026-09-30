@@ -157,6 +157,9 @@ class _Journal(BoundExecutionJournal):
             events=tuple(self.events),
         )
 
+    def snapshot_prefix_is_current(self, *, snapshot, integrity_revision=None):
+        return tuple(self.events[: snapshot.event_count]) == snapshot.events
+
 
 class _Toolkit:
     def __init__(self) -> None:
@@ -529,7 +532,7 @@ def test_request_factory_uses_current_instructions_but_journal_user_input() -> N
     assert request.attempt_id == "run-1"
     assert toolkit.providers == ["openai", "openai"]
     assert fallback_calls == []
-    assert journal.capture_calls == 2
+    assert journal.capture_calls == 1
 
 
 def test_request_factory_uses_explicit_finite_fallback_for_unknown_window() -> None:

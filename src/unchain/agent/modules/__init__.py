@@ -10,6 +10,7 @@ from .jobs import JobsModule
 from .memory import MemoryModule
 from .optimizers import OptimizersModule
 from .policies import PoliciesModule
+from .skills import SkillsModule
 from .subagents import SubagentModule
 from .tool_discovery import ToolDiscoveryModule
 from .tool_optimizer import ToolOptimizerModule
@@ -29,6 +30,7 @@ __all__ = [
     "MemoryModule",
     "OptimizersModule",
     "PoliciesModule",
+    "SkillsModule",
     "SubagentModule",
     "ToolDiscoveryModule",
     "ToolOptimizerModule",

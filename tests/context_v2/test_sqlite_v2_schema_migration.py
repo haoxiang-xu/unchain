@@ -152,7 +152,7 @@ def test_v1_started_and_failed_leases_are_canonically_upgraded(
                 "SELECT lease_json FROM provider_request_lease_revisions"
             )
         }
-    assert versions == {1, 2}
+    assert versions == {1, 2, 3}
     assert schemas == {"unchain.provider_request_lease.v2"}
 
 
@@ -198,7 +198,7 @@ def test_v1_completed_lease_fails_closed_and_rolls_back_entire_migration(
                 "SELECT lease_json FROM provider_request_lease_revisions ORDER BY revision"
             )
         ]
-    assert versions == {1}
+    assert versions == {1, 3}
     assert schemas == [
         "unchain.provider_request_lease.v1",
         "unchain.provider_request_lease.v1",
