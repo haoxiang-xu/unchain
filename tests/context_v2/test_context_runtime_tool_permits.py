@@ -14,6 +14,7 @@ from unchain.context import (
     DurableContextRuntimeFactory,
     DurableToolExecutorContractError,
 )
+from unchain.events import RuntimeEventBridge
 from unchain.execution import ExecutionRuntime
 from unchain.kernel.harness import HarnessContext
 from unchain.kernel.types import ToolCall
@@ -27,6 +28,8 @@ def _factory_tool_runtime(
     attempt_id: str = "attempt-1",
     call_id: str = "call-1",
     persist_intent: bool = True,
+    tool_result: dict | None = None,
+    tool_output_management_active: bool = False,
 ):
     bundles = {}
 
@@ -44,6 +47,7 @@ def _factory_tool_runtime(
             ),
             current_input_resolver=_current_input,
         ),
+        tool_output_management_active=tool_output_management_active,
     )
     guard = ExecutionRuntime(InMemorySessionStore()).acquire(
         execution_id,
@@ -65,7 +69,7 @@ def _factory_tool_runtime(
     @toolkit.tool(name="lookup")
     def lookup(query: str):
         invocations.append(query)
-        return {"seen": query}
+        return dict(tool_result or {"seen": query})
 
     arguments = {"query": "journal-owned"}
     if persist_intent:
@@ -209,8 +213,62 @@ def test_tool_authority_harness_projects_only_the_durable_completion():
                 "tool_name": "lookup",
                 "call_id": "call-1",
                 "result": {"seen": "journal-owned"},
+                "durable_result_outcome": "success",
             },
         ]
+    finally:
+        guard.release()
+
+
+@pytest.mark.parametrize(
+    ("tool_result", "expected_status"),
+    [
+        ({"ok": True, "value": "done"}, "success"),
+        ({"ok": False, "error": "missing"}, "error"),
+        ({"denied": True}, "denied"),
+        ({"cancelled": True}, "cancelled"),
+    ],
+)
+def test_projected_durable_tool_result_preserves_terminal_outcome_through_host_callback(
+    tool_result,
+    expected_status,
+):
+    (
+        runtime,
+        bundle,
+        guard,
+        context,
+        _toolkit,
+        _invocations,
+        _forged_handler_calls,
+        _bundles,
+    ) = _factory_tool_runtime(
+        attempt_id=f"attempt-outcome-{expected_status}",
+        tool_result=tool_result,
+        tool_output_management_active=True,
+    )
+    emitted = []
+    context.state.provider_state.provider = "openai"
+    context.event["callback"] = runtime.compose_event_callback(emitted.append)
+    try:
+        runtime.bind_execution_toolkit(context)
+        delta = runtime.build_harnesses()[1].build_delta(context)
+
+        assert delta is not None
+        assert len(
+            [event for event in bundle.journal.events if event.event_type == "tool_result"]
+        ) == 1
+        raw_result = next(event for event in emitted if event["type"] == "tool_result")
+        assert raw_result["durable_result_outcome"] == expected_status
+        assert raw_result["result"] != tool_result
+
+        bridge = RuntimeEventBridge(
+            session_id="session-outcome",
+            root_run_id=context.event["run_id"],
+        )
+        [runtime_event] = bridge.normalize(raw_result)
+        assert runtime_event.type == "step.completed"
+        assert runtime_event.payload["status"] == expected_status
     finally:
         guard.release()
 

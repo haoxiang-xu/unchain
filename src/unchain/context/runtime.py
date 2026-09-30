@@ -17,6 +17,10 @@ from ..durability import (
 from ..kernel.harness import HarnessContext
 from ..journal import AttemptRef, ContextBuildStatus
 from ..run_bundle import opaque_metric_evidence_ref
+from ..tool_outcomes import (
+    DURABLE_TOOL_RESULT_OUTCOMES,
+    classify_durable_tool_result,
+)
 from .compiler import ContextCompileResult, ContextCompiler
 from .coordinator import ContextCompileCoordinator
 from .factory import (
@@ -2148,6 +2152,7 @@ class ContextRuntime:
             raise ContextExecutionBundleError(
                 "persisted tool result does not match the active tool context"
             )
+        outcome = self._verified_durable_tool_result_outcome(bundle, receipt)
         callback = context.event.get("callback")
         if callback is None:
             return
@@ -2158,12 +2163,32 @@ class ContextRuntime:
             "tool_name": tool_call.name,
             "call_id": tool_call.call_id,
             "result": copy.deepcopy(result),
+            "durable_result_outcome": outcome,
         }
         deliver = getattr(callback, "deliver_persisted_tool_result", None)
         if callable(deliver):
             deliver(event)
         else:
             callback(event)
+
+    @staticmethod
+    def _verified_durable_tool_result_outcome(
+        bundle: ContextExecutionBundle,
+        receipt,
+    ) -> str:
+        """Classify the receipt's hash-verified full result, never its preview."""
+
+        content = bundle.artifacts.read_full(
+            receipt.result_artifact,
+            remaining_budget_bytes=receipt.result_artifact.byte_length,
+        )
+        try:
+            result = json.loads(content.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ContextExecutionBundleError(
+                "verified tool result artifact is not valid JSON"
+            ) from exc
+        return classify_durable_tool_result(result)
 
     def materialize_tool_transition(self, context: HarnessContext, receipt):
         """Resolve a receipt transition through this attempt's capabilities."""
@@ -2586,6 +2611,8 @@ class ContextRuntime:
                 or not isinstance(event.get("call_id"), str)
                 or not event["call_id"]
                 or not isinstance(event.get("result"), dict)
+                or event.get("durable_result_outcome")
+                not in DURABLE_TOOL_RESULT_OUTCOMES
             ):
                 raise ValueError("persisted tool result event is invalid")
             if host_callback is None:
