@@ -308,8 +308,12 @@ def _anthropic_semantic_assistant(
         # Anthropic's SDK can add this direct-caller transport marker to a
         # tool_use block. Preserve it in wire_items, but exclude it from the
         # semantic counterpart because the durable compiler only owns the
-        # tool's id, name, and input.
-        if block_type == "tool_use" and block.get("caller") == {"type": "direct"}:
+        # tool's id, name, and input. A None caller is the SDK's filler for an
+        # omitted field (Anthropic-compatible endpoints such as DeepSeek), and
+        # frames journaled before capture normalization may still carry it.
+        if block_type == "tool_use" and "caller" in block and (
+            block["caller"] is None or block["caller"] == {"type": "direct"}
+        ):
             block.pop("caller")
         semantic_blocks.append(block)
         if block_type == "tool_use":
