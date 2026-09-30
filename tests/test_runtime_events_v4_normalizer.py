@@ -74,6 +74,46 @@ def test_v4_normalizes_verified_durable_tool_result_outcome(
     assert event.payload["status"] == expected_status
 
 
+@pytest.mark.parametrize(
+    ("result", "expected_status"),
+    [
+        pytest.param(
+            {"ok": True, "status": {"state": "ready"}},
+            "success",
+            id="object-status",
+        ),
+        pytest.param(
+            {"ok": True, "status": ["ready"]},
+            "success",
+            id="array-status",
+        ),
+        pytest.param(
+            {"ok": False, "error": "missing", "status": {}},
+            "error",
+            id="error-with-object-status",
+        ),
+    ],
+)
+def test_v4_normalizes_non_string_tool_result_status(
+    result,
+    expected_status,
+):
+    [event] = normalize_raw_event(
+        {
+            "type": "tool_result",
+            "run_id": "run-root",
+            "iteration": 2,
+            "tool_name": "lookup",
+            "call_id": "call-1",
+            "result": result,
+        },
+        context=_context(),
+    )
+
+    assert event.type == "step.completed"
+    assert event.payload["status"] == expected_status
+
+
 def test_v4_normalizes_code_diff_confirmation_to_interaction_requested():
     events = normalize_raw_event(
         {

@@ -13,18 +13,21 @@ def classify_durable_tool_result(result: Any) -> str:
 
     if not isinstance(result, dict):
         return "success"
-    if result.get("denied") is True or result.get("status") == "denied":
+    status = result.get("status")
+    if not isinstance(status, str):
+        status = None
+    if result.get("denied") is True or status == "denied":
         return "denied"
     if (
         result.get("cancelled") is True
         or result.get("canceled") is True
-        or result.get("status") in {"cancelled", "canceled"}
+        or status in {"cancelled", "canceled"}
     ):
         return "cancelled"
     if (
         result.get("ok") is False
         or result.get("error") is not None
-        or result.get("status") in {"error", "failed"}
+        or status in {"error", "failed"}
     ):
         return "error"
     return "success"

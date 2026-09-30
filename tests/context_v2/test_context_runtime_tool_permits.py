@@ -227,6 +227,21 @@ def test_tool_authority_harness_projects_only_the_durable_completion():
         ({"ok": False, "error": "missing"}, "error"),
         ({"denied": True}, "denied"),
         ({"cancelled": True}, "cancelled"),
+        pytest.param(
+            {"ok": True, "status": {"state": "ready"}},
+            "success",
+            id="object-status",
+        ),
+        pytest.param(
+            {"ok": True, "status": ["ready"]},
+            "success",
+            id="array-status",
+        ),
+        pytest.param(
+            {"ok": False, "error": "missing", "status": {}},
+            "error",
+            id="error-with-object-status",
+        ),
     ],
 )
 def test_projected_durable_tool_result_preserves_terminal_outcome_through_host_callback(
