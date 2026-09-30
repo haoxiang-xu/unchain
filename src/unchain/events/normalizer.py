@@ -4,6 +4,10 @@ import copy
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..tool_outcomes import (
+    DURABLE_TOOL_RESULT_OUTCOMES,
+    classify_durable_tool_result,
+)
 from .types import RuntimeEventLinks, RuntimeEventSurface, Visibility
 
 
@@ -63,13 +67,14 @@ def _base_metadata(raw: dict[str, Any]) -> dict[str, Any]:
     return metadata
 
 
-def _status_from_tool_result(result: Any) -> str:
-    if isinstance(result, dict):
-        if result.get("denied") is True:
-            return "denied"
-        if result.get("error") is not None:
-            return "error"
-    return "success"
+def _status_from_tool_result(
+    result: Any,
+    *,
+    durable_result_outcome: Any = None,
+) -> str:
+    if durable_result_outcome in DURABLE_TOOL_RESULT_OUTCOMES:
+        return durable_result_outcome
+    return classify_durable_tool_result(result)
 
 
 def _trace_surface(group: str = "trace", *, default_state: str = "collapsed") -> RuntimeEventSurface:
@@ -545,7 +550,10 @@ def normalize_raw_event(
             "step_type": "tool",
             "tool_name": _str_value(raw_event.get("tool_name"), "tool"),
             "call_id": call_id,
-            "status": _status_from_tool_result(result),
+            "status": _status_from_tool_result(
+                result,
+                durable_result_outcome=raw_event.get("durable_result_outcome"),
+            ),
             "result": result,
         }
         display_name = _str_value(raw_event.get("tool_display_name"))
