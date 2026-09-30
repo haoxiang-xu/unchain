@@ -218,8 +218,8 @@ def test_kimi_sdk_final_message_thinking_shape(signature):
 
 @pytest.mark.parametrize("metadata", [{}, {"caller": None},
     {"caller": {"type": "direct"}}, {"caller": ""}, {"future_metadata": None}])
-@pytest.mark.parametrize("kimi", [True, False])
-def test_sdk_tool_metadata_through_canonical_compiler(metadata, kimi):
+@pytest.mark.parametrize("route", ["kimi", "anthropic", "deepseek"])
+def test_sdk_tool_metadata_through_canonical_compiler(metadata, route):
     from unchain.context.compiler import _native_tool_call_messages
     from unchain.providers.context_assembler import (
         ProviderContextProjectionError, _rehydrate, _segments_for,
@@ -241,22 +241,30 @@ def test_sdk_tool_metadata_through_canonical_compiler(metadata, kimi):
         def get_final_message(self):
             return SimpleNamespace(id="sdk-final", content=[thinking, tool])
 
-    cls = HyperspaceModelIO if kimi else AnthropicModelIO
-    kwargs = {"base_url": ENDPOINT} if kimi else {}
-    io = cls(model=MODEL if kimi else "claude-sonnet-4-5", api_key="fixture-key",
+    # "deepseek" is an Anthropic-compatible route without a replay profile:
+    # its endpoint omits caller, which the SDK materializes as None.
+    kimi = route == "kimi"
+    cls = AnthropicModelIO if route == "anthropic" else HyperspaceModelIO
+    kwargs = {
+        "kimi": {"base_url": ENDPOINT},
+        "anthropic": {},
+        "deepseek": {"base_url": "https://api.deepseek.com/anthropic"},
+    }[route]
+    model = {"kimi": MODEL, "anthropic": "claude-sonnet-4-5", "deepseek": "deepseek-v4-pro"}[route]
+    io = cls(model=model, api_key="fixture-key",
         client_factory=lambda **kw: SimpleNamespace(messages=SimpleNamespace(stream=lambda **kw: Stream())),
         **kwargs)
     turn = io.fetch_turn(ModelTurnRequest(messages=[{"role": "user", "content": "use tool"}]))
     expected_tool = copy.deepcopy(tool)
-    if kimi and expected_tool.get("caller") is None:
-        expected_tool.pop("caller", None)
+    if "caller" in expected_tool and expected_tool["caller"] is None:
+        expected_tool.pop("caller")
     semantic_tool = copy.deepcopy(expected_tool)
     if semantic_tool.get("caller") == {"type": "direct"}:
         semantic_tool.pop("caller")
     frame = turn.provider_replay_frame
     assert frame["items"][-1]["content"] == [thinking, expected_tool]
     assert turn.assistant_messages[-1]["content"] == [semantic_tool]
-    provider = "hyperspace" if kimi else "anthropic"
+    provider = "anthropic" if route == "anthropic" else "hyperspace"
     canonical = _native_tool_call_messages(provider, [({}, call) for call in turn.tool_calls])
     result = {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "3"}]}
     canonical.append(result)
@@ -269,6 +277,42 @@ def test_sdk_tool_metadata_through_canonical_compiler(metadata, kimi):
             {"role": "assistant", "content": [thinking, expected_tool]}, result,
         ]
 
+
+
+def test_legacy_frame_with_sdk_none_caller_rehydrates_against_canonical_compiler():
+    """Frames journaled before capture normalization still hold caller=None.
+
+    A DeepSeek turn (Anthropic-compatible, no replay profile) stored with the
+    SDK's None filler must still replay once the compiler rebuilds history.
+    """
+    from unchain.context.compiler import _native_tool_call_messages
+    from unchain.kernel.types import ToolCall
+    from unchain.providers.context_assembler import _rehydrate, _segments_for
+
+    thinking = {"type": "thinking", "thinking": "plan", "signature": "84e93ea8-resp"}
+    tools = [
+        {"caller": None, "id": "call_00_a", "input": {"url": "https://example.com/pricing"},
+         "name": "web_fetch", "type": "tool_use"},
+        {"caller": None, "id": "call_01_b", "input": {"url": "https://example.com/models"},
+         "name": "web_fetch", "type": "tool_use"},
+    ]
+    items = [
+        {"role": "user", "content": "compare models"},
+        {"role": "assistant", "content": [thinking, *tools]},
+    ]
+    calls = [ToolCall(call_id=t["id"], name=t["name"], arguments=t["input"]) for t in tools]
+    canonical = [{"role": "user", "content": "compare models"}]
+    canonical.extend(_native_tool_call_messages("hyperspace", [({}, call) for call in calls]))
+    results = {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": t["id"], "content": "ok"} for t in tools
+    ]}
+    canonical.append(results)
+
+    rebuilt = _rehydrate("hyperspace", canonical, _segments_for("anthropic.messages.v1", items))
+
+    assert rebuilt[1]["content"][0] == thinking
+    assert [block["id"] for block in rebuilt[1]["content"][1:]] == ["call_00_a", "call_01_b"]
+    assert rebuilt[-1] == results
 
 def test_kimi_official_context_boundary_cold_approval_resume(tmp_path):
     from tests.context_v2.test_context_provider_turn_approval_cross_provider import _anthropic_approval_events
