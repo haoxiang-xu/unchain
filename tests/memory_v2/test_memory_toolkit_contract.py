@@ -292,7 +292,7 @@ PARAMETERS = {
 }
 
 DEFAULTS = {
-    "context_content_read": {"offset": 0, "limit": 32 * 1024},
+    "context_content_read": {"offset": 0, "limit": 8 * 1024},
     "context_checkpoint_events_read": {"after_position": 0, "limit": 20},
     "memory_list": {"path": "/", "recursive": True, "limit": 100},
     "memory_search": {"limit": 20},
@@ -487,6 +487,16 @@ def test_role_capability_sets_are_exact_and_ordered():
     )
 
 
+def test_context_content_reader_alone_declares_the_context_page_output_policy():
+    for toolkit in _toolkits().values():
+        assert toolkit.tools["context_content_read"].output_policy == "context_page"
+        assert all(
+            tool.output_policy == "default"
+            for name, tool in toolkit.tools.items()
+            if name != "context_content_read"
+        )
+
+
 def test_memory_proposal_policy_is_bound_only_to_the_proposal_tool():
     toolkits = _toolkits()
     proposal_tool = toolkits["normal"].tools["memory_propose"]
@@ -588,6 +598,9 @@ def test_complete_model_tool_json_contract_is_frozen():
     toolkits = _toolkits()
     expected_descriptions = {**BASE_DESCRIPTIONS, **ROLE_DESCRIPTIONS}
     special_property_descriptions = {
+        ("context_content_read", "ref"): "Previously disclosed content ref",
+        ("context_content_read", "offset"): "Byte offset: integer 0..33554432, default 0",
+        ("context_content_read", "limit"): "Page bytes: integer 1..8192, default 8192",
         ("memory_list", "path"): (
             "Virtual folder path; never use a host filesystem path."
         ),

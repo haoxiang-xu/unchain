@@ -18,7 +18,11 @@ from typing import Any, Mapping
 TOOL_OUTPUT_MANAGEMENT_SCHEMA = "unchain.tool_output_management.v1"
 TOOL_OUTPUT_PROJECTION_VERSION = "v1"
 TOOL_OUTPUT_POLICY_MAP_SCHEMA = "unchain.tool_output_policy_map.v1"
-SUPPORTED_TOOL_OUTPUT_POLICIES = frozenset({"default", "head_tail", "artifact_only"})
+CONTEXT_CONTENT_READER_TOOL = "context_content_read"
+CONTEXT_PAGE_POLICY = "context_page"
+SUPPORTED_TOOL_OUTPUT_POLICIES = frozenset(
+    {"default", "head_tail", "artifact_only", CONTEXT_PAGE_POLICY}
+)
 
 
 class ToolOutputManagementError(ValueError):
@@ -76,6 +80,231 @@ def _valid_source_ref(value: Any) -> bool:
     except (TypeError, ValueError):
         return False
     return reference.kind == "artifact" and not reference.fragment
+
+
+def _paged_context_projection(
+    result_bytes: bytes,
+    *,
+    full_output_ref: Any,
+    digest: str,
+    preview_chars: int,
+) -> dict[str, Any] | None:
+    """Present a durable artifact as one canonical, non-authorizing locator."""
+
+    try:
+        from unchain.context_content import present_context_output_ref
+        from unchain.journal import ResourceRef
+
+        ref = ResourceRef.from_dict(full_output_ref)
+        text = result_bytes.decode("utf-8")
+    except (TypeError, UnicodeDecodeError, ValueError):
+        return None
+    if ref.kind != "artifact" or ref.fragment:
+        return None
+    head = text[:preview_chars]
+    tail = text[-preview_chars:] if preview_chars else ""
+    omitted_bytes = len(result_bytes) - len(head.encode("utf-8")) - len(
+        tail.encode("utf-8")
+    )
+    return present_context_output_ref(
+        ref,
+        {
+            "content_bytes": len(result_bytes),
+            "content_sha256": digest,
+            "preview_head": head,
+            "preview_tail": tail,
+            "omitted_bytes": max(0, omitted_bytes),
+        },
+    )
+
+
+def _context_page_projection(result_bytes: bytes) -> dict[str, Any]:
+    """Accept only a canonical successful page or fixed failure from the reader."""
+
+    try:
+        from unchain.context_content import (
+            ContextContentProtocolError,
+            canonical_context_content_result_bytes,
+            render_context_content_error,
+        )
+
+        page = json.loads(result_bytes.decode("utf-8"))
+        is_reader_error = (
+            isinstance(page, Mapping)
+            and set(page) == {"error", "tool"}
+            and page.get("tool") == CONTEXT_CONTENT_READER_TOOL
+            and isinstance(page.get("error"), str)
+        )
+        payload = (
+            render_context_content_error(
+                {
+                    "CONTEXT_READ_NO_PROGRESS": "CONTEXT_READ_NO_PROGRESS",
+                    "limit must be an integer": "CONTEXT_READ_LIMIT_INVALID_USE_INTEGER_1_TO_8192",
+                    "limit must be between 1 and 8192": "CONTEXT_READ_LIMIT_INVALID_USE_INTEGER_1_TO_8192",
+                    "offset must be an integer": "CONTEXT_READ_OFFSET_INVALID_USE_INTEGER_0_TO_33554432",
+                    "offset must be between 0 and 33554432": "CONTEXT_READ_OFFSET_INVALID_USE_INTEGER_0_TO_33554432",
+                }.get(page.get("error"), "CONTEXT_CONTENT_READ_FAILED")
+            )
+            if is_reader_error
+            else page
+        )
+        canonical = canonical_context_content_result_bytes(payload)
+    except (
+        ContextContentProtocolError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        TypeError,
+        ValueError,
+    ) as error:
+        raise ToolOutputManagementError("context content page result is invalid") from error
+    if canonical != result_bytes:
+        if is_reader_error:
+            return payload
+        raise ToolOutputManagementError("context content page result is not canonical")
+    return payload
+
+
+def _compacted_context_content(value: Any) -> list[dict[str, Any]]:
+    """Extract only strict model-visible context retrieval state for compaction."""
+
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(value, Mapping):
+        return []
+    try:
+        from unchain.context_content import (
+            ContextContentProtocolError,
+            canonical_context_output_read_handle,
+            decode_context_content_locator,
+            validate_context_content_page,
+        )
+
+        page = validate_context_content_page(value)
+    except (ContextContentProtocolError, TypeError, ValueError):
+        page = None
+    if page is not None:
+        ref = page["ref"]
+        return [
+            {
+                "ref": ref,
+                "offset": page["offset"],
+                "page_bytes": page["page_bytes"],
+                "next_offset": page["next_offset"],
+                "eof": page["eof"],
+                "read_request": {
+                    "tool": CONTEXT_CONTENT_READER_TOOL,
+                    "arguments": {
+                        "ref": ref,
+                        "offset": page["offset"],
+                        "limit": 8192,
+                    },
+                },
+                "next_read": page["next_read"],
+            }
+        ]
+    if value.get("memory_v2_compacted") is True:
+        entries = value.get("context_content")
+        if not isinstance(entries, list) or not entries:
+            return []
+        restored: list[dict[str, Any]] = []
+        for entry in entries:
+            if not isinstance(entry, Mapping):
+                return []
+            try:
+                handle = canonical_context_output_read_handle(entry)
+            except (ContextContentProtocolError, TypeError, ValueError):
+                handle = None
+            if handle is not None:
+                restored.append(handle)
+                continue
+            expected_keys = {
+                "ref",
+                "offset",
+                "page_bytes",
+                "next_offset",
+                "eof",
+                "read_request",
+                "next_read",
+            }
+            if set(entry) != expected_keys:
+                return []
+            ref = entry["ref"]
+            offset = entry["offset"]
+            page_bytes = entry["page_bytes"]
+            next_offset = entry["next_offset"]
+            eof = entry["eof"]
+            read_request = entry["read_request"]
+            next_read = entry["next_read"]
+            if (
+                not isinstance(ref, str)
+                or type(offset) is not int
+                or offset < 0
+                or type(page_bytes) is not int
+                or page_bytes < 0
+                or type(eof) is not bool
+            ):
+                return []
+            try:
+                decoded_ref = decode_context_content_locator(
+                    ref,
+                    error_message="compacted context page has an invalid ref",
+                )
+            except ContextContentProtocolError:
+                return []
+            if decoded_ref is None or read_request != {
+                "tool": CONTEXT_CONTENT_READER_TOOL,
+                "arguments": {"ref": ref, "offset": offset, "limit": 8192},
+            }:
+                return []
+            if eof:
+                if next_offset is not None or next_read is not None:
+                    return []
+            else:
+                if (
+                    type(next_offset) is not int
+                    or next_offset != offset + page_bytes
+                    or next_read
+                    != {
+                        "tool": CONTEXT_CONTENT_READER_TOOL,
+                        "arguments": {
+                            "ref": ref,
+                            "offset": next_offset,
+                            "limit": 8192,
+                        },
+                    }
+                ):
+                    return []
+            restored.append(copy.deepcopy(dict(entry)))
+        return restored
+    try:
+        from unchain.context_content import canonical_context_output_read_handle
+
+        return [canonical_context_output_read_handle(value)]
+    except (ContextContentProtocolError, TypeError, ValueError):
+        return []
+
+
+def _historical_compaction_marker(
+    *,
+    call_ids: list[str],
+    original_output: Any,
+    include_note: bool,
+) -> dict[str, Any]:
+    """Build one provider-neutral compact marker without trusting arbitrary JSON."""
+
+    marker: dict[str, Any] = {
+        "memory_v2_compacted": True,
+        "call_ids": call_ids,
+    }
+    if include_note:
+        marker["note"] = "Full tool output is available in the durable context journal."
+    context_content = _compacted_context_content(original_output)
+    if context_content:
+        marker["context_content"] = context_content
+    return marker
 
 
 def _require_int(value: Any, *, field_name: str, minimum: int) -> int:
@@ -220,7 +449,9 @@ class ToolOutputManager:
                 preview_chars=preview_chars,
                 inline_chars=inline_chars,
             )
-            for name in sorted(SUPPORTED_TOOL_OUTPUT_POLICIES)
+            for name in sorted(
+                SUPPORTED_TOOL_OUTPUT_POLICIES.difference({CONTEXT_PAGE_POLICY})
+            )
         }
         return cls(
             active=True,
@@ -311,6 +542,7 @@ class ToolOutputManager:
         manager = cls.active_default(attempt_id=attempt_id)
         tools = getattr(toolkit, "tools", None)
         declared: dict[str, str] = {}
+        declares_context_page = False
         if tools is not None:
             if not isinstance(tools, Mapping):
                 raise ToolOutputManagementError("tool output toolkit shape is invalid")
@@ -320,7 +552,37 @@ class ToolOutputManager:
                 requested = getattr(tool, "output_policy", None)
                 if requested is None:
                     continue
-                declared[raw_name] = manager.resolve_policy(requested).name
+                if (
+                    isinstance(requested, str)
+                    and requested.strip().lower() == CONTEXT_PAGE_POLICY
+                ):
+                    policy_name = CONTEXT_PAGE_POLICY
+                else:
+                    policy_name = manager.resolve_policy(requested).name
+                if (
+                    policy_name == CONTEXT_PAGE_POLICY
+                    and raw_name != CONTEXT_CONTENT_READER_TOOL
+                ):
+                    raise ToolOutputManagementError(
+                        "context_page policy is reserved for context_content_read"
+                    )
+                declares_context_page = (
+                    declares_context_page or policy_name == CONTEXT_PAGE_POLICY
+                )
+                declared[raw_name] = policy_name
+        if declares_context_page:
+            policies = dict(manager.policies)
+            policies[CONTEXT_PAGE_POLICY] = ToolOutputPolicy(
+                name=CONTEXT_PAGE_POLICY,
+                preview_chars=manager.default_policy.preview_chars,
+                inline_chars=manager.default_policy.inline_chars,
+            )
+            manager = cls(
+                active=manager.active,
+                default_policy=manager.default_policy,
+                policies=policies,
+                attempt_id=manager.attempt_id,
+            )
         config = {"tool_output_management": manager.runtime_snapshot()}
         if declared:
             config["tool_output_policy_map"] = {
@@ -376,6 +638,13 @@ class ToolOutputManager:
         for name, value in policies.items():
             if not isinstance(name, str) or not name.strip() or not isinstance(value, str):
                 raise ToolOutputManagementError("tool output policy map entry is invalid")
+            if (
+                value.strip().lower() == CONTEXT_PAGE_POLICY
+                and name != CONTEXT_CONTENT_READER_TOOL
+            ):
+                raise ToolOutputManagementError(
+                    "context_page policy is reserved for context_content_read"
+                )
         return self.resolve_policy(policies.get(normalized_name))
 
     def project(
@@ -405,34 +674,28 @@ class ToolOutputManager:
             raise ToolOutputManagementError("tool output digest does not match raw bytes")
         if int(content_bytes) != len(result_bytes):
             raise ToolOutputManagementError("tool output byte count does not match raw bytes")
-        text = result_bytes.decode("utf-8", errors="replace")
-        if not text:
-            payload: dict[str, Any] = {"projection": "empty"}
-        elif policy.name == "artifact_only":
-            payload = {
-                "projection": "artifact_only",
-                "note": "Full tool output is available in durable artifact",
-            }
-        elif policy.name == "head_tail":
-            payload = {
-                "projection": "head_tail",
-                "preview": text[: policy.preview_chars],
-                "tail_preview": text[-policy.preview_chars :] if policy.preview_chars else "",
-                "content_chars": len(text),
-            }
+        if policy.name == CONTEXT_PAGE_POLICY:
+            payload = _context_page_projection(result_bytes)
         else:
-            payload = {"projection": "default"}
-            if len(result_bytes) > policy.inline_chars:
-                payload.update({"inline": False, "preview": text[: policy.preview_chars]})
-            else:
-                payload.update({"inline": True, "preview": text})
-        payload.update(
-            {
-                "full_output_ref": copy.deepcopy(full_output_ref),
-                "content_bytes": len(result_bytes),
-                "content_sha256": digest,
-            }
-        )
+            text = result_bytes.decode("utf-8", errors="replace")
+            payload = self._project_non_page_output(
+                text,
+                result_bytes=result_bytes,
+                full_output_ref=full_output_ref,
+                digest=digest,
+                policy=policy,
+            )
+        if (
+            policy.name != CONTEXT_PAGE_POLICY
+            and payload.get("schema_version") != "unchain.tool_output.paged.v1"
+        ):
+            payload.update(
+                {
+                    "full_output_ref": copy.deepcopy(full_output_ref),
+                    "content_bytes": len(result_bytes),
+                    "content_sha256": digest,
+                }
+            )
         metadata = {
             "projection_policy": policy.name,
             "projection_version": policy.version,
@@ -454,6 +717,47 @@ class ToolOutputManager:
         return receipt
 
     @staticmethod
+    def _project_non_page_output(
+        text: str,
+        *,
+        result_bytes: bytes,
+        full_output_ref: Any,
+        digest: str,
+        policy: ToolOutputPolicy,
+    ) -> dict[str, Any]:
+        if not text:
+            payload: dict[str, Any] = {"projection": "empty"}
+        elif policy.name == "artifact_only":
+            payload = {
+                "projection": "artifact_only",
+                "note": "Full tool output is available in durable artifact",
+            }
+        elif policy.name == "head_tail":
+            payload = {
+                "projection": "head_tail",
+                "preview": text[: policy.preview_chars],
+                "tail_preview": text[-policy.preview_chars :] if policy.preview_chars else "",
+                "content_chars": len(text),
+            }
+        else:
+            payload = {"projection": "default"}
+            if len(result_bytes) > policy.inline_chars:
+                paged = _paged_context_projection(
+                    result_bytes,
+                    full_output_ref=full_output_ref,
+                    digest=digest,
+                    preview_chars=policy.preview_chars,
+                )
+                if paged is not None:
+                    return paged
+                payload.update(
+                    {"inline": False, "preview": text[: policy.preview_chars]}
+                )
+            else:
+                payload.update({"inline": True, "preview": text})
+        return payload
+
+    @staticmethod
     def compact_historical_message(
         message: Mapping[str, Any],
         *,
@@ -470,34 +774,44 @@ class ToolOutputManager:
         normalized_call_ids = sorted({str(call_id) for call_id in call_ids if call_id})
         if not normalized_call_ids:
             return updated
-        marker_payload = {
-            "memory_v2_compacted": True,
-            "call_ids": normalized_call_ids,
-            "note": "Full tool output is available in the durable context journal.",
-        }
-        marker = json.dumps(marker_payload, ensure_ascii=False)
         if updated.get("role") == "tool":
-            updated["content"] = marker
+            marker_payload = _historical_compaction_marker(
+                call_ids=normalized_call_ids,
+                original_output=updated.get("content"),
+                include_note=True,
+            )
+            updated["content"] = json.dumps(marker_payload, ensure_ascii=False)
         elif updated.get("type") in {
             "function_call_output",
             "computer_call_output",
             "tool_result",
         }:
-            updated["output"] = marker
+            marker_payload = _historical_compaction_marker(
+                call_ids=normalized_call_ids,
+                original_output=updated.get("output"),
+                include_note=True,
+            )
+            updated["output"] = json.dumps(marker_payload, ensure_ascii=False)
         content = updated.get("content")
         if isinstance(content, list):
             for block in content:
                 if isinstance(block, dict) and block.get("type") == "tool_result":
-                    block["content"] = marker
+                    marker_payload = _historical_compaction_marker(
+                        call_ids=normalized_call_ids,
+                        original_output=block.get("content"),
+                        include_note=True,
+                    )
+                    block["content"] = json.dumps(marker_payload, ensure_ascii=False)
         parts = updated.get("parts")
         if isinstance(parts, list):
             for part in parts:
                 if isinstance(part, dict) and isinstance(part.get("function_response"), dict):
                     response = part["function_response"]
-                    response["response"] = {
-                        "memory_v2_compacted": True,
-                        "call_ids": normalized_call_ids,
-                    }
+                    response["response"] = _historical_compaction_marker(
+                        call_ids=normalized_call_ids,
+                        original_output=response.get("response"),
+                        include_note=False,
+                    )
         return updated
 
     def read_page(

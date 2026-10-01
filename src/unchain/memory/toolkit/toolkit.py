@@ -7,6 +7,7 @@ from typing import Any
 from unchain.journal import ResourceRef
 from unchain.memory.workspace import MemoryEntry
 from unchain.tools import Tool, Toolkit
+from unchain.tools.models import ToolParameter
 
 from .capabilities import (
     ConsolidationMemoryToolkitCapabilities,
@@ -20,6 +21,7 @@ from .contracts import DEFAULT_MEMORY_TOOLKIT_DIALECT, MemoryToolkitDialect
 from .models import (
     CandidateProposalRequest,
     MAX_CHECKPOINT_EVENT_PAGE_SIZE,
+    MAX_CONTEXT_CONTENT_PAGE_READ_BYTES,
     MAX_FULL_READ_BYTES,
     MAX_LIST_RESULTS,
     MAX_PAGE_READ_BYTES,
@@ -32,6 +34,11 @@ from .models import (
     TaskStateUpdateRequest,
 )
 from .policy import MEMORY_PROPOSE_PROMPT_SPEC
+from .context_content_presentation import (
+    ContextContentProtocolError,
+    render_context_content_page,
+    validate_capability_content_page,
+)
 from .presentation import content_page, model_value
 from .validation import (
     bounded_integer,
@@ -172,19 +179,41 @@ def _register(
     callables: list[tuple[str, str, Any]],
 ) -> Toolkit:
     for name, description, function in callables:
-        toolkit.register(
-            Tool.from_callable(
+        tool = Tool.from_callable(
                 function,
                 name=name,
                 description=description,
+                parameters=(
+                    [
+                        ToolParameter("ref", "Previously disclosed content ref", "string", required=True),
+                        ToolParameter("offset", "Byte offset: integer 0..33554432, default 0", "integer"),
+                        ToolParameter("limit", "Page bytes: integer 1..8192, default 8192", "integer"),
+                    ] if name == "context_content_read" else None
+                ),
                 prompt_spec=(
                     MEMORY_PROPOSE_PROMPT_SPEC
                     if name == "memory_propose"
                     else None
                 ),
+                output_policy=(
+                    "context_page" if name == "context_content_read" else "default"
+                ),
                 always_load=True,
-            )
         )
+        if name == "context_content_read":
+            # Native overrides are canonical handler configuration. Keep exact
+            # ToolParameter records: the durable registry rejects subclasses.
+            for provider in ("openai", "anthropic", "hyperspace", "gemini", "ollama"):
+                spec = tool.to_provider_json(provider)
+                function = spec["function"] if provider == "ollama" else spec
+                schema = function.get("parameters", function.get("input_schema"))
+                schema["properties"]["limit"].update(minimum=1, maximum=8192)
+                schema["properties"]["offset"].update(minimum=0, maximum=33554432)
+                if provider != "gemini":
+                    schema["properties"]["limit"]["default"] = 8192
+                    schema["properties"]["offset"]["default"] = 0
+                tool.provider_native_specs[provider] = spec
+        toolkit.register(tool)
     names = tuple(name for name, _, _ in callables)
     functions = {name: function for name, _, function in callables}
     setattr(toolkit, "_unchain_memory_v2_tool_names", names)
@@ -218,6 +247,52 @@ def build_memory_toolkit(
         )
     validate_capability_bindings(binding.binding_id, capabilities)
     references = capabilities.references
+    context_content_failure: tuple[
+        tuple[ResourceRef, str, str], str, int
+    ] | None = None
+
+    def context_content_failure_key(
+        ref: ResourceRef,
+        *,
+        offset: Any,
+        limit: Any,
+    ) -> tuple[ResourceRef, str, str]:
+        """Keep loop detection local to one normalized context-read request."""
+
+        def fingerprint(value: Any) -> str:
+            encoded = f"{type(value).__name__}:{value!r}".encode(
+                "utf-8", errors="backslashreplace"
+            )
+            return hashlib.sha256(encoded).hexdigest()
+
+        return (ref, fingerprint(offset), fingerprint(limit))
+
+    def context_content_retryable(error: MemoryToolkitError) -> bool:
+        return bool(getattr(error, "retryable", False))
+
+    def clear_context_content_failure_if_different(
+        key: tuple[ResourceRef, str, str],
+    ) -> None:
+        """A different read cannot continue the prior read's failure streak."""
+
+        nonlocal context_content_failure
+        if context_content_failure is not None and context_content_failure[0] != key:
+            context_content_failure = None
+
+    def note_context_content_failure(
+        key: tuple[ResourceRef, str, str],
+        error: MemoryToolkitError,
+    ) -> None:
+        nonlocal context_content_failure
+        if context_content_retryable(error):
+            context_content_failure = None
+            return
+        message = str(error)
+        prior = context_content_failure
+        if prior is not None and prior[:2] == (key, message):
+            context_content_failure = (key, message, prior[2] + 1)
+        else:
+            context_content_failure = (key, message, 1)
 
     def present(value: Any) -> Any:
         return model_value(
@@ -282,7 +357,10 @@ def build_memory_toolkit(
                 purpose=purpose,
             )
         except Exception as exc:
-            raise MemoryToolkitError(error_message) from exc
+            error = MemoryToolkitError(error_message)
+            if bool(getattr(exc, "retryable", False)):
+                error.retryable = True
+            raise error from exc
         if authorized != authorization_ref:
             raise MemoryToolkitError(error_message)
         return ref
@@ -450,43 +528,58 @@ def build_memory_toolkit(
     def context_content_read(
         ref: str,
         offset: int = 0,
-        limit: int = MAX_PAGE_READ_BYTES,
+        limit: int = MAX_CONTEXT_CONTENT_PAGE_READ_BYTES,
     ) -> dict[str, Any]:
+        nonlocal context_content_failure
         normalized_ref = decode_context_content_ref(
             references,
             ref,
             error_message=dialect.error("context_content_ref"),
         )
-        page_offset = bounded_integer(
-            offset,
-            "offset",
-            minimum=0,
-            maximum=32 * 1024 * 1024,
-        )
-        requested_limit = bounded_integer(
-            limit,
-            "limit",
-            minimum=1,
-            maximum=MAX_PAGE_READ_BYTES,
-        )
-        authorize_context_ref(
+        failure_key = context_content_failure_key(
             normalized_ref,
-            purpose=ReferencePurpose.CONTEXT_CONTENT,
-            error_message="content ref was not disclosed to this agent context",
+            offset=offset,
+            limit=limit,
         )
-        page = capability_content_page(
-            capabilities.context,
-            normalized_ref,
-            offset=page_offset,
-            limit=requested_limit,
-        )
-        return content_page(
-            page,
-            references,
-            schema_version="context_content.v2",
-            context_shape=True,
-            requested_limit=requested_limit,
-        )
+        clear_context_content_failure_if_different(failure_key)
+        prior = context_content_failure
+        if prior is not None and prior[0] == failure_key and prior[2] >= 2:
+            raise MemoryToolkitError("CONTEXT_READ_NO_PROGRESS")
+        try:
+            page_offset = bounded_integer(
+                offset, "offset", minimum=0, maximum=32 * 1024 * 1024,
+            )
+            requested_limit = bounded_integer(
+                limit, "limit", minimum=1,
+                maximum=MAX_CONTEXT_CONTENT_PAGE_READ_BYTES,
+            )
+            authorize_context_ref(
+                normalized_ref,
+                purpose=ReferencePurpose.CONTEXT_CONTENT,
+                error_message="content ref was not disclosed to this agent context",
+            )
+            page = capability_content_page(
+                capabilities.context,
+                normalized_ref,
+                offset=page_offset,
+                limit=requested_limit,
+            )
+            page = validate_capability_content_page(
+                page,
+                expected_ref=normalized_ref,
+                expected_offset=page_offset,
+                requested_limit=requested_limit,
+            )
+            rendered = render_context_content_page(page)
+        except ContextContentProtocolError as exc:
+            error = MemoryToolkitError(str(exc))
+            note_context_content_failure(failure_key, error)
+            raise error from exc
+        except MemoryToolkitError as exc:
+            note_context_content_failure(failure_key, exc)
+            raise
+        context_content_failure = None
+        return rendered
 
     def context_checkpoint_events_read(
         checkpoint_ref: str,

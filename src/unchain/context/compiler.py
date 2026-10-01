@@ -14,6 +14,14 @@ from typing import Any, Callable, ClassVar
 from urllib.parse import unquote, urlsplit
 
 from unchain.journal import EventCursor, EventRange, ResourceRef
+from unchain.context_content import (
+    ContextContentProtocolError,
+    canonical_context_output_read_handle,
+    project_context_output_for_model,
+    validate_context_content_page,
+    validate_context_output_descriptor,
+    validate_context_output_presentation,
+)
 from unchain.journal.interaction_cycles import (
     DURABLE_INTERACTION_REQUESTS,
     DURABLE_INTERACTION_RESOLUTIONS,
@@ -71,6 +79,8 @@ _CHECKPOINT_MARKER_KEY = "__unchain_context_checkpoint_request_id__"
 # repositories safe when they cannot preview the identity before preparation.
 _CHECKPOINT_PLANNING_REF = ResourceRef("checkpoint", "x" * 256, 1)
 _NATIVE_TOOL_RESULT_INLINE_LIMIT = 16_000
+_CONTEXT_CONTENT_READER_TOOL = "context_content_read"
+_CONTEXT_PAGE_POLICY = "context_page"
 _NATIVE_TOOL_PROVIDERS = frozenset(
     {"openai", "anthropic", "hyperspace", "ollama", "gemini"}
 )
@@ -419,13 +429,27 @@ class _NativeToolBatch:
     pending_store_seq: int
 
 
+@dataclass(frozen=True)
+class _ImmediateToolBatch:
+    """A completed root-iteration batch, before provider-specific rendering."""
+
+    calls: tuple[tuple[int, Mapping[str, Any]], ...]
+    results_by_call_id: Mapping[str, Mapping[str, Any]]
+    call_ids: tuple[str, ...]
+    pending_event_id: str
+    pending_store_seq: int
+
+
 def _compact_ref(value: Any) -> dict[str, Any] | None:
     if isinstance(value, ResourceRef):
-        return {
+        compact = {
             "kind": value.kind,
             "id": value.resource_id,
             "revision": value.revision,
         }
+        if value.fragment:
+            compact["fragment"] = value.fragment
+        return compact
     if not isinstance(value, Mapping):
         return None
     nested_ref = value.get("ref")
@@ -434,6 +458,7 @@ def _compact_ref(value: Any) -> dict[str, Any] | None:
     kind = value.get("kind")
     identifier = value.get("id", value.get("resource_id"))
     revision = value.get("revision")
+    fragment = value.get("fragment", "")
     if (
         not isinstance(kind, str)
         or not kind.strip()
@@ -442,13 +467,21 @@ def _compact_ref(value: Any) -> dict[str, Any] | None:
         or isinstance(revision, bool)
         or not isinstance(revision, int)
         or revision <= 0
+        or not isinstance(fragment, str)
     ):
         return None
-    return {
-        "kind": kind.strip(),
-        "id": identifier.strip(),
-        "revision": revision,
+    try:
+        ref = ResourceRef(kind.strip(), identifier.strip(), revision, fragment)
+    except (TypeError, ValueError):
+        return None
+    compact = {
+        "kind": ref.kind,
+        "id": ref.resource_id,
+        "revision": ref.revision,
     }
+    if ref.fragment:
+        compact["fragment"] = ref.fragment
+    return compact
 
 
 def _resource_ref(value: Any) -> ResourceRef | None:
@@ -459,6 +492,7 @@ def _resource_ref(value: Any) -> ResourceRef | None:
         kind=compact["kind"],
         resource_id=compact["id"],
         revision=compact["revision"],
+        fragment=compact.get("fragment", ""),
     )
 
 
@@ -493,6 +527,34 @@ def _preview(value: Any, limit: int = _PREVIEW_CHARS) -> Any:
         "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
         "original_chars": len(text),
     }
+
+
+def _bounded_context_output_preview(value: Any) -> Any:
+    """Reduce tool content while retaining one strict, copyable read handle."""
+
+    if not isinstance(value, Mapping):
+        return _preview(value)
+    try:
+        handle = canonical_context_output_read_handle(value)
+    except ContextContentProtocolError:
+        return _preview(value)
+    body = _plain(value)
+    body.pop("full_output_ref", None)
+    body.pop("read_request", None)
+    preview = _preview(body)
+    if not isinstance(preview, Mapping):
+        return _preview(value)
+    bounded = dict(preview)
+    projection = body.get("projection")
+    if isinstance(projection, str):
+        bounded["projection"] = projection
+    if projection == "default":
+        bounded["inline"] = False
+    bounded.update(handle)
+    try:
+        return validate_context_output_presentation(bounded)
+    except ContextContentProtocolError:
+        return _preview(value)
 
 
 def _is_system(message: Mapping[str, Any]) -> bool:
@@ -728,6 +790,105 @@ def _compact_tool_result(message: Mapping[str, Any]) -> dict[str, Any]:
         updated,
         call_ids=_tool_result_ids(updated),
     )
+
+
+def _is_context_content_page_wire(message: Mapping[str, Any]) -> bool:
+    """Recognize only a strict reader page in provider-native tool-result wire."""
+
+    values: list[Any] = []
+    if message.get("role") == "tool":
+        values.append(message.get("content"))
+    if message.get("type") in {
+        "function_call_output",
+        "computer_call_output",
+        "tool_result",
+    }:
+        values.append(message.get("output"))
+    content = message.get("content")
+    if isinstance(content, Sequence) and not isinstance(
+        content, (str, bytes, bytearray)
+    ):
+        values.extend(
+            block.get("content")
+            for block in content
+            if isinstance(block, Mapping) and block.get("type") == "tool_result"
+        )
+    parts = message.get("parts")
+    if isinstance(parts, Sequence) and not isinstance(parts, (str, bytes, bytearray)):
+        values.extend(
+            part["function_response"].get("response")
+            for part in parts
+            if isinstance(part, Mapping)
+            and isinstance(part.get("function_response"), Mapping)
+        )
+    for value in values:
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+        try:
+            if validate_context_content_page(value) == value:
+                return True
+        except ContextContentProtocolError:
+            continue
+    return False
+
+
+def _historical_context_content_page_marker(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep a validated old reader page re-readable without its inline body."""
+
+    page = validate_context_content_page(value)
+    return {
+        "memory_v2_compacted": True,
+        "context_content": [
+            {
+                "ref": page["ref"],
+                "offset": page["offset"],
+                "page_bytes": page["page_bytes"],
+                "next_offset": page["next_offset"],
+                "eof": page["eof"],
+                "read_request": {
+                    "tool": "context_content_read",
+                    "arguments": {
+                        "ref": page["ref"],
+                        "offset": page["offset"],
+                        "limit": 8192,
+                    },
+                },
+                "next_read": page["next_read"],
+            }
+        ],
+    }
+
+
+def _bound_historical_context_page_exchanges(
+    exchanges: Sequence[dict[str, Any]],
+    *,
+    page_source_by_call_id: Mapping[str, str],
+) -> list[dict[str, Any]]:
+    """Keep the newest re-read cursor for each verified page source.
+
+    The canonical journal retains every tool pair.  This only bounds the model
+    projection, where repeated pages of one source do not add new retrieval
+    capability once the newest cursor is present. Provenance comes from the
+    compiler's strict page validation, never from fields supplied by a tool.
+    """
+
+    latest_index_by_source: dict[str, int] = {}
+    for index, exchange in enumerate(exchanges):
+        source_key = page_source_by_call_id.get(str(exchange.get("call_id") or ""))
+        if source_key is not None:
+            latest_index_by_source[source_key] = index
+    retained_indexes = set(latest_index_by_source.values())
+    return [
+        exchange
+        for index, exchange in enumerate(exchanges)
+        if (
+            str(exchange.get("call_id") or "") not in page_source_by_call_id
+            or index in retained_indexes
+        )
+    ]
 
 
 def _stable_interaction_id(event: Mapping[str, Any]) -> str:
@@ -2214,7 +2375,7 @@ def _native_tool_result_payload(event: Mapping[str, Any]) -> dict[str, Any]:
         payload = managed_projection.get("result")
         if not isinstance(payload, Mapping):
             raise ContextCompilerError("tool output model projection is invalid")
-        return _plain(payload)
+        return _model_context_output(payload, event.get("full_output_ref"))
     result = _plain(event.get("result"))
     result_bytes = event.get("result_bytes")
     if (
@@ -2231,6 +2392,18 @@ def _native_tool_result_payload(event: Mapping[str, Any]) -> dict[str, Any]:
         "result_sha256": str(event.get("result_sha256") or ""),
     }
     return compacted
+
+
+def _model_context_output(value: Mapping[str, Any], source_ref: Any) -> dict[str, Any]:
+    """Copy only trusted harness retrieval fields into the model result view."""
+
+    try:
+        ref = _resource_ref(source_ref)
+        if ref is None:
+            raise ContextContentProtocolError("context output source is invalid")
+        return project_context_output_for_model(_plain(value), source_ref=ref)
+    except (ContextContentProtocolError, TypeError, ValueError):
+        return _plain(value)
 
 
 def _shadow_observation(event: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -2330,14 +2503,15 @@ def _native_tool_call_messages(
     return None
 
 
-def _current_native_tool_batch(
+def _current_completed_tool_batch(
     request: ContextCompileRequest,
     *,
     projection_events: Sequence[tuple[int, Mapping[str, Any], Mapping[str, Any]]],
     pending_inputs: Sequence[Mapping[str, Any]],
-) -> _NativeToolBatch | None:
-    provider = str(request.provider or "").strip().casefold()
-    if provider not in _NATIVE_TOOL_PROVIDERS or not pending_inputs:
+) -> _ImmediateToolBatch | None:
+    """Find the complete current root batch without choosing a wire format."""
+
+    if not pending_inputs:
         return None
     if any(
         str(event.get("type") or "") in {"tool_call", "tool_result"}
@@ -2400,9 +2574,6 @@ def _current_native_tool_batch(
         str(event.get("call_id") or event.get("tool_call_id") or "").strip()
         for _event_index, event in results_with_indexes
     )
-    source_providers = tuple(
-        event.get("source_provider") for _event_index, event in calls_with_indexes
-    )
     if (
         not call_ids
         or any(not call_id for call_id in call_ids)
@@ -2410,7 +2581,6 @@ def _current_native_tool_batch(
         or any(not call_id for call_id in result_ids)
         or len(set(result_ids)) != len(result_ids)
         or set(call_ids) != set(result_ids)
-        or any(source != provider for source in source_providers)
         or pending_event.get("call_id") not in call_ids
     ):
         return None
@@ -2418,13 +2588,39 @@ def _current_native_tool_batch(
         str(event.get("call_id") or event.get("tool_call_id") or "").strip(): event
         for _event_index, event in results_with_indexes
     }
-    typed_calls: list[tuple[Mapping[str, Any], ToolCall]] = []
     for _event_index, event in calls_with_indexes:
         call_id = str(event.get("call_id") or event.get("tool_call_id") or "").strip()
         name = str(event.get("tool_name") or "").strip()
         result = results_by_call_id[call_id]
         if not name or str(result.get("tool_name") or "").strip() != name:
             return None
+    return _ImmediateToolBatch(
+        calls=tuple(calls_with_indexes),
+        results_by_call_id=MappingProxyType(results_by_call_id),
+        call_ids=call_ids,
+        pending_event_id=pending_event_id,
+        pending_store_seq=int(pending_store_seq),
+    )
+
+
+def _current_native_tool_batch(
+    request: ContextCompileRequest,
+    *,
+    batch: _ImmediateToolBatch | None,
+) -> _NativeToolBatch | None:
+    provider = str(request.provider or "").strip().casefold()
+    if provider not in _NATIVE_TOOL_PROVIDERS or batch is None:
+        return None
+    if any(
+        event.get("source_provider") != provider
+        for _event_index, event in batch.calls
+    ):
+        return None
+
+    typed_calls: list[tuple[Mapping[str, Any], ToolCall]] = []
+    for _event_index, event in batch.calls:
+        call_id = str(event.get("call_id") or event.get("tool_call_id") or "").strip()
+        name = str(event.get("tool_name") or "").strip()
         typed_calls.append(
             (
                 event,
@@ -2447,7 +2643,7 @@ def _current_native_tool_batch(
                 builder.build_tool_result_messages(
                     tool_call=call,
                     tool_result=_native_tool_result_payload(
-                        results_by_call_id[call.call_id]
+                        batch.results_by_call_id[call.call_id]
                     ),
                 )
             )
@@ -2459,18 +2655,16 @@ def _current_native_tool_batch(
         return None
     messages = [*call_messages, *result_messages]
     if {call_id for message in messages for call_id in _tool_call_ids(message)} != set(
-        call_ids
+        batch.call_ids
     ) or {
         call_id for message in messages for call_id in _tool_result_ids(message)
-    } != set(
-        call_ids
-    ):
+    } != set(batch.call_ids):
         return None
     return _NativeToolBatch(
         messages=tuple(messages),
-        call_ids=call_ids,
-        pending_event_id=pending_event_id,
-        pending_store_seq=int(pending_store_seq),
+        call_ids=batch.call_ids,
+        pending_event_id=batch.pending_event_id,
+        pending_store_seq=batch.pending_store_seq,
     )
 
 
@@ -2634,6 +2828,7 @@ def _neutral_context(
     results: dict[str, dict[str, Any]] = {}
     call_store_seqs: dict[str, int] = {}
     result_store_seqs: dict[str, int] = {}
+    result_event_identities: dict[str, tuple[str, int]] = {}
     pending_interactions: dict[str, dict[str, Any]] = {}
     resolved_human_interaction_call_ids: set[str] = set()
     resolved_human_interactions: list[dict[str, Any]] = []
@@ -2646,10 +2841,14 @@ def _neutral_context(
         _legacy_interaction_resolution_suppressions(projection_events)
     )
     pending_inputs = _pending_inputs(request)
-    native_batch = _current_native_tool_batch(
+    immediate_batch = _current_completed_tool_batch(
         request,
         projection_events=projection_events,
         pending_inputs=pending_inputs,
+    )
+    native_batch = _current_native_tool_batch(
+        request,
+        batch=immediate_batch,
     )
     native_call_ids = set(native_batch.call_ids if native_batch is not None else ())
     for event_index, raw, event in projection_events:
@@ -2686,6 +2885,10 @@ def _neutral_context(
         elif event_type == "tool_result" and call_id:
             consumed = True
             result_store_seqs[call_id] = _required_semantic_event_cursor(raw, event)[1]
+            result_event_identities[call_id] = (
+                str(event.get("event_id") or "").strip(),
+                result_store_seqs[call_id],
+            )
             full_output_ref = _compact_ref(event.get("full_output_ref"))
             result_bytes = event.get("result_bytes")
             result_sha256 = event.get("result_sha256")
@@ -2704,13 +2907,36 @@ def _neutral_context(
                 raise ContextCompilerError(
                     "completed tool result requires a durable artifact descriptor"
                 )
+            managed_projection = event.get("model_projection")
+            model_projection_policy: str | None = None
+            if isinstance(managed_projection, Mapping):
+                model_result = managed_projection.get("result")
+                if not isinstance(model_result, Mapping):
+                    raise ContextCompilerError("tool output model projection is invalid")
+                metadata = managed_projection.get("metadata")
+                if isinstance(metadata, Mapping) and isinstance(
+                    metadata.get("projection_policy"), str
+                ):
+                    model_projection_policy = str(metadata["projection_policy"])
+                model_result = _model_context_output(model_result, full_output_ref)
+            else:
+                model_result = _plain(event.get("result"))
+            model_full_output_ref = (
+                model_result.get("full_output_ref")
+                if isinstance(model_result, Mapping)
+                and isinstance(model_result.get("full_output_ref"), str)
+                else full_output_ref
+            )
             results[call_id] = {
                 "call_id": call_id,
                 "tool_name": str(event.get("tool_name") or ""),
-                "result": _plain(event.get("result")),
+                "result": model_result,
                 "result_bytes": result_bytes,
                 "result_sha256": result_sha256,
-                "full_output_ref": full_output_ref,
+                "durable_full_output_ref": full_output_ref,
+                "model_full_output_ref": model_full_output_ref,
+                "has_model_projection": isinstance(managed_projection, Mapping),
+                "model_projection_policy": model_projection_policy,
                 **(
                     {"observation": _shadow_observation(event)}
                     if _shadow_observation(event) is not None
@@ -2783,7 +3009,53 @@ def _neutral_context(
     if results.keys() - calls.keys():
         raise ContextCompilerError("orphan_tool_result")
 
+    immediate_batch_call_ids = set(
+        immediate_batch.call_ids if immediate_batch is not None else ()
+    )
+    current_pending_result = (
+        pending_inputs[-1]
+        if pending_inputs and pending_inputs[-1]["type"] == "tool_result"
+        else None
+    )
+    pending_result_identity = (
+        (
+            str(current_pending_result["event_id"]),
+            int(current_pending_result["store_seq"]),
+            _compact_ref(current_pending_result["content_ref"]),
+        )
+        if current_pending_result is not None
+        else None
+    )
+    current_context_page_call_ids = {
+        call_id
+        for call_id, result in results.items()
+        if (
+            call_id in immediate_batch_call_ids
+            or (
+                pending_result_identity is not None
+                and result_event_identities.get(call_id)
+                == pending_result_identity[:2]
+                and result["durable_full_output_ref"] == pending_result_identity[2]
+            )
+        )
+        and isinstance(result["result"], Mapping)
+        and calls[call_id]["tool_name"] == _CONTEXT_CONTENT_READER_TOOL
+        and result["tool_name"] == _CONTEXT_CONTENT_READER_TOOL
+        and (
+            not result["has_model_projection"]
+            or result["model_projection_policy"] == _CONTEXT_PAGE_POLICY
+        )
+        and _is_context_content_page_wire(
+            {
+                "type": "tool_result",
+                "call_id": call_id,
+                "output": result["result"],
+            }
+        )
+    }
+
     closed = []
+    historical_context_page_sources: dict[str, str] = {}
     shadow_observed_tool_exchange_count = 0
     for call_id in sorted(
         calls.keys() & results.keys(),
@@ -2806,13 +3078,61 @@ def _neutral_context(
             raise ContextCompilerError("shadow_observed_tool_pair_mismatch")
         if call_observation is not None:
             shadow_observed_tool_exchange_count += 1
-        closed.append(
-            {
-                **calls[call_id],
-                "result": _preview(result["result"]),
-                "full_output_ref": result["full_output_ref"],
-            }
+        model_result = result["result"]
+        validated_context_page: Mapping[str, Any] | None = None
+        if isinstance(model_result, Mapping):
+            try:
+                validated_context_page = validate_context_content_page(model_result)
+            except ContextContentProtocolError:
+                pass
+        is_context_page = (
+            validated_context_page is not None
+            and calls[call_id]["tool_name"] == _CONTEXT_CONTENT_READER_TOOL
+            and result["tool_name"] == _CONTEXT_CONTENT_READER_TOOL
+            and (
+                not result["has_model_projection"]
+                or result["model_projection_policy"] == _CONTEXT_PAGE_POLICY
+            )
         )
+        try:
+            is_context_descriptor = (
+                isinstance(model_result, Mapping)
+                and validate_context_output_descriptor(model_result) == model_result
+            )
+        except ContextContentProtocolError:
+            is_context_descriptor = False
+        try:
+            is_context_presentation = (
+                isinstance(model_result, Mapping)
+                and validate_context_output_presentation(model_result) == model_result
+            )
+        except ContextContentProtocolError:
+            is_context_presentation = False
+        exchange = {
+            **calls[call_id],
+            "result": (
+                model_result
+                if is_context_page and call_id in current_context_page_call_ids
+                or is_context_descriptor
+                or is_context_presentation
+                else (
+                    _historical_context_content_page_marker(model_result)
+                    if is_context_page
+                    else _bounded_context_output_preview(model_result)
+                )
+            ),
+        }
+        if result["model_full_output_ref"] is not None and not is_context_page:
+            exchange["full_output_ref"] = result["model_full_output_ref"]
+        closed.append(exchange)
+        if is_context_page and call_id not in current_context_page_call_ids:
+            historical_context_page_sources[call_id] = str(
+                validated_context_page["ref"]
+            )
+    closed = _bound_historical_context_page_exchanges(
+        closed,
+        page_source_by_call_id=historical_context_page_sources,
+    )
     unfinished_call_ids = (
         calls.keys() - results.keys() - resolved_human_interaction_call_ids
     )
@@ -3085,6 +3405,32 @@ def _reduce(
         ):
             pinned_indexes.add(index)
     pinned_indexes = dependency_closure(pinned_indexes)
+    current_page_source_indexes = {
+        source_index
+        for message in (turns[-1] if turns else ())
+        if isinstance(
+            (source_index := message.get(_SOURCE_INDEX_KEY)), int
+        )
+        and not isinstance(source_index, bool)
+        and _is_context_content_page_wire(message)
+    }
+    current_page_call_ids = {
+        call_id
+        for message in injected_tail
+        if _is_context_content_page_wire(message)
+        for call_id in _tool_result_ids(message)
+    }
+
+    def compact_message(message: Mapping[str, Any]) -> dict[str, Any]:
+        compacted = _compact_pinned_message(message)
+        source_index = compacted.get(_SOURCE_INDEX_KEY)
+        if (
+            _tool_result_ids(compacted)
+            and source_index not in current_page_source_indexes
+            and not (_tool_result_ids(compacted) & current_page_call_ids)
+        ):
+            return _compact_tool_result(compacted)
+        return compacted
 
     mandatory = (
         systems
@@ -3099,13 +3445,12 @@ def _reduce(
     )
     compact_mandatory = False
     if _estimate(mandatory).total_tokens > message_budget:
-        mandatory = [
-            _compact_tool_result(_compact_pinned_message(message))
-            if _tool_result_ids(message)
-            else _compact_pinned_message(message)
-            for message in mandatory
-        ]
+        mandatory = [compact_message(message) for message in mandatory]
         if _estimate(mandatory).total_tokens > message_budget:
+            if current_page_source_indexes or current_page_call_ids:
+                raise PinnedTaskStateBudgetError(
+                    "current context page exceeds the input budget"
+                )
             raise PinnedTaskStateBudgetError(
                 "pinned instructions and current turn exceed the input budget"
             )
@@ -3114,10 +3459,7 @@ def _reduce(
     def transformed(message: Mapping[str, Any]) -> dict[str, Any]:
         if not compact_mandatory:
             return copy.deepcopy(message)
-        compacted = _compact_pinned_message(message)
-        if _tool_result_ids(compacted):
-            compacted = _compact_tool_result(compacted)
-        return compacted
+        return compact_message(message)
 
     selected_cutoff: int | None = None
     selected_checkpoint_request: CheckpointRequest | None = None

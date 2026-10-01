@@ -19,7 +19,10 @@ from unchain.memory.toolkit import (
 )
 
 from .test_memory_toolkit_contract import HOST_DIALECT
-from unchain.memory.toolkit.validation import mutation_id
+from unchain.memory.toolkit.validation import (
+    encode_context_content_locator,
+    mutation_id,
+)
 
 
 MEMORY_RE = re.compile(
@@ -383,16 +386,48 @@ def test_context_reads_require_disclosure_and_pass_only_structured_refs_to_capab
         offset=2,
         limit=7,
     )
-    assert page["schema_version"] == "context_content.v2"
+    assert page["schema_version"] == "unchain.context_content_page.v1"
     assert page["trust"] == "UNTRUSTED_DATA"
     assert page["content"] == {
         "encoding": "utf-8",
         "text": "llo con",
-        "page_bytes": 7,
     }
     assert page["sha256"] == hashlib.sha256(context.payload).hexdigest()
+    assert page["page_bytes"] == 7
+    assert page["next_read"]["tool"] == "context_content_read"
     assert codec.decoded[-1][1] is ReferencePurpose.CONTEXT_CONTENT
     assert context.calls[-1] == ("read_content", artifact)
+
+    context.calls.clear()
+    codec.decoded.clear()
+    canonical_page = invoke(
+        toolkit,
+        "context_content_read",
+        ref=encode_context_content_locator(artifact),
+        offset=0,
+        limit=7,
+    )
+    assert canonical_page["ref"].startswith("unchain://context/v1/")
+    assert codec.decoded == []
+    assert context.calls == [
+        ("authorize", (artifact, ReferencePurpose.CONTEXT_CONTENT)),
+        ("read_content", artifact),
+    ]
+
+    context.payload = b"x" * 20_000
+    context.total_bytes = len(context.payload)
+    context.calls.clear()
+    default_page = invoke(
+        toolkit,
+        "context_content_read",
+        ref=encode_context_content_locator(artifact),
+    )
+    assert default_page["page_bytes"] == 8 * 1024
+    assert default_page["next_offset"] == 8 * 1024
+    assert context.calls == [
+        ("authorize", (artifact, ReferencePurpose.CONTEXT_CONTENT)),
+        ("read_content", artifact),
+    ]
 
     checkpoint_page = invoke(
         toolkit,
@@ -416,6 +451,226 @@ def test_context_reads_require_disclosure_and_pass_only_structured_refs_to_capab
         )
 
 
+@pytest.mark.parametrize(
+    ("returned_offset", "returned_bytes", "message"),
+    [
+        (0, 100, "requested range"),
+        (50, 101, "requested range"),
+        (50, 0, "cannot continue"),
+    ],
+)
+def test_context_content_read_rejects_invalid_capability_pages(
+    returned_offset: int,
+    returned_bytes: int,
+    message: str,
+) -> None:
+    context = FakeContext()
+    artifact = ResourceRef("artifact", "artifact-1", 1)
+    context.disclosed.add(artifact)
+    context.payload = b"x" * 20_000
+    context.total_bytes = len(context.payload)
+
+    def invalid_read(*, ref, offset, limit):
+        del offset, limit
+        return MemoryToolContentPage(
+            ref=ref,
+            media_type="text/plain",
+            data=b"x" * returned_bytes,
+            offset=returned_offset,
+            total_bytes=context.total_bytes,
+            sha256=hashlib.sha256(context.payload).hexdigest(),
+        )
+
+    context.read_content = invalid_read
+    toolkit, _, _, _, _ = normal_toolkit(context=context)
+
+    with pytest.raises(MemoryToolkitError, match=message):
+        invoke(
+            toolkit,
+            "context_content_read",
+            ref=encode_context_content_locator(artifact),
+            offset=50,
+            limit=100,
+        )
+
+
+def test_context_content_read_stops_only_the_third_identical_nonprogress_read():
+    context = FakeContext()
+    artifact = ResourceRef("artifact", "artifact-1", 1)
+    context.disclosed.add(artifact)
+    locator = encode_context_content_locator(artifact)
+    original_read = context.read_content
+
+    def invalid_read(*, ref, offset, limit):
+        del limit
+        context.calls.append(("read_content", ref))
+        return MemoryToolContentPage(
+            ref=ref,
+            media_type="text/plain",
+            data=b"",
+            offset=offset,
+            total_bytes=2,
+            sha256=hashlib.sha256(b"xx").hexdigest(),
+        )
+
+    context.read_content = invalid_read
+    toolkit, _, _, _, _ = normal_toolkit(context=context)
+    arguments = {"ref": locator, "offset": 0, "limit": 1}
+
+    for _ in range(2):
+        with pytest.raises(MemoryToolkitError, match="cannot continue"):
+            invoke(toolkit, "context_content_read", **arguments)
+    assert [name for name, _value in context.calls].count("read_content") == 2
+
+    with pytest.raises(MemoryToolkitError, match="^CONTEXT_READ_NO_PROGRESS$"):
+        invoke(toolkit, "context_content_read", **arguments)
+    assert [name for name, _value in context.calls].count("read_content") == 2
+
+    with pytest.raises(MemoryToolkitError, match="cannot continue"):
+        invoke(
+            toolkit,
+            "context_content_read",
+            **{**arguments, "offset": 1},
+        )
+    assert [name for name, _value in context.calls].count("read_content") == 3
+
+    second_toolkit, _, _, _, _ = normal_toolkit(context=context)
+    with pytest.raises(MemoryToolkitError, match="cannot continue"):
+        invoke(second_toolkit, "context_content_read", **arguments)
+    assert [name for name, _value in context.calls].count("read_content") == 4
+
+    context.read_content = original_read
+    result = invoke(second_toolkit, "context_content_read", **arguments)
+    assert result["offset"] == 0
+
+    context.read_content = invalid_read
+    for _ in range(2):
+        with pytest.raises(MemoryToolkitError, match="cannot continue"):
+            invoke(second_toolkit, "context_content_read", **arguments)
+    with pytest.raises(MemoryToolkitError, match="^CONTEXT_READ_NO_PROGRESS$"):
+        invoke(second_toolkit, "context_content_read", **arguments)
+
+
+def test_context_content_read_success_clears_another_request_failure_streak():
+    context = FakeContext()
+    failed = ResourceRef("artifact", "failed-artifact", 1)
+    successful = ResourceRef("artifact", "successful-artifact", 1)
+    context.disclosed.add(successful)
+    toolkit, _, _, _, _ = normal_toolkit(context=context)
+    failed_arguments = {
+        "ref": encode_context_content_locator(failed),
+        "offset": 0,
+        "limit": 1,
+    }
+
+    for _ in range(2):
+        with pytest.raises(MemoryToolkitError, match="disclosed"):
+            invoke(toolkit, "context_content_read", **failed_arguments)
+
+    assert invoke(
+        toolkit,
+        "context_content_read",
+        ref=encode_context_content_locator(successful),
+        offset=0,
+        limit=1,
+    )["page_bytes"] == 1
+
+    context.disclosed.add(failed)
+    assert invoke(toolkit, "context_content_read", **failed_arguments)["page_bytes"] == 1
+
+
+@pytest.mark.parametrize(
+    "changed_request",
+    (
+        {"ref": "other-artifact", "offset": 0, "limit": 1},
+        {"ref": "failed-artifact", "offset": 1, "limit": 1},
+        {"ref": "failed-artifact", "offset": 0, "limit": 2},
+    ),
+)
+def test_context_content_read_changed_request_clears_failure_streak(
+    changed_request: dict[str, object],
+) -> None:
+    context = FakeContext()
+    failed = ResourceRef("artifact", "failed-artifact", 1)
+    toolkit, _, _, _, _ = normal_toolkit(context=context)
+    failed_arguments = {
+        "ref": encode_context_content_locator(failed),
+        "offset": 0,
+        "limit": 1,
+    }
+
+    for _ in range(2):
+        with pytest.raises(MemoryToolkitError, match="disclosed"):
+            invoke(toolkit, "context_content_read", **failed_arguments)
+
+    altered = dict(changed_request)
+    altered["ref"] = encode_context_content_locator(
+        ResourceRef("artifact", str(altered["ref"]), 1)
+    )
+    with pytest.raises(MemoryToolkitError, match="disclosed"):
+        invoke(toolkit, "context_content_read", **altered)
+    with pytest.raises(MemoryToolkitError, match="disclosed"):
+        invoke(toolkit, "context_content_read", **failed_arguments)
+
+
+def test_context_content_read_does_not_suppress_retryable_failures():
+    class RetryableReadError(MemoryToolkitError):
+        retryable = True
+
+    context = FakeContext()
+    artifact = ResourceRef("artifact", "artifact-1", 1)
+    context.disclosed.add(artifact)
+
+    def retryable_read(*, ref, offset, limit):
+        del offset, limit
+        context.calls.append(("read_content", ref))
+        raise RetryableReadError("temporary context content failure")
+
+    context.read_content = retryable_read
+    toolkit, _, _, _, _ = normal_toolkit(context=context)
+    arguments = {
+        "ref": encode_context_content_locator(artifact),
+        "offset": 0,
+        "limit": 1,
+    }
+
+    for _ in range(3):
+        with pytest.raises(MemoryToolkitError, match="temporary context content failure"):
+            invoke(toolkit, "context_content_read", **arguments)
+    assert [name for name, _value in context.calls].count("read_content") == 3
+
+
+def test_context_content_read_does_not_suppress_retryable_authorization_failures():
+    class RetryableAuthorizationError(MemoryToolkitError):
+        retryable = True
+
+    class RetryableAuthorizationContext(FakeContext):
+        def __init__(self) -> None:
+            super().__init__()
+            self.authorization_attempts = 0
+
+        def authorize(self, *, ref: ResourceRef, purpose: ReferencePurpose) -> ResourceRef:
+            self.authorization_attempts += 1
+            if self.authorization_attempts <= 2:
+                raise RetryableAuthorizationError("temporary authorization failure")
+            return super().authorize(ref=ref, purpose=purpose)
+
+    context = RetryableAuthorizationContext()
+    artifact = ResourceRef("artifact", "artifact-1", 1)
+    context.disclosed.add(artifact)
+    toolkit, _, _, _, _ = normal_toolkit(context=context)
+    arguments = {"ref": encode_context_content_locator(artifact)}
+
+    for _ in range(2):
+        with pytest.raises(MemoryToolkitError, match="disclosed"):
+            invoke(toolkit, "context_content_read", **arguments)
+
+    result = invoke(toolkit, "context_content_read", **arguments)
+
+    assert context.authorization_attempts == 3
+    assert result["content"]["text"] == "hello context"
+
+
 def test_checkpoint_derived_content_reuses_base_checkpoint_disclosure():
     context = FakeContext()
     checkpoint = ResourceRef("checkpoint", "checkpoint-1", 1)
@@ -429,7 +684,7 @@ def test_checkpoint_derived_content_reuses_base_checkpoint_disclosure():
         limit=4,
     )
 
-    assert result["ref"] == "pupu://context/checkpoint/checkpoint-1/event/7"
+    assert result["ref"].startswith("unchain://context/v1/")
     authorization = next(value for name, value in context.calls if name == "authorize")
     assert authorization[0] == checkpoint
     assert context.calls[-1][1] == ResourceRef(
@@ -616,7 +871,7 @@ def test_binding_mismatch_and_invalid_external_references_fail_closed():
         invoke(toolkit, "memory_read", ref="/host/path/secrets.md")
     with pytest.raises(
         MemoryToolkitError,
-        match="^limit must be between 1 and 32768$",
+        match="^limit must be between 1 and 8192$",
     ):
         invoke(
             toolkit,
@@ -826,8 +1081,8 @@ def test_binary_content_is_returned_as_base64_untrusted_data():
     assert page["content"] == {
         "encoding": "base64",
         "data_base64": base64.b64encode(payload).decode("ascii"),
-        "page_bytes": len(payload),
     }
+    assert page["page_bytes"] == len(payload)
 
 
 def test_normal_bundle_bounds_recalled_long_term_refs_before_model_exposure():
