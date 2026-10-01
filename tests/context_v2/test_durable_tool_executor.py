@@ -50,6 +50,7 @@ from unchain.execution import (
 )
 from unchain.context.tool_executor import _assert_official_execution_guard_active
 from unchain.context.artifacts import MAX_INLINE_TOOL_RESULT_BYTES
+from unchain.context_content import encode_context_content_locator
 from unchain.context.tool_harness import ContextToolAuthorityHarness
 from unchain.context.tool_transitions import (
     DurableToolStateTransitionEnvelope,
@@ -320,9 +321,15 @@ def test_runtime_uses_durable_projection_without_rereading_tool_artifact(
 
         monkeypatch.setattr(bundle.artifacts, "read_full", unexpected_read)
 
-        assert runtime.project_tool_result_for_model(context, receipt) == (
-            receipt.model_projection["result"]
-        )
+        projected = runtime.project_tool_result_for_model(context, receipt)
+        locator = encode_context_content_locator(receipt.result_artifact.ref)
+        assert projected["projection"] == "artifact_only"
+        assert projected["full_output_ref"] == locator
+        assert projected["read_request"] == {
+            "tool": "context_content_read",
+            "arguments": {"ref": locator, "offset": 0, "limit": 8192},
+        }
+        assert receipt.model_projection["result"]["full_output_ref"] != locator
     finally:
         guard.release()
 

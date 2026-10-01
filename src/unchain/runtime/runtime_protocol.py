@@ -252,6 +252,8 @@ _PROTOCOLS = (
             "canonical_journal",
             "chat_deletion_sqlite_scope_closure",
             "context_compiler",
+            "context_content_paging_v1",
+            "context_content_read_recovery_v1",
             "context_contribution_manifest_v1",
             "generation_rebase_live_interaction_cycles",
             "interaction_resolution_compat",

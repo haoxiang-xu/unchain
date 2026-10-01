@@ -2111,7 +2111,17 @@ class ContextRuntime:
             raise ContextExecutionBundleError(
                 "durable tool model projection is missing or invalid"
             )
-        return _thaw_json(projection["result"])
+        from ..context_content import project_context_output_for_model
+
+        source_artifact = (
+            receipt.artifact
+            if isinstance(receipt, DurableToolResultReceipt)
+            else receipt.result_artifact
+        )
+        return project_context_output_for_model(
+            _thaw_json(projection["result"]),
+            source_ref=source_artifact.ref,
+        )
 
     def emit_persisted_tool_result(
         self,
