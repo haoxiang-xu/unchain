@@ -298,7 +298,10 @@ class ProviderRequestLease:
     """One revisioned durable state for a unique request subject."""
 
     SCHEMA: ClassVar[str] = "unchain.provider_request_lease.v2"
+    # v3 carries a v1 diagnostic, v4 a v2 diagnostic; the two never mix, so an
+    # old reader fails closed on v4 instead of silently dropping new fields.
     DIAGNOSTIC_SCHEMA: ClassVar[str] = "unchain.provider_request_lease.v3"
+    DIAGNOSTIC_SCHEMA_V4: ClassVar[str] = "unchain.provider_request_lease.v4"
 
     subject: ProviderRequestSubject
     route_sha256: str
@@ -455,8 +458,13 @@ class ProviderRequestLease:
             "predecessor_sha256": self.predecessor_sha256,
         }
         if self.failure_diagnostic is not None:
-            record["schema"] = self.DIAGNOSTIC_SCHEMA
-            record["failure_diagnostic"] = self.failure_diagnostic.to_dict()
+            diagnostic = self.failure_diagnostic.to_dict()
+            record["schema"] = (
+                self.DIAGNOSTIC_SCHEMA
+                if diagnostic["schema"] == ProviderFailureDiagnostic.SCHEMA
+                else self.DIAGNOSTIC_SCHEMA_V4
+            )
+            record["failure_diagnostic"] = diagnostic
         return record
 
     @classmethod
@@ -478,10 +486,20 @@ class ProviderRequestLease:
             }
         )
         schema = value.get("schema")
-        if schema == cls.DIAGNOSTIC_SCHEMA:
+        if schema in {cls.DIAGNOSTIC_SCHEMA, cls.DIAGNOSTIC_SCHEMA_V4}:
             fields = fields | {"failure_diagnostic"}
-            if type(value.get("failure_diagnostic")) is not dict:
-                raise ModelValidationError("v3 failure lease requires a diagnostic")
+            diagnostic = value.get("failure_diagnostic")
+            if type(diagnostic) is not dict:
+                raise ModelValidationError("failure lease requires a diagnostic")
+            expected = (
+                ProviderFailureDiagnostic.SCHEMA
+                if schema == cls.DIAGNOSTIC_SCHEMA
+                else ProviderFailureDiagnostic.SCHEMA_V2
+            )
+            if diagnostic.get("schema") != expected:
+                raise ModelValidationError(
+                    "failure lease schema does not match its diagnostic schema"
+                )
         else:
             schema = cls.SCHEMA
         raw = _record_data(value, schema=schema, required=fields)
@@ -493,7 +511,11 @@ class ProviderRequestLease:
 
         if type(value) is not dict:
             raise TypeError("provider request lease must be an exact dict")
-        if value.get("schema") in {cls.SCHEMA, cls.DIAGNOSTIC_SCHEMA}:
+        if value.get("schema") in {
+            cls.SCHEMA,
+            cls.DIAGNOSTIC_SCHEMA,
+            cls.DIAGNOSTIC_SCHEMA_V4,
+        }:
             return cls.from_dict(value)
         legacy_schema = "unchain.provider_request_lease.v1"
         legacy_fields = frozenset(

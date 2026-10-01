@@ -9,6 +9,7 @@ from .base import ModelTurnRequest
 from .native import _NativeModelIOBase
 from .gemini_schema import sanitize_gemini_schema
 from .canonical_hash import canonical_json_sha256
+from .failure_diagnostic import ProviderResponseEndedError
 from ..kernel.provider_replay import tool_schema_digest, tool_schema_manifest
 from ..kernel.types import ModelTurnResult, ToolCall
 from ..run_bundle import ProviderCallUsage
@@ -178,8 +179,9 @@ class GeminiModelIO(_NativeModelIOBase):
                 response_id = data.get("response_id") or response_id
                 candidates = data.get("candidates") or []
                 if not candidates:
-                    if (data.get("prompt_feedback") or {}).get("block_reason"):
-                        raise RuntimeError("Gemini blocked the prompt")
+                    block_reason = (data.get("prompt_feedback") or {}).get("block_reason")
+                    if block_reason:
+                        raise ProviderResponseEndedError("blocked", str(block_reason))
                     continue
                 candidate = candidates[0]
                 reason = candidate.get("finish_reason")
@@ -188,7 +190,7 @@ class GeminiModelIO(_NativeModelIOBase):
                     "MAX_TOKENS",
                     "FINISH_REASON_UNSPECIFIED",
                 }:
-                    raise RuntimeError(f"Gemini generation ended: {reason}")
+                    raise ProviderResponseEndedError("finish_reason", str(reason))
                 for part in (candidate.get("content") or {}).get("parts") or []:
                     part = copy.deepcopy(part)
                     raw_parts.append(part)
@@ -231,7 +233,7 @@ class GeminiModelIO(_NativeModelIOBase):
             if callable(getattr(client, "close", None)):
                 client.close()
         if not raw_parts:
-            raise RuntimeError("Gemini returned no content")
+            raise ProviderResponseEndedError("empty")
 
         def count(snake, camel):
             return self._coerce_token_count(

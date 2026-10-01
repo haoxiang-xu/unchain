@@ -337,3 +337,76 @@ def test_v4_artifact_surface_uses_run_summary_for_workspace_change_set():
     assert events[0].surface.group == "files"
     assert events[0].surface.default_state == "expanded"
     assert events[0].payload == artifact
+
+
+RETRY_RAW = {
+    "type": "provider_retry",
+    "run_id": "run-root",
+    "iteration": 0,
+    "provider": "gemini",
+    "attempt_failed": 2,
+    "next_attempt": 3,
+    "max_attempts": 11,
+    "delay_ms": 4000,
+    "remaining_ms": 3000,
+    "http_status": 503,
+    "provider_status": "UNAVAILABLE",
+}
+
+
+def test_v4_maps_provider_retry_to_a_model_response_step_delta():
+    """BC-386-6: no new V4 event type; the retry rides the model response step."""
+
+    events = normalize_raw_event(dict(RETRY_RAW), context=_context())
+    assert len(events) == 1
+    event = events[0]
+    assert event.type == "step.delta"
+    assert event.turn_id == "run-root:turn-0"
+    assert event.links.step_id == "model:run-root:turn-0:response"
+    assert event.surface.slot == "trace_inline"
+    assert event.visibility == "user"
+    assert event.payload == {
+        "step_id": "model:run-root:turn-0:response",
+        "step_type": "model_response",
+        "kind": "provider_retry",
+        "provider": "gemini",
+        "attempt_failed": 2,
+        "next_attempt": 3,
+        "max_attempts": 11,
+        "delay_ms": 4000,
+        "remaining_ms": 3000,
+        "http_status": 503,
+        "provider_status": "UNAVAILABLE",
+    }
+
+
+@pytest.mark.parametrize("change", [
+    {"http_status": None, "provider_status": ""},
+])
+def test_v4_provider_retry_without_http_evidence_keeps_closed_fields(change):
+    raw = dict(RETRY_RAW)
+    raw.update(change)
+    event = normalize_raw_event(raw, context=_context())[0]
+    assert event.payload["http_status"] is None
+    assert event.payload["provider_status"] == ""
+
+
+@pytest.mark.parametrize("change", [
+    {"attempt_failed": "2"}, {"next_attempt": 0}, {"max_attempts": True},
+    {"delay_ms": -1}, {"remaining_ms": 1.5}, {"http_status": "503"},
+    {"provider_status": 7}, {"next_attempt": 12},
+])
+def test_v4_drops_a_malformed_provider_retry(change):
+    raw = dict(RETRY_RAW)
+    raw.update(change)
+    assert normalize_raw_event(raw, context=_context()) == []
+
+
+def test_v4_provider_retry_never_copies_unknown_fields():
+    raw = dict(RETRY_RAW)
+    raw["message"] = "PRIVATE provider text"
+    raw["toolkit_id"] = "core"
+    event = normalize_raw_event(raw, context=_context())[0]
+    assert "message" not in event.payload and "toolkit_id" not in event.payload
+    assert "PRIVATE" not in repr(event.payload)
+

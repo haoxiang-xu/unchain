@@ -47,11 +47,17 @@ def _explicit_status_code(error: BaseException) -> int | None:
     return None
 
 
+# 502/503/529 are the provider telling us it did not serve the request, so the
+# same request may be sent again. 500 and 504 stay unclassified on purpose: the
+# provider may have processed them, which is exactly what "uncertain" records.
+_TRANSIENT_RETRY_SAFE_STATUSES = frozenset({429, 502, 503, 529})
+
+
 def _classified_failure_kind(
     error: BaseException,
 ) -> ExactProviderRouteFailureKind | None:
     status_code = _explicit_status_code(error)
-    if status_code in {429, 529}:
+    if status_code in _TRANSIENT_RETRY_SAFE_STATUSES:
         return ExactProviderRouteFailureKind.TRANSIENT_RETRY_SAFE
     if (
         status_code is not None

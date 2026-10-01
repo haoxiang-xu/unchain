@@ -72,6 +72,10 @@ def _envelope(
             "unchain.ollama.chat.request.v1",
             "ollama.api.chat.post",
         ),
+        "gemini": (
+            "unchain.gemini.contents.request.v1",
+            "gemini.models.generate_content_stream",
+        ),
     }
     catalog = _catalog(provider, model)
     adapter_revision, transport_kind = profiles[provider]
@@ -726,7 +730,12 @@ def test_anthropic_exact_transport_classifies_explicit_bad_request_as_terminal()
     assert caught.value.kind is ExactProviderRouteFailureKind.TERMINAL
 
 
-@pytest.mark.parametrize('status,expected', [(400, 'terminal'), (401, 'terminal'), (429, 'transient_retry_safe'), (503, None)])
+@pytest.mark.parametrize('status,expected', [
+    (400, 'terminal'), (401, 'terminal'), (404, 'terminal'), (429, 'transient_retry_safe'),
+    (502, 'transient_retry_safe'), (503, 'transient_retry_safe'),
+    # 500 and 504 may have been processed by the provider, so they stay unclassified.
+    (500, None), (504, None),
+])
 def test_google_sdk_http_failures_have_exact_retry_classification(status, expected):
     from google.genai.errors import APIError
     from unchain.providers.exact_route_transport import _classified_failure_kind
@@ -742,3 +751,64 @@ def test_arbitrary_numeric_error_code_is_not_http_evidence():
     error = RuntimeError('private')
     error.code = 429
     assert _classified_failure_kind(error) is None
+
+
+@pytest.mark.parametrize(
+    ("status", "provider_status", "expected"),
+    [
+        (503, "UNAVAILABLE", "TRANSIENT_RETRY_SAFE"),
+        (502, "UNAVAILABLE", "TRANSIENT_RETRY_SAFE"),
+        (429, "RESOURCE_EXHAUSTED", "TRANSIENT_RETRY_SAFE"),
+        (404, "NOT_FOUND", "TERMINAL"),
+    ],
+)
+def test_gemini_exact_transport_classifies_real_sdk_http_failures(
+    status, provider_status, expected
+):
+    from google.genai import errors
+
+    from unchain.providers.durable_turn_runtime import (
+        ExactProviderRouteFailure,
+        ExactProviderRouteFailureKind,
+    )
+    from unchain.providers.exact_route_transport import GeminiExactRouteTransport
+    from unchain.providers.gemini import GeminiModelIO
+
+    request = {
+        "model": "gemini-3.8-flash",
+        "contents": [{"role": "user", "parts": [{"text": "hello"}]}],
+        "config": {
+            "automatic_function_calling": {"disable": True},
+            "max_output_tokens": 64,
+        },
+    }
+    catalog, envelope = _envelope(
+        provider="gemini", model="gemini-3.8-flash", request=request
+    )
+    sends = []
+    error_type = errors.ServerError if status >= 500 else errors.ClientError
+
+    def factory(**_kwargs):
+        def send(**kwargs):
+            sends.append(kwargs["model"])
+            raise error_type(
+                status,
+                {"error": {"code": status, "message": "private", "status": provider_status}},
+            )
+
+        return SimpleNamespace(
+            models=SimpleNamespace(generate_content_stream=send), close=lambda: None
+        )
+
+    transport = GeminiExactRouteTransport(
+        model_io=GeminiModelIO(
+            model="gemini-3.8-flash", api_key="secret", client_factory=factory
+        ),
+        catalog=catalog,
+    )
+
+    with pytest.raises(ExactProviderRouteFailure) as caught:
+        transport.send(envelope=envelope, route=envelope.routes[0], retry_ordinal=0)
+
+    assert caught.value.kind is ExactProviderRouteFailureKind[expected]
+    assert sends == ["gemini-3.8-flash"]
