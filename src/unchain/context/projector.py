@@ -17,6 +17,7 @@ from unchain.journal import (
 )
 from unchain.journal.models import _required_text, _sha256
 from unchain.tools.output_management import ToolOutputManager
+from unchain.tools.timeline_policy import TIMELINE_MERGE_POLICIES
 
 from .artifacts import ArtifactService, ArtifactServiceError, ToolResultArtifactization
 from .attachments import HostResolvedAttachment, normalize_host_resolved_attachments
@@ -321,6 +322,11 @@ class ShadowObservedToolEventAdapter:
             **protected,
             "iteration": iteration,
             "arguments": copy.deepcopy(event.get("arguments") or {}),
+            **(
+                {"timeline_merge_policy": event["timeline_merge_policy"]}
+                if event.get("timeline_merge_policy") in TIMELINE_MERGE_POLICIES
+                else {}
+            ),
         }
         return self._draft(
             event_type="tool_call",
@@ -911,6 +917,11 @@ class CanonicalSemanticEventProjector:
             "tool_name": tool_name,
             "call_id": call_id,
             "arguments": copy.deepcopy(event.get("arguments") or {}),
+            **(
+                {"timeline_merge_policy": event["timeline_merge_policy"]}
+                if event.get("timeline_merge_policy") in TIMELINE_MERGE_POLICIES
+                else {}
+            ),
             **(
                 {"source_provider": source_provider}
                 if source_provider is not None

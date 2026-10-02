@@ -8,6 +8,7 @@ from ..tool_outcomes import (
     DURABLE_TOOL_RESULT_OUTCOMES,
     classify_durable_tool_result,
 )
+from ..tools.timeline_policy import TIMELINE_MERGE_POLICIES
 from .types import RuntimeEventLinks, RuntimeEventSurface, Visibility
 
 
@@ -35,6 +36,11 @@ def _str_value(value: Any, fallback: str = "") -> str:
     if isinstance(value, str) and value:
         return value
     return fallback
+
+
+def _timeline_merge_policy(raw: dict[str, Any]) -> str | None:
+    value = raw.get("timeline_merge_policy")
+    return value if isinstance(value, str) and value in TIMELINE_MERGE_POLICIES else None
 
 
 def _int_value(value: Any) -> int | None:
@@ -269,6 +275,9 @@ def _interaction_payload(raw: dict[str, Any], *, raw_type: str) -> tuple[str, di
     if selection_mode:
         payload["selection_mode"] = selection_mode
         payload["config"].setdefault("selection_mode", selection_mode)
+    policy = _timeline_merge_policy(raw)
+    if policy is not None:
+        payload["timeline_merge_policy"] = policy
     for key in ("allow_other", "other_label", "other_placeholder", "min_selected", "max_selected"):
         if key in raw:
             payload[key] = copy.deepcopy(raw[key])
@@ -605,6 +614,9 @@ def normalize_raw_event(
         ):
             if key in raw_event:
                 payload[key] = copy.deepcopy(raw_event[key])
+        policy = _timeline_merge_policy(raw_event)
+        if policy is not None:
+            payload["timeline_merge_policy"] = policy
         return [
             RuntimeEventDraft(
                 type="step.started",
@@ -661,6 +673,10 @@ def normalize_raw_event(
             if durable_payload is None:
                 return []
             interaction_id, payload, call_id = durable_payload
+            policy = _timeline_merge_policy(raw_event)
+            if policy is not None:
+                # Presentation metadata stays beside, never inside, the hashed request.
+                payload["timeline_merge_policy"] = policy
         else:
             interaction_id, payload = _interaction_payload(
                 raw_event,

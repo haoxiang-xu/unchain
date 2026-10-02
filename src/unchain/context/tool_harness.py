@@ -48,6 +48,12 @@ class ContextToolAuthorityHarness(BaseRuntimeHarness):
         ):
             return None
 
+        toolkit = context.event.get("toolkit")
+        tool_obj = toolkit.get(tool_call.name) if hasattr(toolkit, "get") else None
+        timeline_merge_policy = (
+            getattr(tool_obj, "timeline_merge_policy", None) or "approved"
+        )
+
         emit_loop_event(
             context.event.get("loop"),
             context.event.get("callback"),
@@ -58,6 +64,7 @@ class ContextToolAuthorityHarness(BaseRuntimeHarness):
             call_id=tool_call.call_id,
             arguments=copy.deepcopy(tool_call.arguments),
             source_provider=str(context.state.provider_state.provider or ""),
+            timeline_merge_policy=timeline_merge_policy,
         )
         permit = self.runtime.prepare_tool_execution(context)
         if type(permit) is DurableToolApprovalPending:
