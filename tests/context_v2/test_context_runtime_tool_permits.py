@@ -205,6 +205,7 @@ def test_tool_authority_harness_projects_only_the_durable_completion():
                 "call_id": "call-1",
                 "arguments": {"query": "journal-owned"},
                 "source_provider": "openai",
+                "timeline_merge_policy": "approved",
             },
             {
                 "type": "tool_result",

@@ -39,8 +39,10 @@ def _str_value(value: Any, fallback: str = "") -> str:
 
 
 def _timeline_merge_policy(raw: dict[str, Any]) -> str | None:
+    if "timeline_merge_policy" not in raw:
+        return None
     value = raw.get("timeline_merge_policy")
-    return value if isinstance(value, str) and value in TIMELINE_MERGE_POLICIES else None
+    return value if isinstance(value, str) and value in TIMELINE_MERGE_POLICIES else "never"
 
 
 def _int_value(value: Any) -> int | None:

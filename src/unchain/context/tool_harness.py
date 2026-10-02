@@ -53,6 +53,45 @@ class ContextToolAuthorityHarness(BaseRuntimeHarness):
         timeline_merge_policy = (
             getattr(tool_obj, "timeline_merge_policy", None) or "approved"
         )
+        timeline_merge_policy_event = {
+            "timeline_merge_policy": timeline_merge_policy
+        }
+        bundle_for_context = getattr(self.runtime, "_bundle_for_context", None)
+        if (
+            callable(bundle_for_context)
+            and isinstance(tool_call.call_id, str)
+            and tool_call.call_id.strip()
+        ):
+            existing = bundle_for_context(
+                context
+            ).tool_boundary.sink.recover_tool_side_effect(tool_call.call_id)
+            intent = existing.intent_event
+            if (
+                intent is not None
+                and intent.event_type == "tool_call"
+                and intent.payload.get("call_id") == tool_call.call_id
+                and intent.payload.get("tool_name") == tool_call.name
+                and intent.payload.get("arguments", {}) == tool_call.arguments
+            ):
+                if "timeline_merge_policy" in intent.payload:
+                    declared = intent.payload["timeline_merge_policy"]
+                    timeline_merge_policy_event = {
+                        "timeline_merge_policy": (
+                            declared
+                            if isinstance(declared, str)
+                            and declared in {
+                                "never",
+                                "no_feedback",
+                                "approved",
+                                "always",
+                            }
+                            else "never"
+                        )
+                    }
+                else:
+                    # Preserve legacy omission exactly. Adding the current tool
+                    # declaration here would change the idempotent event payload.
+                    timeline_merge_policy_event = {}
 
         emit_loop_event(
             context.event.get("loop"),
@@ -64,7 +103,7 @@ class ContextToolAuthorityHarness(BaseRuntimeHarness):
             call_id=tool_call.call_id,
             arguments=copy.deepcopy(tool_call.arguments),
             source_provider=str(context.state.provider_state.provider or ""),
-            timeline_merge_policy=timeline_merge_policy,
+            **timeline_merge_policy_event,
         )
         permit = self.runtime.prepare_tool_execution(context)
         if type(permit) is DurableToolApprovalPending:

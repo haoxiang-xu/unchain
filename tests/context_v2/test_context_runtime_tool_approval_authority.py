@@ -50,6 +50,7 @@ def _approval_tool_runtime(
     attempt_id: str = "attempt-approval",
     interaction_store=None,
     bind_interaction_runtime: bool = True,
+    timeline_merge_policy: str | None = None,
 ):
     bundles = {}
 
@@ -131,8 +132,7 @@ def _approval_tool_runtime(
         return {"seen": query}
 
     arguments = {"query": "journal-owned"}
-    bundle.durable_event_sink(
-        {
+    intent_event = {
             "type": "tool_call",
             "run_id": attempt_id,
             "iteration": 0,
@@ -140,7 +140,10 @@ def _approval_tool_runtime(
             "call_id": "call-approval",
             "arguments": arguments,
         }
-    )
+    if timeline_merge_policy is not None:
+        intent_event["timeline_merge_policy"] = timeline_merge_policy
+        intent_event["source_provider"] = "openai"
+    bundle.durable_event_sink(intent_event)
     context = HarnessContext(
         state=bootstrap.state,
         phase="on_tool_call",
@@ -326,6 +329,40 @@ def test_tool_authority_harness_applies_runtime_owned_approval_suspension():
         assert [event.event_type for event in fixture["bundle"].journal.events] == [
             "tool_call"
         ]
+    finally:
+        fixture["guard"].release()
+
+
+def test_approval_resume_reuses_original_timeline_policy_after_tool_config_changes():
+    fixture = _approval_tool_runtime(
+        attempt_id="attempt-policy-resume",
+        timeline_merge_policy="never",
+    )
+    tool = fixture["toolkit"].get("lookup")
+    try:
+        harness = fixture["runtime"].build_harnesses()[1]
+        approval = fixture["runtime"].prepare_tool_execution(fixture["context"])
+        approval, _request = _assert_durable_approval_pending(approval)
+        _persist_approval_pending(
+            fixture,
+            approval,
+            {"approved": True, "modified_arguments": None, "reason": ""},
+        )
+
+        # A developer may reconfigure the live toolkit between pause and resume.
+        # The same durable call ID must retain its original journal intent bytes.
+        tool.timeline_merge_policy = "always"
+        resumed = _resume_approval_context(fixture)
+        resumed.state.run_status = "running"
+        resumed.event["callback"] = fixture["runtime"].compose_event_callback(None)
+        outcome = harness.build_delta(resumed)
+        assert outcome is not None
+        intent = next(
+            event
+            for event in fixture["bundle"].journal.events
+            if event.event_type == "tool_call"
+        )
+        assert intent.payload["timeline_merge_policy"] == "never"
     finally:
         fixture["guard"].release()
 

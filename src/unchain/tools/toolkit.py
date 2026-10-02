@@ -13,6 +13,8 @@ from .models import (
 from .tool import Tool
 from .timeline_policy import DEFAULT_TIMELINE_MERGE_POLICY, validate_timeline_merge_policy
 
+_TIMELINE_MERGE_POLICY_UNSET = object()
+
 
 class Toolkit:
     def __init__(
@@ -78,7 +80,7 @@ class Toolkit:
         always_load: bool | None = None,
         defer_by_default: bool | None = None,
         search_hint: str | None = None,
-        timeline_merge_policy: str | None = None,
+        timeline_merge_policy: Any = _TIMELINE_MERGE_POLICY_UNSET,
     ) -> Tool:
         if isinstance(tool_obj, Tool):
             if name is not None:
@@ -109,7 +111,7 @@ class Toolkit:
                 tool_obj.defer_by_default = bool(defer_by_default)
             if search_hint is not None:
                 tool_obj.search_hint = str(search_hint or "")
-            if timeline_merge_policy is not None:
+            if timeline_merge_policy is not _TIMELINE_MERGE_POLICY_UNSET:
                 tool_obj.timeline_merge_policy = validate_timeline_merge_policy(
                     timeline_merge_policy
                 )
@@ -135,7 +137,7 @@ class Toolkit:
                 search_hint=str(search_hint or ""),
                 timeline_merge_policy=(
                     DEFAULT_TIMELINE_MERGE_POLICY
-                    if timeline_merge_policy is None
+                    if timeline_merge_policy is _TIMELINE_MERGE_POLICY_UNSET
                     else timeline_merge_policy
                 ),
             )
