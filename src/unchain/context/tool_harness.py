@@ -17,6 +17,7 @@ from ..tools.common import (
 )
 from ..tools.messages import get_provider_message_builder
 from ..tools.types import ToolBatchState
+from .factory import ContextExecutionBundleError
 
 if TYPE_CHECKING:
     from .runtime import ContextRuntime
@@ -57,14 +58,22 @@ class ContextToolAuthorityHarness(BaseRuntimeHarness):
             "timeline_merge_policy": timeline_merge_policy
         }
         bundle_for_context = getattr(self.runtime, "_bundle_for_context", None)
+        bundle = None
         if (
             callable(bundle_for_context)
             and isinstance(tool_call.call_id, str)
             and tool_call.call_id.strip()
         ):
-            existing = bundle_for_context(
-                context
-            ).tool_boundary.sink.recover_tool_side_effect(tool_call.call_id)
+            try:
+                bundle = bundle_for_context(context)
+            except ContextExecutionBundleError:
+                # Fresh calls reach this harness before the runtime binds its
+                # durable bundle. They have no prior intent to recover.
+                bundle = None
+        if bundle is not None and hasattr(bundle, "tool_boundary"):
+            existing = bundle.tool_boundary.sink.recover_tool_side_effect(
+                tool_call.call_id
+            )
             intent = existing.intent_event
             if (
                 intent is not None

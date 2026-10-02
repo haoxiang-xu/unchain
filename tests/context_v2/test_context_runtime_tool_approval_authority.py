@@ -51,6 +51,7 @@ def _approval_tool_runtime(
     interaction_store=None,
     bind_interaction_runtime: bool = True,
     timeline_merge_policy: str | None = None,
+    include_source_provider: bool = False,
 ):
     bundles = {}
 
@@ -140,9 +141,10 @@ def _approval_tool_runtime(
             "call_id": "call-approval",
             "arguments": arguments,
         }
+    if include_source_provider:
+        intent_event["source_provider"] = "openai"
     if timeline_merge_policy is not None:
         intent_event["timeline_merge_policy"] = timeline_merge_policy
-        intent_event["source_provider"] = "openai"
     bundle.durable_event_sink(intent_event)
     context = HarnessContext(
         state=bootstrap.state,
@@ -333,12 +335,17 @@ def test_tool_authority_harness_applies_runtime_owned_approval_suspension():
         fixture["guard"].release()
 
 
-def test_approval_resume_reuses_original_timeline_policy_after_tool_config_changes():
+@pytest.mark.parametrize("original_policy", [None, "never"])
+def test_approval_resume_reuses_original_timeline_policy_after_tool_config_changes(
+    original_policy,
+):
     fixture = _approval_tool_runtime(
         attempt_id="attempt-policy-resume",
-        timeline_merge_policy="never",
+        timeline_merge_policy=original_policy,
+        include_source_provider=True,
     )
     tool = fixture["toolkit"].get("lookup")
+    tool.timeline_merge_policy = original_policy or "approved"
     try:
         harness = fixture["runtime"].build_harnesses()[1]
         approval = fixture["runtime"].prepare_tool_execution(fixture["context"])
@@ -362,7 +369,10 @@ def test_approval_resume_reuses_original_timeline_policy_after_tool_config_chang
             for event in fixture["bundle"].journal.events
             if event.event_type == "tool_call"
         )
-        assert intent.payload["timeline_merge_policy"] == "never"
+        if original_policy is None:
+            assert "timeline_merge_policy" not in intent.payload
+        else:
+            assert intent.payload["timeline_merge_policy"] == original_policy
     finally:
         fixture["guard"].release()
 
