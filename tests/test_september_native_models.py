@@ -17,10 +17,17 @@ from unchain.runtime.payloads import load_default_payloads, load_model_capabilit
 
 
 OPENAI_MODELS = ("gpt-6-sol", "gpt-6-luna")
+# model -> (declared reasoning efforts, default effort). Levels follow Google's
+# Gemini thinking documentation; every declared level is also checked against
+# the live API before a model is added here (ticket #386).
 GEMINI_EFFORTS = {
-    "gemini-3.7-flash": ("low", "medium", "high"),
-    "gemini-3.8-flash": ("low", "medium", "high"),
-    "gemini-3.5-flash-lite": ("minimal", "low", "medium", "high"),
+    "gemini-3.7-flash": (("low", "medium", "high"), "medium"),
+    "gemini-3.8-flash": (("low", "medium", "high"), "medium"),
+    "gemini-3.5-flash-lite": (("minimal", "low", "medium", "high"), "minimal"),
+    "gemini-3.5-flash": (("minimal", "low", "medium", "high"), "medium"),
+    "gemini-3.1-pro-preview": (("low", "medium", "high"), "high"),
+    "gemini-3-flash-preview": (("minimal", "low", "medium", "high"), "high"),
+    "gemini-3.1-flash-lite": (("minimal", "low", "medium", "high"), "minimal"),
 }
 
 
@@ -130,8 +137,9 @@ def test_new_openai_models_prepare_exact_responses_payload_without_sampling(mode
         TypeAdapter(ResponseCreateParamsStreaming).validate_python(sdk_wire)
 
 
-@pytest.mark.parametrize("model,efforts", GEMINI_EFFORTS.items())
-def test_new_gemini_models_prepare_sdk_valid_configs_without_sampling(model, efforts):
+@pytest.mark.parametrize("model,levels", GEMINI_EFFORTS.items())
+def test_new_gemini_models_prepare_sdk_valid_configs_without_sampling(model, levels):
+    efforts, default_effort = levels
     capabilities = load_model_capabilities()[model]
     default = load_default_payloads()[model]
     assert capabilities["provider"] == "gemini"
@@ -142,9 +150,7 @@ def test_new_gemini_models_prepare_sdk_valid_configs_without_sampling(model, eff
     assert capabilities["supports_previous_response_id"] is False
     assert capabilities["supports_reasoning"] is True
     assert capabilities["reasoning_efforts"] == list(efforts)
-    assert capabilities["default_reasoning_effort"] == (
-        "minimal" if "minimal" in efforts else "medium"
-    )
+    assert capabilities["default_reasoning_effort"] == default_effort
     assert capabilities["input_modalities"] == ["text", "image", "pdf"]
     assert capabilities["allowed_payload_keys"] == [
         "max_output_tokens",
@@ -199,3 +205,30 @@ def test_new_gemini_models_prepare_sdk_valid_configs_without_sampling(model, eff
         assert "temperature" not in payload
         assert "top_p" not in payload
         assert "top_k" not in payload
+
+
+def _gemini_catalog(resource):
+    return {name for name, value in resource.items() if value.get("provider") == "gemini"}
+
+
+def test_gemini_catalog_is_exactly_the_current_general_purpose_set():
+    """#386: retired 2.5 models and floating aliases are not exported."""
+
+    expected = {
+        "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
+        "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview",
+        "gemini-3-flash-preview",
+    }
+    capabilities = load_model_capabilities()
+    assert _gemini_catalog(capabilities) == expected
+    # A default payload exists for exactly the same ids.
+    payloads = load_default_payloads()
+    assert {name for name in payloads if name.startswith("gemini-")} == expected
+    assert not [name for name in capabilities if name.startswith("gemini-2.5")]
+    assert not [name for name in capabilities if name.endswith("-latest")]
+
+
+def test_a_pro_tier_gemini_model_is_available_and_the_default_stays_flash():
+    capabilities = load_model_capabilities()
+    assert any("pro" in name for name in _gemini_catalog(capabilities))
+    assert capabilities["gemini-3.6-flash"]["provider"] == "gemini"

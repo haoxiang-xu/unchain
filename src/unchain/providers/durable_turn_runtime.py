@@ -84,19 +84,41 @@ class DurableProviderTurnError(RuntimeError):
     """Base error for durable provider-turn orchestration."""
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderRetryWait:
+    """Closed retry facts; the hook owns the interruptible wait."""
+
+    attempt_failed: int
+    next_attempt: int
+    max_attempts: int
+    delay_ms: int
+    diagnostic: ProviderFailureDiagnostic | None
+
+
+RetryWaitHook = Callable[[ProviderRetryWait, Callable[[float], None]], None]
+
+
 class DurableProviderTurnUncertainError(DurableProviderTurnError):
     """A send may have happened, but no durable terminal result exists."""
 
     code = "durable_provider_turn_uncertain"
 
-    def __init__(self, diagnostic: ProviderUncertaintyDiagnostic | None = None) -> None:
+    def __init__(
+        self,
+        diagnostic: ProviderUncertaintyDiagnostic | ProviderFailureDiagnostic | None = None,
+    ) -> None:
+        # Compatibility with #386's public constructor is deliberately closed:
+        # arbitrary provider messages or exception class names never become UI text.
         if diagnostic is None:
             diagnostic = ProviderUncertaintyDiagnostic("unrecorded_outcome", "recovery")
-        if type(diagnostic) is not ProviderUncertaintyDiagnostic:
+        if type(diagnostic) not in {ProviderUncertaintyDiagnostic, ProviderFailureDiagnostic}:
             raise TypeError("uncertain error requires an exact diagnostic")
         self.diagnostic = diagnostic
         self.__suppress_context__ = True
-        super().__init__("Provider request outcome is uncertain: " + diagnostic.summary())
+        if type(diagnostic) is ProviderFailureDiagnostic:
+            super().__init__(self.code + "; " + diagnostic.summary())
+        else:
+            super().__init__("Provider request outcome is uncertain: " + diagnostic.summary())
 
 
 class DurableProviderTurnTerminalError(DurableProviderTurnError):
@@ -620,6 +642,9 @@ class DurableProviderTurnRuntime:
         retry_config: RetryConfig,
         error: BaseException | None,
         before_sleep: Callable[[int], None] | None = None,
+        retry_wait: RetryWaitHook | None = None,
+        diagnostic: ProviderFailureDiagnostic | None = None,
+        retry_limit: int | None = None,
     ) -> None:
         delay_ms = compute_delay_ms(
             attempt=ordinal,
@@ -628,6 +653,18 @@ class DurableProviderTurnRuntime:
                 extract_retry_after_ms(error) if error is not None else None
             ),
         )
+        if retry_wait is not None:
+            retry_wait(
+                ProviderRetryWait(
+                    attempt_failed=ordinal,
+                    next_attempt=ordinal + 1,
+                    max_attempts=(retry_config.max_retries if retry_limit is None else retry_limit) + 1,
+                    delay_ms=int(delay_ms),
+                    diagnostic=diagnostic,
+                ),
+                self._sleep,
+            )
+            return
         if before_sleep is not None:
             before_sleep(delay_ms)
         self._sleep(delay_ms / 1000.0)
@@ -654,6 +691,7 @@ class DurableProviderTurnRuntime:
         ] | None,
         on_retry: Callable[[int, int, int], None] | None,
         fallback_parent: ProviderRequestLease | None = None,
+        retry_wait: RetryWaitHook | None = None,
     ) -> DurableProviderTurnOutcome:
         envelope = authority.envelope
         route = self._route(envelope, route_name)
@@ -691,8 +729,19 @@ class DurableProviderTurnRuntime:
             )
             claimed_now = False
             if lease is None:
-                if ordinal > retry_config.max_retries:
-                    raise DurableProviderTurnTerminalError("transient")
+                # Older #386 records may authorize more 503 retries than the
+                # current limit. Inspect existing outcomes first, then bound
+                # only a new claim/send; never discard a recorded result.
+                previous_diagnostic = previous.failure_diagnostic if previous is not None else None
+                retry_limit = (
+                    min(retry_config.max_retries, 2)
+                    if envelope.provider == "gemini"
+                    and previous_diagnostic is not None
+                    and previous_diagnostic.http_status == 503
+                    else retry_config.max_retries
+                )
+                if ordinal > retry_limit:
+                    raise DurableProviderTurnTerminalError("transient", previous_diagnostic)
                 lease, claimed_now = self._claim(
                     subject=subject,
                     route=route,
@@ -735,6 +784,7 @@ class DurableProviderTurnRuntime:
                         build_run_receipt=build_run_receipt,
                         on_retry=on_retry,
                         fallback_parent=lease,
+                        retry_wait=retry_wait,
                     )
                 if not (
                     lease.classification == "transient"
@@ -762,11 +812,16 @@ class DurableProviderTurnRuntime:
                             and lease.failure_diagnostic is not None
                             and lease.failure_diagnostic.http_status == 503
                         )
-                        retry_limit = min(retry_config.max_retries, 2)
+                        retry_limit = min(retry_config.max_retries, 2) if gemini_busy else retry_config.max_retries
+                        if ordinal > retry_limit:
+                            raise DurableProviderTurnTerminalError("transient", lease.failure_diagnostic)
                         self._delay(
                             ordinal=ordinal,
                             retry_config=retry_config,
                             error=None,
+                            retry_wait=retry_wait,
+                            diagnostic=lease.failure_diagnostic,
+                            retry_limit=retry_limit,
                             before_sleep=(
                                 lambda delay_ms: on_retry(
                                     ordinal, retry_limit, delay_ms
@@ -819,7 +874,7 @@ class DurableProviderTurnRuntime:
                         lease,
                         classification="transient",
                         retryable=retry_budget_remaining,
-                        diagnostic=diagnostic if gemini_busy else None,
+                        diagnostic=diagnostic,
                     )
                     if not retry_budget_remaining:
                         if gemini_busy:
@@ -828,7 +883,8 @@ class DurableProviderTurnRuntime:
                             ) from None
                         raise RetriesExhaustedError(
                             last_error=exc.original,
-                            attempts=retry_config.max_retries,
+                            attempts=retry_limit,
+                            detail=(f"{diagnostic.summary()} after {retry_limit} retries" if diagnostic is not None else ""),
                         ) from None
                     previous = failed
                     ordinal += 1
@@ -836,6 +892,9 @@ class DurableProviderTurnRuntime:
                         ordinal=ordinal,
                         retry_config=retry_config,
                         error=exc.original,
+                        retry_wait=retry_wait,
+                        diagnostic=diagnostic,
+                        retry_limit=retry_limit,
                         before_sleep=(
                             lambda delay_ms: on_retry(
                                 ordinal, retry_limit, delay_ms
@@ -860,6 +919,7 @@ class DurableProviderTurnRuntime:
                         build_run_receipt=build_run_receipt,
                         on_retry=on_retry,
                         fallback_parent=failed,
+                        retry_wait=retry_wait,
                     )
                 diagnostic = ProviderFailureDiagnostic.from_exception(exc.original)
                 self._record_failure(
@@ -939,10 +999,13 @@ class DurableProviderTurnRuntime:
             ProviderCallReceipt,
         ] | None = None,
         on_retry: Callable[[int, int, int], None] | None = None,
+        retry_wait: RetryWaitHook | None = None,
     ) -> DurableProviderTurnOutcome:
         self._validate_retry_config(retry_config)
         if on_retry is not None and not callable(on_retry):
             raise TypeError("on_retry must be callable or null")
+        if retry_wait is not None and not callable(retry_wait):
+            raise TypeError("retry_wait must be callable or null")
         if type(authority) is not RecoveredProviderWireAuthority:
             raise TypeError("authority must be an exact RecoveredProviderWireAuthority")
         envelope = authority.envelope
@@ -989,10 +1052,13 @@ class DurableProviderTurnRuntime:
             after_send=after_send,
             build_run_receipt=build_run_receipt,
             on_retry=on_retry,
+            retry_wait=retry_wait,
         )
 
 
 __all__ = [
+    "ProviderRetryWait",
+    "RetryWaitHook",
     "DurableProviderTurnError",
     "DurableProviderTurnMode",
     "DurableProviderTurnOutcome",

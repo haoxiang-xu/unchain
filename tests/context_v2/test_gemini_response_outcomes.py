@@ -159,7 +159,8 @@ def test_google_http_status_survives_without_raw_body(tmp_path):
     for _ in range(2):
         with pytest.raises(DurableProviderTurnTerminalError) as caught:
             run()
-        assert caught.value.diagnostic.provider_code == 'NOT_FOUND'
+        assert caught.value.diagnostic.provider_status == 'NOT_FOUND'
+        assert caught.value.diagnostic.provider_code == ''
     assert len(sends) == 1 and PRIVATE not in json.dumps(records()[0])
 
 

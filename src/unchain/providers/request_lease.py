@@ -299,7 +299,11 @@ class ProviderRequestLease:
     """One revisioned durable state for a unique request subject."""
 
     SCHEMA: ClassVar[str] = "unchain.provider_request_lease.v2"
+    # Preserve both branches' closed wire shapes. Historical v3 stores HTTP v1
+    # or null-status response diagnostics; v4 stores either extended HTTP
+    # failure diagnostics or uncertainty observations, distinguished exactly.
     DIAGNOSTIC_SCHEMA: ClassVar[str] = "unchain.provider_request_lease.v3"
+    DIAGNOSTIC_SCHEMA_V4: ClassVar[str] = "unchain.provider_request_lease.v4"
     UNCERTAINTY_SCHEMA: ClassVar[str] = "unchain.provider_request_lease.v4"
 
     subject: ProviderRequestSubject
@@ -466,8 +470,14 @@ class ProviderRequestLease:
             "predecessor_sha256": self.predecessor_sha256,
         }
         if self.failure_diagnostic is not None:
-            record["schema"] = self.DIAGNOSTIC_SCHEMA
-            record["failure_diagnostic"] = self.failure_diagnostic.to_dict()
+            diagnostic = self.failure_diagnostic.to_dict()
+            record["schema"] = (
+                self.DIAGNOSTIC_SCHEMA_V4
+                if self.failure_diagnostic.http_status is not None
+                and diagnostic["schema"] == ProviderFailureDiagnostic.SCHEMA_V2
+                else self.DIAGNOSTIC_SCHEMA
+            )
+            record["failure_diagnostic"] = diagnostic
         if self.uncertainty_diagnostic is not None:
             record["schema"] = self.UNCERTAINTY_SCHEMA
             record["uncertainty_diagnostic"] = self.uncertainty_diagnostic.to_dict()
@@ -492,14 +502,28 @@ class ProviderRequestLease:
             }
         )
         schema = value.get("schema")
-        if schema == cls.UNCERTAINTY_SCHEMA:
+        if schema == cls.UNCERTAINTY_SCHEMA and "uncertainty_diagnostic" in value:
             fields = fields | {"uncertainty_diagnostic"}
             if type(value.get("uncertainty_diagnostic")) is not dict:
                 raise ModelValidationError("v4 started lease requires an uncertainty diagnostic")
-        elif schema == cls.DIAGNOSTIC_SCHEMA:
+            if value.get("status") != ProviderRequestStatus.STARTED:
+                raise ModelValidationError("uncertainty lease must remain started")
+        elif schema in {cls.DIAGNOSTIC_SCHEMA, cls.DIAGNOSTIC_SCHEMA_V4}:
             fields = fields | {"failure_diagnostic"}
-            if type(value.get("failure_diagnostic")) is not dict:
-                raise ModelValidationError("v3 failure lease requires a diagnostic")
+            diagnostic = value.get("failure_diagnostic")
+            if type(diagnostic) is not dict:
+                raise ModelValidationError("failure lease requires a diagnostic")
+            parsed = ProviderFailureDiagnostic.from_dict(diagnostic)
+            expected = (
+                cls.DIAGNOSTIC_SCHEMA_V4
+                if parsed.http_status is not None
+                and diagnostic["schema"] == ProviderFailureDiagnostic.SCHEMA_V2
+                else cls.DIAGNOSTIC_SCHEMA
+            )
+            if schema != expected:
+                raise ModelValidationError("failure lease schema does not match its diagnostic shape")
+            if value.get("status") != ProviderRequestStatus.FAILED:
+                raise ModelValidationError("failure diagnostic lease must be failed")
         else:
             schema = cls.SCHEMA
         raw = _record_data(value, schema=schema, required=fields)
@@ -511,7 +535,10 @@ class ProviderRequestLease:
 
         if type(value) is not dict:
             raise TypeError("provider request lease must be an exact dict")
-        if value.get("schema") in {cls.SCHEMA, cls.DIAGNOSTIC_SCHEMA, cls.UNCERTAINTY_SCHEMA}:
+        if value.get("schema") in {
+            cls.SCHEMA, cls.DIAGNOSTIC_SCHEMA, cls.DIAGNOSTIC_SCHEMA_V4,
+            cls.UNCERTAINTY_SCHEMA,
+        }:
             return cls.from_dict(value)
         legacy_schema = "unchain.provider_request_lease.v1"
         legacy_fields = frozenset(

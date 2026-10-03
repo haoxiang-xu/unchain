@@ -40,12 +40,19 @@ def _explicit_status_code(error: BaseException) -> int | None:
     status_code = getattr(response, "status_code", None)
     if type(status_code) is int:
         return status_code
-    # google-genai APIError uses code for HTTP status, even without a response.
+    # A Gemini SSE error code is not evidence of a rejected HTTP request.
+    # Without the enclosing response, replay could duplicate a processed send.
     from google.genai.errors import APIError
 
-    if isinstance(error, APIError) and type(error.code) is int:
-        return error.code
+    if isinstance(error, APIError):
+        return None
     return None
+
+
+# 502/503/529 are the provider telling us it did not serve the request, so the
+# same request may be sent again. 500 and 504 stay unclassified on purpose: the
+# provider may have processed them, which is exactly what "uncertain" records.
+_TRANSIENT_RETRY_SAFE_STATUSES = frozenset({429, 502, 503, 529})
 
 
 def _classified_failure_kind(
@@ -54,12 +61,7 @@ def _classified_failure_kind(
     if type(error) is GeminiResponseFailure:
         return ExactProviderRouteFailureKind.TERMINAL
     status_code = _explicit_status_code(error)
-    if status_code in {429, 529}:
-        return ExactProviderRouteFailureKind.TRANSIENT_RETRY_SAFE
     if status_code == 503:
-        # A rejected HTTP response cannot have delivered stream content. The
-        # Gemini SDK also raises APIError(503) for an error *inside* an HTTP 200
-        # SSE stream; that case must stay uncertain and must not be replayed.
         import httpx
         from google.genai.errors import APIError
 
@@ -71,6 +73,9 @@ def _classified_failure_kind(
             and response.status_code == 503
         ):
             return ExactProviderRouteFailureKind.TRANSIENT_RETRY_SAFE
+        return None
+    if status_code in _TRANSIENT_RETRY_SAFE_STATUSES:
+        return ExactProviderRouteFailureKind.TRANSIENT_RETRY_SAFE
     if (
         status_code is not None
         and 400 <= status_code < 500

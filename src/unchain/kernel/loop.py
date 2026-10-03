@@ -45,6 +45,7 @@ from .delta import HarnessDelta
 from .harness import HarnessContext, RuntimeHarness, RuntimePhase
 from .failure import attach_kernel_run_failure
 from .lifecycle_events import (
+    build_provider_retry_payload,
     build_iteration_completed_payload,
     build_iteration_started_payload,
     build_response_received_payload,
@@ -616,6 +617,13 @@ class KernelLoop:
                     provider_attempt_started(attempt)
 
                 bind_atomic_run_receipt(before_attempt)
+                before_attempt.retry_wait = self._provider_retry_wait(
+                    callback=callback,
+                    run_id=run_id,
+                    iteration=request.iteration,
+                    provider=str(state.provider_state.provider or ""),
+                    execution_guard=execution_guard,
+                )
 
                 turn = final_boundary.fetch_prepared(
                     prepare_context,
@@ -1041,6 +1049,49 @@ class KernelLoop:
             return response
 
         return guarded_callback
+
+    def _provider_retry_wait(
+        self,
+        *,
+        callback: Any,
+        run_id: str,
+        iteration: int,
+        provider: str,
+        execution_guard: ExecutionGuard | None,
+    ) -> Callable[[Any, Callable[[float], None]], None]:
+        """Report a retry wait and keep it interruptible.
+
+        One ``provider_retry`` event starts the wait and one follows every
+        second with the time left. The host callback raises once the turn was
+        stopped, which ends the wait before the next try is sent.
+        """
+
+        def retry_wait(wait: Any, sleep: Callable[[float], None]) -> None:
+            remaining_ms = max(0, int(wait.delay_ms))
+
+            def report() -> None:
+                self.emit_event(
+                    callback,
+                    "provider_retry",
+                    run_id,
+                    iteration=iteration,
+                    **build_provider_retry_payload(
+                        wait,
+                        provider=provider,
+                        remaining_ms=remaining_ms,
+                    ),
+                )
+
+            report()
+            while remaining_ms > 0:
+                step_ms = min(1000, remaining_ms)
+                sleep(step_ms / 1000.0)
+                remaining_ms -= step_ms
+                if execution_guard is not None:
+                    execution_guard.assert_active()
+                report()
+
+        return retry_wait
 
     @staticmethod
     def _guard_terminal_emitter(

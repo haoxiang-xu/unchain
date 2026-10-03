@@ -20,6 +20,7 @@ from unchain.providers.durable_turn_runtime import (
     DurableProviderTurnRuntime,
     DurableProviderTurnStatus,
     ExactProviderRouteTransport,
+    RetryWaitHook,
 )
 from unchain.providers.exact_route_transport import (
     GeminiExactRouteTransport,
@@ -157,6 +158,7 @@ class ContextProviderTurnExecutionService:
         ] | None = None,
         run_receipt_observed: Callable[[ProviderCallReceipt], None] | None = None,
         occurrence_sha256: str | None = None,
+        retry_wait: RetryWaitHook | None = None,
     ) -> ModelTurnResult | None:
         if type(request) is not ModelTurnRequest:
             raise TypeError("request must be an exact ModelTurnRequest")
@@ -411,7 +413,8 @@ class ContextProviderTurnExecutionService:
                 build_run_receipt=(
                     build_run_receipt if run_receipt_factory is not None else None
                 ),
-                on_retry=on_retry if request.callback is not None else None,
+                on_retry=on_retry if request.callback is not None and retry_wait is None else None,
+                retry_wait=retry_wait,
             )
         except BaseException:
             transport.discard_buffered_events()

@@ -77,6 +77,60 @@ def _status_from_tool_result(
     return classify_durable_tool_result(result)
 
 
+def _exact_int(value: Any, *, minimum: int) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        return None
+    return value
+
+
+def _provider_retry_payload(raw_event: dict[str, Any]) -> dict[str, Any] | None:
+    """Closed projection of a ``provider_retry`` event (BC-386-4/6).
+
+    Only the known fields are copied; anything else on the raw event is
+    ignored, so provider text can never reach the stream.
+    """
+
+    attempt_failed = _exact_int(raw_event.get("attempt_failed"), minimum=1)
+    next_attempt = _exact_int(raw_event.get("next_attempt"), minimum=2)
+    max_attempts = _exact_int(raw_event.get("max_attempts"), minimum=2)
+    delay_ms = _exact_int(raw_event.get("delay_ms"), minimum=0)
+    remaining_ms = _exact_int(raw_event.get("remaining_ms"), minimum=0)
+    http_status = raw_event.get("http_status")
+    provider_status = raw_event.get("provider_status")
+    provider = raw_event.get("provider")
+    if (
+        attempt_failed is None
+        or next_attempt is None
+        or max_attempts is None
+        or delay_ms is None
+        or remaining_ms is None
+        or next_attempt != attempt_failed + 1
+        or next_attempt > max_attempts
+        or remaining_ms > delay_ms
+        or not (
+            http_status is None
+            or (
+                not isinstance(http_status, bool)
+                and isinstance(http_status, int)
+                and 400 <= http_status <= 599
+            )
+        )
+        or not isinstance(provider_status, str)
+        or not isinstance(provider, str)
+    ):
+        return None
+    return {
+        "provider": provider,
+        "attempt_failed": attempt_failed,
+        "next_attempt": next_attempt,
+        "max_attempts": max_attempts,
+        "delay_ms": delay_ms,
+        "remaining_ms": remaining_ms,
+        "http_status": http_status,
+        "provider_status": provider_status,
+    }
+
+
 def _trace_surface(group: str = "trace", *, default_state: str = "collapsed") -> RuntimeEventSurface:
     return RuntimeEventSurface(
         slot="trace_inline",
@@ -427,7 +481,9 @@ def normalize_raw_event(
             )
         ]
 
-    if raw_type == "provider_retry":
+    if raw_type == "provider_retry" and (
+        "retry_ordinal" in raw_event or "max_retries" in raw_event
+    ):
         allowed = {
             "type", "run_id", "iteration", "timestamp", "provider",
             "http_status", "retry_ordinal", "max_retries", "delay_ms",
@@ -491,6 +547,29 @@ def normalize_raw_event(
                     "step_type": "model_response",
                     "kind": "reasoning_reset",
                     "preview_id": preview_id,
+                },
+                metadata=metadata,
+            )
+        ]
+
+    if raw_type == "provider_retry":
+        retry = _provider_retry_payload(raw_event)
+        if retry is None:
+            return []
+        step_id = f"model:{turn_id or run_id}:response"
+        return [
+            RuntimeEventDraft(
+                type="step.delta",
+                run_id=run_id,
+                agent_id=agent_id,
+                turn_id=turn_id,
+                links=RuntimeEventLinks(step_id=step_id),
+                surface=_trace_surface("model", default_state="expanded"),
+                payload={
+                    "step_id": step_id,
+                    "step_type": "model_response",
+                    "kind": "provider_retry",
+                    **retry,
                 },
                 metadata=metadata,
             )
