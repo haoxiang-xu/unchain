@@ -122,6 +122,7 @@ def _bundle_builder(tmp_path, *, with_provider_service: bool):
                 ),
                 build_repository=_BuildRepository(attempt.generation.execution_id),
                 partial_attempt_sink=lambda request, error: None,
+                provider_turn_result_reader=repository.read_full_verified,
             ),
             artifacts=artifacts,
             handoffs=handoffs,

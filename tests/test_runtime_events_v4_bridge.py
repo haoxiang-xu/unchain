@@ -85,3 +85,17 @@ def test_v4_bridge_records_dropped_unknown_events():
     diagnostics = bridge.diagnostics()
     assert diagnostics["dropped_event_count"] == 1
     assert diagnostics["dropped_events"][0]["type"] == "unknown_event"
+
+
+def test_v4_bridge_never_echoes_rejected_provider_retry_content():
+    bridge = RuntimeEventBridge(session_id="thread-1", root_run_id="run-root")
+    assert bridge.normalize({
+        "type": "provider_retry", "run_id": "run-root", "iteration": 1,
+        "provider": "gemini", "http_status": 503,
+        "retry_ordinal": 1, "max_retries": 2, "delay_ms": 500,
+        "response_body": "private-provider-content",
+    }) == []
+    assert bridge.diagnostics() == {
+        "dropped_event_count": 1,
+        "dropped_events": [{"type": "provider_retry", "event": {"type": "provider_retry"}}],
+    }

@@ -232,4 +232,3 @@ def test_a_pro_tier_gemini_model_is_available_and_the_default_stays_flash():
     capabilities = load_model_capabilities()
     assert any("pro" in name for name in _gemini_catalog(capabilities))
     assert capabilities["gemini-3.6-flash"]["provider"] == "gemini"
-

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
+import logging
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -52,7 +52,11 @@ from .physical_send import (
     provider_physical_ordinal,
 )
 from .wire_envelope import ProviderWireEnvelope, ProviderWireRoute
-from .failure_diagnostic import ProviderFailureDiagnostic, ProviderResponseEndedError
+from .failure_diagnostic import ProviderFailureDiagnostic
+from .uncertainty_diagnostic import ProviderUncertaintyDiagnostic
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _provider_attempt_completed_at() -> str:
@@ -80,106 +84,9 @@ class DurableProviderTurnError(RuntimeError):
     """Base error for durable provider-turn orchestration."""
 
 
-_TIMEOUT_DETAIL = (
-    "Provider request timed out before a response arrived; "
-    "the provider may still have processed it"
-)
-
-
-def _message_diagnostic(error: BaseException) -> ProviderFailureDiagnostic | None:
-    """Status evidence for an error message, never a reason to change the error.
-
-    Reading an arbitrary provider exception can itself raise; that must not
-    replace the failure being reported.
-    """
-
-    try:
-        return ProviderFailureDiagnostic.from_exception(error)
-    except Exception:
-        return None
-
-
-def _is_transport_timeout(error: BaseException) -> bool:
-    if isinstance(error, TimeoutError):
-        return True
-    try:
-        import httpx
-    except Exception:
-        return False
-    return isinstance(error, httpx.TimeoutException)
-
-
-_CONNECT_DETAIL = "Provider connection could not be established"
-_CONNECTION_LOST_DETAIL = (
-    "Provider connection closed before the response completed; "
-    "the provider may still have processed it"
-)
-
-
-def _transport_failure_detail(error: BaseException) -> str:
-    """Wording for an httpx transport failure, named by its (code-owned) class."""
-
-    try:
-        import httpx
-    except Exception:
-        return ""
-    if not isinstance(error, httpx.TransportError):
-        return ""
-    name = type(error).__name__
-    if isinstance(error, httpx.ConnectError):
-        return f"{_CONNECT_DETAIL} ({name})"
-    return f"{_CONNECTION_LOST_DETAIL} ({name})"
-
-
-_UNEXPECTED_SEND_DETAIL = (
-    "Provider call failed with an unexpected error; the provider may still have "
-    "processed it"
-)
-_NOT_STARTED_DETAIL = "Provider request could not be started"
-_UNUSABLE_RESULT_DETAIL = "Provider returned an unusable result"
-_NOT_RECORDED_DETAIL = "Provider answer could not be recorded"
-_RECEIPT_DETAIL = "Provider call record could not be built"
-_EARLIER_SEND_DETAIL = (
-    "An earlier send of this request did not finish and is not repeated; the "
-    "provider may still have processed it"
-)
-_CODE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,80}")
-
-
-def _code_name(kind: type) -> str:
-    """A class name for display; only a plain identifier, never a message."""
-
-    name = getattr(kind, "__name__", "")
-    if type(name) is str and _CODE_NAME.fullmatch(name):
-        return name
-    return "unknown error"
-
-
-def _uncertain_detail(error: BaseException) -> str:
-    """Fixed local wording for an uncertain send; never the provider's text."""
-
-    diagnostic = _message_diagnostic(error)
-    if diagnostic is not None:
-        return diagnostic.summary()
-    if _is_transport_timeout(error):
-        return _TIMEOUT_DETAIL
-    if isinstance(error, ProviderResponseEndedError):
-        return error.summary()
-    try:
-        detail = _transport_failure_detail(error)
-    except Exception:
-        detail = ""
-    return detail or f"{_UNEXPECTED_SEND_DETAIL} ({_code_name(type(error))})"
-
-
 @dataclass(frozen=True, slots=True)
 class ProviderRetryWait:
-    """Closed facts about one wait between retry-safe provider tries.
-
-    Tries are numbered from 1; ``max_attempts`` is the retry budget plus the
-    first try. ``diagnostic`` is the closed projection of the failure (never
-    provider text) or ``None`` when the failure carried no HTTP evidence.
-    """
+    """Closed retry facts; the hook owns the interruptible wait."""
 
     attempt_failed: int
     next_attempt: int
@@ -198,16 +105,20 @@ class DurableProviderTurnUncertainError(DurableProviderTurnError):
 
     def __init__(
         self,
-        diagnostic: ProviderFailureDiagnostic | None = None,
-        *,
-        detail: str = "",
+        diagnostic: ProviderUncertaintyDiagnostic | ProviderFailureDiagnostic | None = None,
     ) -> None:
+        # Compatibility with #386's public constructor is deliberately closed:
+        # arbitrary provider messages or exception class names never become UI text.
+        if diagnostic is None:
+            diagnostic = ProviderUncertaintyDiagnostic("unrecorded_outcome", "recovery")
+        if type(diagnostic) not in {ProviderUncertaintyDiagnostic, ProviderFailureDiagnostic}:
+            raise TypeError("uncertain error requires an exact diagnostic")
         self.diagnostic = diagnostic
         self.__suppress_context__ = True
-        # The text is the closed, fixed-wording summary only; the raw cause stays
-        # in the chained exception and is never serialized.
-        text = diagnostic.summary() if diagnostic is not None else detail
-        super().__init__(f"{self.code}; {text}" if text else self.code)
+        if type(diagnostic) is ProviderFailureDiagnostic:
+            super().__init__(self.code + "; " + diagnostic.summary())
+        else:
+            super().__init__("Provider request outcome is uncertain: " + diagnostic.summary())
 
 
 class DurableProviderTurnTerminalError(DurableProviderTurnError):
@@ -223,8 +134,17 @@ class DurableProviderTurnTerminalError(DurableProviderTurnError):
         self.classification = classification
         self.diagnostic = diagnostic
         self.__suppress_context__ = True
-        detail = f"; {diagnostic.summary()}" if diagnostic is not None else ""
-        super().__init__(f"{self.code}:{classification}{detail}")
+        if (
+            classification == "transient"
+            and diagnostic is not None
+            and diagnostic.http_status == 503
+        ):
+            super().__init__(
+                "Provider temporarily busy (HTTP 503). Please try again later."
+            )
+        else:
+            detail = f"; {diagnostic.summary()}" if diagnostic is not None else ""
+            super().__init__(f"{self.code}:{classification}{detail}")
 
 
 class ExactProviderRouteFailureKind(StrEnum):
@@ -561,6 +481,47 @@ class DurableProviderTurnRuntime:
         except BaseException as exc:
             self._raise_durable(exc)
 
+    def _uncertain_error(
+        self,
+        lease: ProviderRequestLease,
+        diagnostic: ProviderUncertaintyDiagnostic,
+    ) -> DurableProviderTurnUncertainError:
+        # Observability is best effort. Failure to annotate cannot replace the
+        # primary failure, seal a result, or authorize another physical send.
+        try:
+            self._coordinator.record_uncertainty(
+                lease, diagnostic=diagnostic,
+                operation=_operation(
+                    subject=lease.subject, phase="uncertainty",
+                    detail={"uncertainty_diagnostic": diagnostic.to_dict()},
+                ),
+            )
+        except Exception:
+            _LOGGER.warning("Provider uncertainty diagnostic could not be persisted")
+        return DurableProviderTurnUncertainError(diagnostic)
+
+    @staticmethod
+    def _notify_uncertain_after_send(after_send, context, classification: str) -> None:
+        if after_send is None:
+            return
+        try:
+            after_send(context, _provider_attempt_completed_at(), "uncertain", classification)
+        except Exception as exc:
+            if is_durable_persistence_failure(exc) or getattr(exc, "code", None) == "execution_cancelled":
+                raise exc from None
+            _LOGGER.warning("Provider failure observer could not record uncertainty")
+
+    def _result_callback(self, lease, callback, *args):
+        try:
+            return callback(*args)
+        except BaseException as exc:
+            if is_durable_persistence_failure(exc) or getattr(exc, "code", None) == "execution_cancelled":
+                raise exc from None
+            raise self._uncertain_error(
+                lease,
+                ProviderUncertaintyDiagnostic.from_exception(exc, phase="result_processing"),
+            ) from None
+
     def _complete(
         self,
         lease: ProviderRequestLease,
@@ -625,10 +586,10 @@ class DurableProviderTurnRuntime:
                 visible_output=True,
                 result=result,
             )
-        except BaseException as exc:
-            raise DurableProviderTurnUncertainError(
-                detail=f"{_NOT_RECORDED_DETAIL} ({_code_name(type(exc))})"
-            ) from exc
+        except BaseException:
+            raise self._uncertain_error(
+                lease, ProviderUncertaintyDiagnostic("invalid_result", "result_processing"),
+            ) from None
         artifact_operation = _operation(
             subject=lease.subject,
             phase="result-artifact",
@@ -680,28 +641,33 @@ class DurableProviderTurnRuntime:
         ordinal: int,
         retry_config: RetryConfig,
         error: BaseException | None,
+        before_sleep: Callable[[int], None] | None = None,
+        retry_wait: RetryWaitHook | None = None,
+        diagnostic: ProviderFailureDiagnostic | None = None,
+        retry_limit: int | None = None,
     ) -> None:
-        self._sleep(
-            self._delay_ms(ordinal=ordinal, retry_config=retry_config, error=error)
-            / 1000.0
+        delay_ms = compute_delay_ms(
+            attempt=ordinal,
+            config=retry_config,
+            retry_after_ms=(
+                extract_retry_after_ms(error) if error is not None else None
+            ),
         )
-
-    @staticmethod
-    def _delay_ms(
-        *,
-        ordinal: int,
-        retry_config: RetryConfig,
-        error: BaseException | None,
-    ) -> int:
-        return int(
-            compute_delay_ms(
-                attempt=ordinal,
-                config=retry_config,
-                retry_after_ms=(
-                    extract_retry_after_ms(error) if error is not None else None
+        if retry_wait is not None:
+            retry_wait(
+                ProviderRetryWait(
+                    attempt_failed=ordinal,
+                    next_attempt=ordinal + 1,
+                    max_attempts=(retry_config.max_retries if retry_limit is None else retry_limit) + 1,
+                    delay_ms=int(delay_ms),
+                    diagnostic=diagnostic,
                 ),
+                self._sleep,
             )
-        )
+            return
+        if before_sleep is not None:
+            before_sleep(delay_ms)
+        self._sleep(delay_ms / 1000.0)
 
     def _execute_route(
         self,
@@ -723,6 +689,7 @@ class DurableProviderTurnRuntime:
             ],
             ProviderCallReceipt,
         ] | None,
+        on_retry: Callable[[int, int, int], None] | None,
         fallback_parent: ProviderRequestLease | None = None,
         retry_wait: RetryWaitHook | None = None,
     ) -> DurableProviderTurnOutcome:
@@ -762,8 +729,19 @@ class DurableProviderTurnRuntime:
             )
             claimed_now = False
             if lease is None:
-                if ordinal > retry_config.max_retries:
-                    raise DurableProviderTurnTerminalError("transient")
+                # Older #386 records may authorize more 503 retries than the
+                # current limit. Inspect existing outcomes first, then bound
+                # only a new claim/send; never discard a recorded result.
+                previous_diagnostic = previous.failure_diagnostic if previous is not None else None
+                retry_limit = (
+                    min(retry_config.max_retries, 2)
+                    if envelope.provider == "gemini"
+                    and previous_diagnostic is not None
+                    and previous_diagnostic.http_status == 503
+                    else retry_config.max_retries
+                )
+                if ordinal > retry_limit:
+                    raise DurableProviderTurnTerminalError("transient", previous_diagnostic)
                 lease, claimed_now = self._claim(
                     subject=subject,
                     route=route,
@@ -790,7 +768,7 @@ class DurableProviderTurnRuntime:
                     )
                 )
             if lease.status is ProviderRequestStatus.STARTED and not claimed_now:
-                raise DurableProviderTurnUncertainError(detail=_EARLIER_SEND_DETAIL)
+                raise DurableProviderTurnUncertainError(lease.uncertainty_diagnostic)
             if lease.status is ProviderRequestStatus.FAILED:
                 if lease.classification == "previous_response_fallback":
                     self._route(
@@ -804,6 +782,7 @@ class DurableProviderTurnRuntime:
                         before_send=before_send,
                         after_send=after_send,
                         build_run_receipt=build_run_receipt,
+                        on_retry=on_retry,
                         fallback_parent=lease,
                         retry_wait=retry_wait,
                     )
@@ -816,20 +795,50 @@ class DurableProviderTurnRuntime:
                 previous = lease
                 ordinal += 1
                 if ordinal <= retry_config.max_retries:
-                    self._delay(
-                        ordinal=ordinal,
-                        retry_config=retry_config,
-                        error=None,
+                    next_subject = ProviderRequestSubject(
+                        attempt=envelope.attempt,
+                        iteration=envelope.iteration,
+                        envelope_sha256=envelope.envelope_sha256,
+                        route=route.name,
+                        retry_ordinal=ordinal,
                     )
+                    next_lease, _ = self._inspect_subject(
+                        subject=next_subject,
+                        route_sha256=route.route_sha256,
+                    )
+                    if next_lease is None:
+                        gemini_busy = (
+                            envelope.provider == "gemini"
+                            and lease.failure_diagnostic is not None
+                            and lease.failure_diagnostic.http_status == 503
+                        )
+                        retry_limit = min(retry_config.max_retries, 2) if gemini_busy else retry_config.max_retries
+                        if ordinal > retry_limit:
+                            raise DurableProviderTurnTerminalError("transient", lease.failure_diagnostic)
+                        self._delay(
+                            ordinal=ordinal,
+                            retry_config=retry_config,
+                            error=None,
+                            retry_wait=retry_wait,
+                            diagnostic=lease.failure_diagnostic,
+                            retry_limit=retry_limit,
+                            before_sleep=(
+                                lambda delay_ms: on_retry(
+                                    ordinal, retry_limit, delay_ms
+                                )
+                                if gemini_busy and on_retry is not None
+                                else None
+                            ),
+                        )
                 continue
 
             if before_send is not None:
                 try:
                     before_send(send_context)
-                except BaseException as exc:
-                    raise DurableProviderTurnUncertainError(
-                        detail=f"{_NOT_STARTED_DETAIL} ({_code_name(type(exc))})"
-                    ) from exc
+                except BaseException:
+                    raise self._uncertain_error(
+                        lease, ProviderUncertaintyDiagnostic("before_send_failed", "before_send"),
+                    ) from None
             try:
                 result = self._transport.send(
                     envelope=envelope,
@@ -847,50 +856,53 @@ class DurableProviderTurnRuntime:
                 if is_durable_persistence_failure(exc.original):
                     raise exc.original
                 if exc.kind is ExactProviderRouteFailureKind.TRANSIENT_RETRY_SAFE:
-                    retry_budget_remaining = ordinal < retry_config.max_retries
+                    diagnostic = ProviderFailureDiagnostic.from_exception(exc.original)
+                    gemini_busy = (
+                        envelope.provider == "gemini"
+                        and diagnostic is not None
+                        and diagnostic.http_status == 503
+                    )
+                    # A busy model can take many seconds to reject each send.
+                    # Keep the normal budget for other providers and failures.
+                    retry_limit = (
+                        min(retry_config.max_retries, 2)
+                        if gemini_busy
+                        else retry_config.max_retries
+                    )
+                    retry_budget_remaining = ordinal < retry_limit
                     failed = self._record_failure(
                         lease,
                         classification="transient",
                         retryable=retry_budget_remaining,
+                        diagnostic=diagnostic,
                     )
                     if not retry_budget_remaining:
-                        diagnostic = _message_diagnostic(exc.original)
+                        if gemini_busy:
+                            raise DurableProviderTurnTerminalError(
+                                "transient", diagnostic
+                            ) from None
                         raise RetriesExhaustedError(
                             last_error=exc.original,
-                            attempts=retry_config.max_retries,
-                            detail=(
-                                f"{diagnostic.summary()} after "
-                                f"{retry_config.max_retries} retries"
-                                if diagnostic is not None
-                                else ""
-                            ),
+                            attempts=retry_limit,
+                            detail=(f"{diagnostic.summary()} after {retry_limit} retries" if diagnostic is not None else ""),
                         ) from None
                     previous = failed
                     ordinal += 1
-                    if retry_wait is None:
-                        self._delay(
-                            ordinal=ordinal,
-                            retry_config=retry_config,
-                            error=exc.original,
-                        )
-                    else:
-                        # The hook owns the wait so it can report it and stop
-                        # it; anything it raises ends the turn before the next
-                        # try is claimed or sent.
-                        retry_wait(
-                            ProviderRetryWait(
-                                attempt_failed=ordinal,
-                                next_attempt=ordinal + 1,
-                                max_attempts=retry_config.max_retries + 1,
-                                delay_ms=self._delay_ms(
-                                    ordinal=ordinal,
-                                    retry_config=retry_config,
-                                    error=exc.original,
-                                ),
-                                diagnostic=_message_diagnostic(exc.original),
-                            ),
-                            self._sleep,
-                        )
+                    self._delay(
+                        ordinal=ordinal,
+                        retry_config=retry_config,
+                        error=exc.original,
+                        retry_wait=retry_wait,
+                        diagnostic=diagnostic,
+                        retry_limit=retry_limit,
+                        before_sleep=(
+                            lambda delay_ms: on_retry(
+                                ordinal, retry_limit, delay_ms
+                            )
+                            if gemini_busy and on_retry is not None
+                            else None
+                        ),
+                    )
                     continue
                 if exc.kind is ExactProviderRouteFailureKind.PREVIOUS_RESPONSE_FALLBACK:
                     failed = self._record_failure(
@@ -905,6 +917,7 @@ class DurableProviderTurnRuntime:
                         before_send=before_send,
                         after_send=after_send,
                         build_run_receipt=build_run_receipt,
+                        on_retry=on_retry,
                         fallback_parent=failed,
                         retry_wait=retry_wait,
                     )
@@ -919,34 +932,26 @@ class DurableProviderTurnRuntime:
                     "non_retryable", diagnostic
                 ) from None
             except BaseException as exc:
-                if after_send is not None:
-                    after_send(
-                        send_context,
-                        _provider_attempt_completed_at(),
-                        "uncertain",
-                        "uncertain",
-                    )
                 if is_durable_persistence_failure(exc):
                     raise
-                raise DurableProviderTurnUncertainError(
-                    _message_diagnostic(exc), detail=_uncertain_detail(exc)
-                ) from exc
+                error = self._uncertain_error(
+                    lease, ProviderUncertaintyDiagnostic.from_exception(exc, phase="reading_response"),
+                )
+                self._notify_uncertain_after_send(after_send, send_context, "uncertain")
+                raise error from None
 
             if type(result) is not ModelTurnResult:
-                if after_send is not None:
-                    after_send(
-                        send_context,
-                        _provider_attempt_completed_at(),
-                        "uncertain",
-                        "invalid_result",
-                    )
-                raise DurableProviderTurnUncertainError(
-                    detail=f"{_UNUSABLE_RESULT_DETAIL} ({_code_name(type(result))})"
+                error = self._uncertain_error(
+                    lease, ProviderUncertaintyDiagnostic("invalid_result", "result_processing"),
                 )
+                self._notify_uncertain_after_send(after_send, send_context, "invalid_result")
+                raise error from None
             completed_at = _provider_attempt_completed_at()
             run_receipt = None
             if build_run_receipt is not None:
-                run_receipt = build_run_receipt(
+                run_receipt = self._result_callback(
+                    lease,
+                    build_run_receipt,
                     send_context,
                     completed_at,
                     "completed",
@@ -954,9 +959,15 @@ class DurableProviderTurnRuntime:
                     result,
                 )
                 if type(run_receipt) is not ProviderCallReceipt:
-                    raise DurableProviderTurnUncertainError(detail=_RECEIPT_DETAIL)
+                    error = self._uncertain_error(
+                        lease, ProviderUncertaintyDiagnostic("invalid_result", "result_processing"),
+                    )
+                    self._notify_uncertain_after_send(after_send, send_context, "invalid_result")
+                    raise error from None
             if after_send is not None:
-                after_send(
+                self._result_callback(
+                    lease,
+                    after_send,
                     send_context,
                     completed_at,
                     "completed",
@@ -987,9 +998,12 @@ class DurableProviderTurnRuntime:
             ],
             ProviderCallReceipt,
         ] | None = None,
+        on_retry: Callable[[int, int, int], None] | None = None,
         retry_wait: RetryWaitHook | None = None,
     ) -> DurableProviderTurnOutcome:
         self._validate_retry_config(retry_config)
+        if on_retry is not None and not callable(on_retry):
+            raise TypeError("on_retry must be callable or null")
         if retry_wait is not None and not callable(retry_wait):
             raise TypeError("retry_wait must be callable or null")
         if type(authority) is not RecoveredProviderWireAuthority:
@@ -1037,6 +1051,7 @@ class DurableProviderTurnRuntime:
             before_send=before_send,
             after_send=after_send,
             build_run_receipt=build_run_receipt,
+            on_retry=on_retry,
             retry_wait=retry_wait,
         )
 

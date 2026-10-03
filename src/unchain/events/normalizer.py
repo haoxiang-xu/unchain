@@ -492,6 +492,51 @@ def normalize_raw_event(
             )
         ]
 
+    if raw_type == "provider_retry" and (
+        "retry_ordinal" in raw_event or "max_retries" in raw_event
+    ):
+        allowed = {
+            "type", "run_id", "iteration", "timestamp", "provider",
+            "http_status", "retry_ordinal", "max_retries", "delay_ms",
+            "workflow_node_id", "workflow_step_index", "workflow_step_count",
+        }
+        ordinal = _int_value(raw_event.get("retry_ordinal"))
+        max_retries = _int_value(raw_event.get("max_retries"))
+        delay_ms = _int_value(raw_event.get("delay_ms"))
+        if (
+            set(raw_event) - allowed
+            or turn_id is None
+            or raw_event.get("provider") != "gemini"
+            or _int_value(raw_event.get("http_status")) != 503
+            or ordinal is None or max_retries is None or delay_ms is None
+            or not 1 <= max_retries <= 2
+            or not 1 <= ordinal <= max_retries
+            or not 0 <= delay_ms <= 3_600_000
+        ):
+            return []
+        step_id = f"model:{turn_id}:response"
+        return [
+            RuntimeEventDraft(
+                type="step.delta",
+                run_id=run_id,
+                agent_id=agent_id,
+                turn_id=turn_id,
+                links=RuntimeEventLinks(step_id=step_id),
+                surface=_trace_surface("model"),
+                payload={
+                    "step_id": step_id,
+                    "step_type": "model_response",
+                    "kind": "provider_retry",
+                    "provider": "gemini",
+                    "http_status": 503,
+                    "retry_ordinal": ordinal,
+                    "max_retries": max_retries,
+                    "delay_ms": delay_ms,
+                },
+                metadata=metadata,
+            )
+        ]
+
     if raw_type == "reasoning_preview_discarded":
         if (
             set(raw_event)

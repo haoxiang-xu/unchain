@@ -1,6 +1,6 @@
 # Integrate current dev / #390 into #383
 
-Status: PLAN CHECKPOINT, implementation and validation pending. 2026-10-03 UTC.
+Status: MERGE CANDIDATE CHECKPOINT, validation pending. 2026-10-03 UTC.
 
 ## Authorized scope
 
@@ -29,4 +29,21 @@ SEQ-390-I01: first/second message, first/second interaction, retry/durable resum
 
 ## Pending evidence
 
-Conflict map, graph risk, final artifact identity, tests, independent review, remote restore proof and exact-head CI are PENDING. Prior branch acceptance is historical, not acceptance of this merged pair. macOS-only unpublished work is not assumed accessible or included. Live/frozen/platform-specific acceptance is NOT_RUN until demonstrated.
+### Three-way conflict and semantic map
+
+- Parents: plan checkpoint `0dcbf9c92a58f40de7c39d84fe35a40ff91fa8fc` and confirmed dev `358b96d723daa0d2882158985c8245c7f8c7fb23`. Merge base: `1ec49ddfc28d3b42ba035debada5e3db759dad1b`.
+- The automatic three-way merge is text-clean, with no unresolved entries. No incoming source or test was discarded and no new production behavior was invented.
+- Shared file overlap is `events/normalizer.py`: #383 tool/interaction presentation policy coexists with #390 closed Gemini retry-ordinal projection. Presentation metadata remains outside the durable interaction request and provider schema.
+- Context replay semantic overlap: #383 recovers historic tool policy or exact legacy omission; #390 verifies the current native batch against durable provider result and wire snapshot. Verification compares call identity/name/arguments and preserves existing receipt/hash/no-resend gates.
+- Historical diagnostics-v2 and leases-v4 compatibility is imported byte-for-byte from merged dev, including exact key sets, HTTP/null and lease status distinctions. Unknown outcomes do not authorize resend.
+- Relative to dev, the production/test diff is exactly the existing #383 policy work, plus this integration record. macOS-only unpublished `fadde9f3` is unavailable and is not reconstructed.
+
+### Graph preflight
+
+GitNexus 1.6.12 indexed the premerge checkpoint in an isolated index (21,528 nodes, 50,706 edges, 818 sampled flows). Before checkout edits, upstream impact was run for all 60 incoming changed/added/removed production callables. Fourteen new callables have no premerge node; their existing caller boundaries were included. The refreshed merged index contains 21,834 nodes and 51,449 edges. Complete staged detect-changes succeeded: 46 changed files, 388 symbols and 19 affected sampled execution flows, aggregate risk CRITICAL; the structured result has no error or partial flag.
+
+The aggregate semantic risk is CRITICAL. Journal ephemeral classification reaches three direct append/project callers and six sampled durable flows (result persistence, tool authorization, subagent result and sealed completion). HIGH graph findings also include wire-authority recovery, Anthropic native translation, historical lease parsing and the replaced retry delay. The integration therefore requires the inherited negative matrices, full runtime suite and exact installed wheel tests, not merely a conflict-free merge.
+
+Indexing succeeded with a 512 MiB DB pool, one parser worker and FTS disabled after the default analyzer exited early. Static Python dynamic/callable-value edges and process sampling are incomplete; the graph does not prove absent runtime paths safe.
+
+Final artifact identity, test results, independent review, remote restore proof and exact-head CI remain PENDING. Prior branch acceptance is historical, not acceptance of this merged pair. Live/frozen/platform-specific acceptance is NOT_RUN until demonstrated.
