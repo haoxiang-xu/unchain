@@ -1,4 +1,4 @@
-"""Closed, non-content-bearing diagnostics for provider HTTP failures."""
+"""Closed, non-content-bearing diagnostics for HTTP and response failures."""
 
 from __future__ import annotations
 
@@ -14,7 +14,28 @@ _CODES = frozenset({
     "unsupported_parameter", "unsupported_value", "missing_required_parameter",
     "unknown_parameter", "context_length_exceeded", "content_policy_violation",
     "insufficient_quota", "rate_limit_exceeded", "billing_hard_limit_reached",
+    "INVALID_ARGUMENT", "NOT_FOUND", "PERMISSION_DENIED", "UNAUTHENTICATED",
+    "RESOURCE_EXHAUSTED", "FAILED_PRECONDITION", "OUT_OF_RANGE", "UNAVAILABLE",
+    "INTERNAL", "DEADLINE_EXCEEDED", "ABORTED", "ALREADY_EXISTS", "CANCELLED",
 })
+_RESPONSE_CODES = frozenset({
+    "SAFETY", "RECITATION", "LANGUAGE", "OTHER", "BLOCKLIST",
+    "PROHIBITED_CONTENT", "SPII", "MALFORMED_FUNCTION_CALL", "IMAGE_SAFETY",
+    "IMAGE_PROHIBITED_CONTENT", "IMAGE_OTHER", "NO_IMAGE", "IMAGE_RECITATION",
+    "UNEXPECTED_TOOL_CALL", "TOO_MANY_TOOL_CALLS", "MISSING_THOUGHT_SIGNATURE",
+    "MALFORMED_RESPONSE", "ESCALATION", "PUP_LIMITED_DISABLED",
+    "PROMPT_BLOCKED", "EMPTY_RESPONSE",
+})
+
+
+class GeminiResponseFailure(RuntimeError):
+    """An explicit provider outcome, distinct from an interrupted stream."""
+
+    def __init__(self, reason: str) -> None:
+        if type(reason) is not str or reason not in _RESPONSE_CODES:
+            raise ValueError("Unknown Gemini response failure reason")
+        self.reason = reason
+        super().__init__(f"Gemini response failed: {reason}")
 _PARAMETER_PARTS = frozenset({
     "model", "input", "messages", "content", "type", "role", "text",
     "tools", "function", "name", "parameters", "properties", "required",
@@ -77,17 +98,32 @@ def _catalog_replacement_model(message: object) -> str:
 @dataclass(frozen=True, slots=True)
 class ProviderFailureDiagnostic:
     SCHEMA: ClassVar[str] = "unchain.provider_failure_diagnostic.v1"
-    # Used only when provider_status or replacement_model is set; a record that
-    # carries neither keeps the v1 shape and bytes.
+    # Two shipped branches assigned v2 to disjoint closed shapes. Keep their
+    # bytes: response outcomes have null HTTP status and four fields; extended
+    # HTTP diagnostics have an integer status and two additional fields.
+    RESPONSE_SCHEMA: ClassVar[str] = "unchain.provider_failure_diagnostic.v2"
     SCHEMA_V2: ClassVar[str] = "unchain.provider_failure_diagnostic.v2"
 
-    http_status: int
+    http_status: int | None
     provider_code: str = ""
     parameter: str = ""
     provider_status: str = ""
     replacement_model: str = ""
 
     def __post_init__(self) -> None:
+        if self.http_status is None:
+            if (
+                type(self.provider_code) is not str
+                or self.provider_code not in _RESPONSE_CODES
+                or type(self.parameter) is not str
+                or self.parameter != ""
+                or type(self.provider_status) is not str
+                or self.provider_status != ""
+                or type(self.replacement_model) is not str
+                or self.replacement_model != ""
+            ):
+                raise ValueError("provider response diagnostic is invalid")
+            return
         if type(self.http_status) is not int or not 400 <= self.http_status <= 599:
             raise ValueError("provider diagnostic HTTP status is invalid")
         if type(self.provider_code) is not str or self.provider_code not in _CODES:
@@ -104,8 +140,12 @@ class ProviderFailureDiagnostic:
             raise ValueError("provider diagnostic replacement model is invalid")
 
     def to_dict(self) -> dict:
-        record = {"schema": self.SCHEMA, "http_status": self.http_status,
-                  "provider_code": self.provider_code, "parameter": self.parameter}
+        record = {
+            "schema": self.RESPONSE_SCHEMA if self.http_status is None else self.SCHEMA,
+            "http_status": self.http_status,
+            "provider_code": self.provider_code,
+            "parameter": self.parameter,
+        }
         if self.provider_status or self.replacement_model:
             record["schema"] = self.SCHEMA_V2
             record["provider_status"] = self.provider_status
@@ -116,35 +156,36 @@ class ProviderFailureDiagnostic:
     def from_dict(cls, value: dict) -> ProviderFailureDiagnostic:
         if type(value) is not dict:
             raise ValueError("provider diagnostic fields are invalid")
-        v1_keys = {"schema", "http_status", "provider_code", "parameter"}
+        base_fields = {"schema", "http_status", "provider_code", "parameter"}
         schema = value.get("schema")
-        if schema == cls.SCHEMA:
-            if set(value) != v1_keys:
-                raise ValueError("provider diagnostic fields are invalid")
+        if set(value) == base_fields:
+            expected = cls.RESPONSE_SCHEMA if value["http_status"] is None else cls.SCHEMA
+            if schema != expected:
+                raise ValueError("provider diagnostic schema is invalid")
             return cls(value["http_status"], value["provider_code"], value["parameter"])
-        if schema == cls.SCHEMA_V2:
-            if set(value) != v1_keys | {"provider_status", "replacement_model"}:
-                raise ValueError("provider diagnostic fields are invalid")
+        if schema == cls.SCHEMA_V2 and set(value) == base_fields | {"provider_status", "replacement_model"}:
+            if value["http_status"] is None:
+                raise ValueError("extended HTTP diagnostic requires an HTTP status")
             diagnostic = cls(
                 value["http_status"], value["provider_code"], value["parameter"],
                 value["provider_status"], value["replacement_model"],
             )
             if not (diagnostic.provider_status or diagnostic.replacement_model):
-                # Would serialize as v1: two spellings of one record are refused.
                 raise ValueError("provider diagnostic v2 must carry a new field")
             return diagnostic
-        raise ValueError("provider diagnostic schema is invalid")
+        raise ValueError("provider diagnostic fields or schema are invalid")
 
     @classmethod
     def from_exception(cls, error: BaseException) -> ProviderFailureDiagnostic | None:
+        if type(error) is GeminiResponseFailure:
+            return cls(None, error.reason)
         from google.genai.errors import APIError
 
         status = getattr(error, "status_code", None)
         if type(status) is not int:
             status = getattr(getattr(error, "response", None), "status_code", None)
-        if type(status) is not int:
-            if isinstance(error, APIError):
-                status = error.code
+        if type(status) is not int and isinstance(error, APIError):
+            status = error.code
         if type(status) is not int or not 400 <= status <= 599:
             return None
         body = getattr(error, "body", None)
@@ -154,8 +195,6 @@ class ProviderFailureDiagnostic:
         code = body.get("code", getattr(error, "code", ""))
         parameter = body.get("param", getattr(error, "param", ""))
         provider_status = replacement_model = ""
-        # Only Google's SDK error carries an RPC status and a message whose
-        # replacement hint we know how to validate.
         if isinstance(error, APIError):
             raw_status = getattr(error, "status", None)
             if type(raw_status) is str and raw_status in _PROVIDER_STATUSES:
@@ -171,6 +210,8 @@ class ProviderFailureDiagnostic:
         )
 
     def summary(self) -> str:
+        if self.http_status is None:
+            return f"Gemini generation stopped (reason={self.provider_code})"
         message = {
             400: "Provider rejected the request",
             401: "Provider rejected the credentials",
@@ -240,4 +281,3 @@ class ProviderResponseEndedError(RuntimeError):
         if self.kind == "finish_reason":
             return f"Provider ended the response early{suffix}"
         return "Provider returned no content"
-

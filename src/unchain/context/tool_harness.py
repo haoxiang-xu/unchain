@@ -10,6 +10,7 @@ from ..interaction.effects import build_tool_approval_suspend_request
 from ..kernel.delta import HarnessDelta
 from ..kernel.harness import BaseRuntimeHarness, HarnessContext, RuntimePhase
 from ..kernel.types import ToolCall
+from ..journal.models import _thaw_json
 from ..tools.common import (
     append_executed_call_id,
     copy_messages,
@@ -17,6 +18,7 @@ from ..tools.common import (
 )
 from ..tools.messages import get_provider_message_builder
 from ..tools.types import ToolBatchState
+from .factory import ContextExecutionBundleError
 
 if TYPE_CHECKING:
     from .runtime import ContextRuntime
@@ -48,6 +50,62 @@ class ContextToolAuthorityHarness(BaseRuntimeHarness):
         ):
             return None
 
+        toolkit = context.event.get("toolkit")
+        tool_obj = toolkit.get(tool_call.name) if hasattr(toolkit, "get") else None
+        timeline_merge_policy = (
+            getattr(tool_obj, "timeline_merge_policy", None) or "approved"
+        )
+        timeline_merge_policy_event = {
+            "timeline_merge_policy": timeline_merge_policy
+        }
+        bundle_for_context = getattr(self.runtime, "_bundle_for_context", None)
+        bundle = None
+        if (
+            callable(bundle_for_context)
+            and isinstance(tool_call.call_id, str)
+            and tool_call.call_id.strip()
+        ):
+            try:
+                bundle = bundle_for_context(context)
+            except ContextExecutionBundleError:
+                # Fresh calls reach this harness before the runtime binds its
+                # durable bundle. They have no prior intent to recover.
+                bundle = None
+        if bundle is not None and hasattr(bundle, "tool_boundary"):
+            existing = bundle.tool_boundary.sink.recover_tool_side_effect(
+                tool_call.call_id
+            )
+            intent = existing.intent_event
+            if (
+                intent is not None
+                and intent.event_type == "tool_call"
+                and intent.payload.get("call_id") == tool_call.call_id
+                and intent.payload.get("tool_name") == tool_call.name
+                # Journal JSON arrays are immutable tuples; compare their
+                # public JSON shape without changing the original intent bytes.
+                and _thaw_json(intent.payload.get("arguments", {}))
+                == tool_call.arguments
+            ):
+                if "timeline_merge_policy" in intent.payload:
+                    declared = intent.payload["timeline_merge_policy"]
+                    timeline_merge_policy_event = {
+                        "timeline_merge_policy": (
+                            declared
+                            if isinstance(declared, str)
+                            and declared in {
+                                "never",
+                                "no_feedback",
+                                "approved",
+                                "always",
+                            }
+                            else "never"
+                        )
+                    }
+                else:
+                    # Preserve legacy omission exactly. Adding the current tool
+                    # declaration here would change the idempotent event payload.
+                    timeline_merge_policy_event = {}
+
         emit_loop_event(
             context.event.get("loop"),
             context.event.get("callback"),
@@ -58,6 +116,7 @@ class ContextToolAuthorityHarness(BaseRuntimeHarness):
             call_id=tool_call.call_id,
             arguments=copy.deepcopy(tool_call.arguments),
             source_provider=str(context.state.provider_state.provider or ""),
+            **timeline_merge_policy_event,
         )
         permit = self.runtime.prepare_tool_execution(context)
         if type(permit) is DurableToolApprovalPending:
@@ -94,8 +153,6 @@ class ContextToolAuthorityHarness(BaseRuntimeHarness):
         if callable(project_result):
             visible_result = project_result(context, receipt)
         else:  # pragma: no cover - compatibility for isolated harness fakes
-            from ..journal.models import _thaw_json
-
             visible_result = _thaw_json(receipt.visible_result)
         if not isinstance(visible_result, dict):
             visible_result = {"result": visible_result}

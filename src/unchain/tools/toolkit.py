@@ -11,6 +11,9 @@ from .models import (
     ToolPromptSpec,
 )
 from .tool import Tool
+from .timeline_policy import DEFAULT_TIMELINE_MERGE_POLICY, validate_timeline_merge_policy
+
+_TIMELINE_MERGE_POLICY_UNSET = object()
 
 
 class Toolkit:
@@ -77,6 +80,7 @@ class Toolkit:
         always_load: bool | None = None,
         defer_by_default: bool | None = None,
         search_hint: str | None = None,
+        timeline_merge_policy: Any = _TIMELINE_MERGE_POLICY_UNSET,
     ) -> Tool:
         if isinstance(tool_obj, Tool):
             if name is not None:
@@ -107,6 +111,10 @@ class Toolkit:
                 tool_obj.defer_by_default = bool(defer_by_default)
             if search_hint is not None:
                 tool_obj.search_hint = str(search_hint or "")
+            if timeline_merge_policy is not _TIMELINE_MERGE_POLICY_UNSET:
+                tool_obj.timeline_merge_policy = validate_timeline_merge_policy(
+                    timeline_merge_policy
+                )
             self.tools[tool_obj.name] = tool_obj
             return tool_obj
 
@@ -127,6 +135,11 @@ class Toolkit:
                 always_load=bool(always_load),
                 defer_by_default=bool(defer_by_default),
                 search_hint=str(search_hint or ""),
+                timeline_merge_policy=(
+                    DEFAULT_TIMELINE_MERGE_POLICY
+                    if timeline_merge_policy is _TIMELINE_MERGE_POLICY_UNSET
+                    else timeline_merge_policy
+                ),
             )
             self.tools[wrapped.name] = wrapped
             return wrapped
@@ -159,6 +172,7 @@ class Toolkit:
         always_load: bool = False,
         defer_by_default: bool = False,
         search_hint: str = "",
+        timeline_merge_policy: str = DEFAULT_TIMELINE_MERGE_POLICY,
     ):
         if func is not None:
             return self.register(
@@ -176,6 +190,7 @@ class Toolkit:
                 always_load=always_load,
                 defer_by_default=defer_by_default,
                 search_hint=search_hint,
+                timeline_merge_policy=timeline_merge_policy,
             )
 
         def decorator(inner: Callable[..., Any]) -> Tool:
@@ -194,6 +209,7 @@ class Toolkit:
                 always_load=always_load,
                 defer_by_default=defer_by_default,
                 search_hint=search_hint,
+                timeline_merge_policy=timeline_merge_policy,
             )
 
         return decorator

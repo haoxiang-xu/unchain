@@ -179,6 +179,8 @@ def _runtime_event_is_ephemeral(event: Mapping[str, Any]) -> bool:
     raw_type = event.get("type")
     if not isinstance(raw_type, str):
         return False
+    if raw_type == "provider_retry":
+        return True
     event_type = re.sub(r"[^a-z0-9]+", "_", raw_type.casefold()).strip("_")
     if not event_type:
         return False

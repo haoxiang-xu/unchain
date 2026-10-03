@@ -29,6 +29,7 @@ from .durable_turn_runtime import (
 from .ollama import OllamaModelIO
 from .openai import OpenAIModelIO
 from .wire_envelope import ProviderWireEnvelope, ProviderWireRoute
+from .failure_diagnostic import GeminiResponseFailure
 
 
 def _explicit_status_code(error: BaseException) -> int | None:
@@ -39,11 +40,12 @@ def _explicit_status_code(error: BaseException) -> int | None:
     status_code = getattr(response, "status_code", None)
     if type(status_code) is int:
         return status_code
-    # google-genai APIError uses code for HTTP status, even without a response.
+    # A Gemini SSE error code is not evidence of a rejected HTTP request.
+    # Without the enclosing response, replay could duplicate a processed send.
     from google.genai.errors import APIError
 
-    if isinstance(error, APIError) and type(error.code) is int:
-        return error.code
+    if isinstance(error, APIError):
+        return None
     return None
 
 
@@ -56,7 +58,22 @@ _TRANSIENT_RETRY_SAFE_STATUSES = frozenset({429, 502, 503, 529})
 def _classified_failure_kind(
     error: BaseException,
 ) -> ExactProviderRouteFailureKind | None:
+    if type(error) is GeminiResponseFailure:
+        return ExactProviderRouteFailureKind.TERMINAL
     status_code = _explicit_status_code(error)
+    if status_code == 503:
+        import httpx
+        from google.genai.errors import APIError
+
+        response = getattr(error, "response", None)
+        if (
+            isinstance(error, APIError)
+            and error.code == 503
+            and type(response) is httpx.Response
+            and response.status_code == 503
+        ):
+            return ExactProviderRouteFailureKind.TRANSIENT_RETRY_SAFE
+        return None
     if status_code in _TRANSIENT_RETRY_SAFE_STATUSES:
         return ExactProviderRouteFailureKind.TRANSIENT_RETRY_SAFE
     if (
