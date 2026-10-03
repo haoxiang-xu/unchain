@@ -10,6 +10,7 @@ from ..interaction.effects import build_tool_approval_suspend_request
 from ..kernel.delta import HarnessDelta
 from ..kernel.harness import BaseRuntimeHarness, HarnessContext, RuntimePhase
 from ..kernel.types import ToolCall
+from ..journal.models import _thaw_json
 from ..tools.common import (
     append_executed_call_id,
     copy_messages,
@@ -80,7 +81,10 @@ class ContextToolAuthorityHarness(BaseRuntimeHarness):
                 and intent.event_type == "tool_call"
                 and intent.payload.get("call_id") == tool_call.call_id
                 and intent.payload.get("tool_name") == tool_call.name
-                and intent.payload.get("arguments", {}) == tool_call.arguments
+                # Journal JSON arrays are immutable tuples; compare their
+                # public JSON shape without changing the original intent bytes.
+                and _thaw_json(intent.payload.get("arguments", {}))
+                == tool_call.arguments
             ):
                 if "timeline_merge_policy" in intent.payload:
                     declared = intent.payload["timeline_merge_policy"]
@@ -149,8 +153,6 @@ class ContextToolAuthorityHarness(BaseRuntimeHarness):
         if callable(project_result):
             visible_result = project_result(context, receipt)
         else:  # pragma: no cover - compatibility for isolated harness fakes
-            from ..journal.models import _thaw_json
-
             visible_result = _thaw_json(receipt.visible_result)
         if not isinstance(visible_result, dict):
             visible_result = {"result": visible_result}

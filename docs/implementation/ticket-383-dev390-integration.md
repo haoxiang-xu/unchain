@@ -1,6 +1,6 @@
 # Integrate current dev / #390 into #383
 
-Status: MERGE CANDIDATE CHECKPOINT, validation pending. 2026-10-03 UTC.
+Status: REPLAY CORRECTION CHECKPOINT, final artifact qualification pending. 2026-10-03 UTC.
 
 ## Authorized scope
 
@@ -47,3 +47,24 @@ The aggregate semantic risk is CRITICAL. Journal ephemeral classification reache
 Indexing succeeded with a 512 MiB DB pool, one parser worker and FTS disabled after the default analyzer exited early. Static Python dynamic/callable-value edges and process sampling are incomplete; the graph does not prove absent runtime paths safe.
 
 Final artifact identity, test results, independent review, remote restore proof and exact-head CI remain PENDING. Prior branch acceptance is historical, not acceptance of this merged pair. Live/frozen/platform-specific acceptance is NOT_RUN until demonstrated.
+
+
+## Independent review correction: recursively frozen array arguments
+
+Independent Sol review found an inherited #383 compatibility defect, not a #390 regression. `ContextToolAuthorityHarness` compared frozen journal arguments directly with live JSON arguments. Journal arrays are recursively stored as tuples, so a logically identical array call missed original policy recovery. A toolkit policy change then caused a journal operation conflict on resume.
+
+RED on merge checkpoint `4a0add1936e0369e16d5286289b280456eb913ca`: the original omission and all four declared policies were tested against scalar, array, nested-array and object-with-array arguments. All 15 array-bearing cases failed; the five scalar controls passed. Resumed arguments exactly matched the original live call, so these failures were not changed execution subjects.
+
+The bounded correction applies the existing journal `_thaw_json` helper only to the stored arguments used for presentation-policy comparison. Its existing local import was moved to module scope; the journal models module imports only standard-library dependencies and creates no context/tool/provider import cycle. No durable intent, interaction request, approval subject, schema, digest, lease or no-resend gate is modified.
+
+GREEN: 73 focused tests pass. The 20-state successful matrix checks one invocation, unchanged original journal record and unchanged full durable request/digest reloaded from the interaction store after resume. Five changed-array subjects remain rejected before invocation. Existing unknown-call, wrong-runtime, different-context/attempt, forged receipt and one-shot permit negatives remain intact and pass.
+
+Pre-edit upstream impact of `build_delta` reports UNKNOWN/lower-bound because five dynamic receiver call sites are unresolved; direct dispatch is manually traced through `BaseRuntimeHarness.__call__`. Test helper impact is HIGH (18 direct callers) and MEDIUM (11 direct callers); default scalar behavior is preserved. Complete staged graph detection succeeded for the correction: 3 files, 13 symbols and 0 sampled execution flows; risk LOW. The full structured result contains no error or partial flag.
+
+### Historical artifact and infrastructure evidence
+
+The superseded merge-only wheel was built once from clean `4a0add1` source: SHA-256 `d1735fac3affe1a00e402e78c85d110f7d939193c2ea014ebe747c428e248e54`. Installed focused qualification passed 198 tests. Old full source/installed runs reported 4,215/4,213 passes with one/three setup failures; those aggregate runs are not recorded as PASS. All three distinct setup failures subsequently pass unchanged: a clean `/dev/shm` pytest temporary root avoids sandbox-injected ancestor `.git` markers, and root-anchored archive extraction preserves nested eval fixture `src` directories while keeping the runtime package imported from the actual wheel. Missing SOCKS support during Gemini SDK initialization was resolved by installing HTTPX's optional `socksio`; all six real-SDK mock 503 tests passed thereafter. No live provider request was made.
+
+The corrected source must be published immutably, then built once into a new wheel and used by both runtime and host consumers. Final corrected artifact identity, full source/installed results, independent re-review and exact-head CI remain PENDING. Live-provider, real profile, macOS/Electron and owner acceptance remain NOT_RUN unless separately demonstrated.
+
+The 12 excluded live-provider cases are the streamed-text, structured-output, core-read-roundtrip and repeated-long-context-cache scenarios for Gemini, OpenAI and Anthropic. They remain NOT_RUN to avoid real network/provider effects.
