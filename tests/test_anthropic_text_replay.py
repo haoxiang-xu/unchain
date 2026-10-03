@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import copy
+import importlib
 import json
 
 import anthropic
-import httpx
 import pytest
 from anthropic.types import (
     CitationCharLocation,
@@ -25,6 +25,15 @@ from unchain.providers.message_contract import ProviderMessageContractError
 from unchain.providers.model_turn_runtime import build_model_turn_request
 from unchain.runtime import build_runtime_loop
 from unchain.tools import Toolkit
+
+
+# Use the installed SDK's transport, even when both httpx packages are present.
+httpx = importlib.import_module(next(
+    base.__module__.split(".")[0]
+    for base in anthropic.DefaultHttpxClient.__mro__
+    if base.__name__ == "Client"
+    and base.__module__.split(".")[0] in {"httpx", "httpx2"}
+))
 
 
 def _anthropic_sse(events: list[dict]) -> bytes:
@@ -48,7 +57,7 @@ def _real_sdk_client_factory(*, responses: list[bytes], observed_requests: list[
     def factory(**kwargs):
         return anthropic.Anthropic(
             **kwargs,
-            http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+            http_client=anthropic.DefaultHttpxClient(transport=httpx.MockTransport(handler)),
         )
 
     return factory
@@ -453,6 +462,39 @@ def test_sdk_text_blocks_survive_cold_checkpoint_without_duplicate_tool(tmp_path
     assert replayed[0]["signature"] == "signed-data"
     assert "signed-data" not in json.dumps(completed.messages)
     assert "execution_checkpoint" not in resumed_memory.store.load("sdk-text-cold")
+
+
+@pytest.mark.parametrize("toolset_name", [None, "unsupported-toolset"])
+def test_sdk_toolset_default_is_normalized_without_admitting_named_toolsets(toolset_name):
+    blocks = _tool_blocks(call_id="toolu_1", texts=[TextBlock(type="text", text="working")])
+    blocks[-1]["toolset_name"] = toolset_name
+    requests = []
+    model_io = AnthropicModelIO(
+        model="claude-sonnet-5", api_key="fixture",
+        client_factory=_client_factory([blocks, [TextBlock(type="text", text="done")]], requests),
+    )
+    effects = []
+    toolkit = Toolkit()
+
+    def demo_tool(x: int):
+        effects.append(x)
+        return x + 1
+
+    toolkit.register(demo_tool, name="demo_tool")
+    loop = build_runtime_loop(model_io=model_io)
+    args = dict(provider="anthropic", model="claude-sonnet-5", toolkit=toolkit, max_iterations=3)
+    if toolset_name is None:
+        result = loop.run([{"role": "user", "content": "call tool"}], **args)
+        assert result.status == "completed"
+        replayed = requests[1]["messages"][-2]["content"]
+        assert replayed[0]["signature"] == "signed-data"
+        assert "toolset_name" not in replayed[-1]
+        assert len(requests) == 2
+    else:
+        with pytest.raises(ProviderMessageContractError, match="unknown fields: toolset_name"):
+            loop.run([{"role": "user", "content": "call tool"}], **args)
+        assert len(requests) == 1
+    assert effects == [2]
 
 
 def test_unknown_text_extension_is_rejected_before_provider_continuation():

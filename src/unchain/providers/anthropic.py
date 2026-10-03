@@ -50,6 +50,14 @@ class AnthropicModelIO(_NativeModelIOBase):
             except ImportError:
                 raise ImportError("anthropic package is required for anthropic provider — pip install anthropic")
         self._client_factory = client_factory
+        try:
+            from anthropic import Timeout as AnthropicTimeout
+        except ImportError:
+            # Injected clients can operate without the optional SDK installed.
+            pass
+        else:
+            # Match the SDK's HTTP library while retaining subclass timeouts.
+            self._ANTHROPIC_TIMEOUT = AnthropicTimeout(**self._ANTHROPIC_TIMEOUT.as_dict())
 
     _ANTHROPIC_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0)
 
@@ -396,15 +404,13 @@ class AnthropicModelIO(_NativeModelIOBase):
             # Anthropic Messages input field, whether null or populated.
             if block.get("type") == "text":
                 block.pop("parsed_output", None)
-            # The SDK materializes an omitted caller as None. Anthropic-compatible
-            # endpoints (Kimi, DeepSeek, ...) omit it, so keep capture aligned
-            # with canonical tool calls without discarding real metadata.
-            if (
-                block.get("type") == "tool_use"
-                and "caller" in block
-                and block["caller"] is None
-            ):
-                block.pop("caller")
+            # SDK versions materialize absent tool metadata as None. Normalize
+            # only these known defaults before semantic/replay fan-out; real
+            # metadata must still pass the closed Messages input contract.
+            if block.get("type") == "tool_use":
+                for field in ("caller", "toolset_name"):
+                    if field in block and block[field] is None:
+                        block.pop(field)
 
         if replay_profile is not None:
             for block in raw_blocks:

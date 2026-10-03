@@ -1,13 +1,23 @@
 from __future__ import annotations
 
+import importlib
 import json
 
 import anthropic
-import httpx
+import pytest
 
-from unchain.providers import AnthropicModelIO
+from unchain.providers import AnthropicModelIO, HyperspaceModelIO
 from unchain.runtime import build_runtime_loop
 from unchain.tools import Toolkit
+
+
+# Use the installed SDK's transport, even when both httpx packages are present.
+httpx = importlib.import_module(next(
+    base.__module__.split(".")[0]
+    for base in anthropic.DefaultHttpxClient.__mro__
+    if base.__name__ == "Client"
+    and base.__module__.split(".")[0] in {"httpx", "httpx2"}
+))
 
 
 MODEL = "claude-sonnet-5"
@@ -63,7 +73,13 @@ def _stream_body(*, content: list[dict], stop_reason: str) -> str:
     )
 
 
-def test_real_anthropic_sdk_parsed_text_replays_parallel_tools_without_wire_pollution():
+@pytest.mark.parametrize("model_io_cls,read_timeout", [
+    (AnthropicModelIO, 120.0),
+    (HyperspaceModelIO, 600.0),
+])
+def test_real_anthropic_sdk_parsed_text_replays_parallel_tools_without_wire_pollution(
+    model_io_cls, read_timeout,
+):
     responses = [
         _stream_body(
             content=[
@@ -100,10 +116,14 @@ def test_real_anthropic_sdk_parsed_text_replays_parallel_tools_without_wire_poll
         )
 
     def client_factory(**kwargs):
+        assert isinstance(kwargs["timeout"], anthropic.Timeout)
+        assert kwargs["timeout"].as_dict() == {
+            "connect": 10.0, "read": read_timeout, "write": 30.0, "pool": 10.0,
+        }
         return anthropic.Anthropic(
             **kwargs,
             base_url="https://example.test",
-            http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+            http_client=anthropic.DefaultHttpxClient(transport=httpx.MockTransport(respond)),
         )
 
     effects: list[int] = []
@@ -114,13 +134,13 @@ def test_real_anthropic_sdk_parsed_text_replays_parallel_tools_without_wire_poll
 
     toolkit = Toolkit()
     toolkit.register(add_one, name="add_one")
-    result = build_runtime_loop(model_io=AnthropicModelIO(
+    result = build_runtime_loop(model_io=model_io_cls(
         model=MODEL,
         api_key="fixture",
         client_factory=client_factory,
     )).run(
         [{"role": "user", "content": "Call both tools."}],
-        provider="anthropic",
+        provider=model_io_cls.provider,
         model=MODEL,
         toolkit=toolkit,
         max_iterations=3,
