@@ -1,6 +1,6 @@
 # Integrate current dev / #390 into #383
 
-Status: REPLAY CORRECTION CHECKPOINT, final artifact qualification pending. 2026-10-03 UTC.
+Status: RUNTIME QUALIFIED; host-pair gates and exact-head CI tracked separately. 2026-10-03 UTC.
 
 ## Authorized scope
 
@@ -27,7 +27,7 @@ BC-390-I02: historical diagnostics and leases across persisted state to runtime.
 
 SEQ-390-I01: first/second message, first/second interaction, retry/durable resume/cold restart and normal/graph/subagent paths as applicable to inherited #383/#384 plans. Preserve approval gating, no-resend and Stop behavior. AC-390-I03: combined artifact-pair regression suites and focused policy/interrupted chain tests. Inapplicable cells require a reason; unrun cells stay NOT_RUN.
 
-## Pending evidence
+## Integration evidence
 
 ### Three-way conflict and semantic map
 
@@ -36,7 +36,7 @@ SEQ-390-I01: first/second message, first/second interaction, retry/durable resum
 - Shared file overlap is `events/normalizer.py`: #383 tool/interaction presentation policy coexists with #390 closed Gemini retry-ordinal projection. Presentation metadata remains outside the durable interaction request and provider schema.
 - Context replay semantic overlap: #383 recovers historic tool policy or exact legacy omission; #390 verifies the current native batch against durable provider result and wire snapshot. Verification compares call identity/name/arguments and preserves existing receipt/hash/no-resend gates.
 - Historical diagnostics-v2 and leases-v4 compatibility is imported byte-for-byte from merged dev, including exact key sets, HTTP/null and lease status distinctions. Unknown outcomes do not authorize resend.
-- Relative to dev, the production/test diff is exactly the existing #383 policy work, plus this integration record. macOS-only unpublished `fadde9f3` is unavailable and is not reconstructed.
+- Relative to dev, the production/test diff is the existing #383 policy work plus the bounded replay correction recorded below. macOS-only unpublished `fadde9f3` is unavailable and is not reconstructed; merged dev already contains its specific 13-code closed legacy RPC diagnostic behavior.
 
 ### Graph preflight
 
@@ -46,7 +46,7 @@ The aggregate semantic risk is CRITICAL. Journal ephemeral classification reache
 
 Indexing succeeded with a 512 MiB DB pool, one parser worker and FTS disabled after the default analyzer exited early. Static Python dynamic/callable-value edges and process sampling are incomplete; the graph does not prove absent runtime paths safe.
 
-Final artifact identity, test results, independent review, remote restore proof and exact-head CI remain PENDING. Prior branch acceptance is historical, not acceptance of this merged pair. Live/frozen/platform-specific acceptance is NOT_RUN until demonstrated.
+Final corrected runtime artifact identity, test results and independent re-review are recorded below. Both remote checkpoints were restored and verified independently. Host-pair and exact-head CI evidence is tracked by the paired PuPu report. Live/frozen/platform-specific acceptance is NOT_RUN until demonstrated.
 
 
 ## Independent review correction: recursively frozen array arguments
@@ -65,6 +65,33 @@ Pre-edit upstream impact of `build_delta` reports UNKNOWN/lower-bound because fi
 
 The superseded merge-only wheel was built once from clean `4a0add1` source: SHA-256 `d1735fac3affe1a00e402e78c85d110f7d939193c2ea014ebe747c428e248e54`. Installed focused qualification passed 198 tests. Old full source/installed runs reported 4,215/4,213 passes with one/three setup failures; those aggregate runs are not recorded as PASS. All three distinct setup failures subsequently pass unchanged: a clean `/dev/shm` pytest temporary root avoids sandbox-injected ancestor `.git` markers, and root-anchored archive extraction preserves nested eval fixture `src` directories while keeping the runtime package imported from the actual wheel. Missing SOCKS support during Gemini SDK initialization was resolved by installing HTTPX's optional `socksio`; all six real-SDK mock 503 tests passed thereafter. No live provider request was made.
 
-The corrected source must be published immutably, then built once into a new wheel and used by both runtime and host consumers. Final corrected artifact identity, full source/installed results, independent re-review and exact-head CI remain PENDING. Live-provider, real profile, macOS/Electron and owner acceptance remain NOT_RUN unless separately demonstrated.
+The corrected immutable source and once-built final wheel are qualified below. Host consumers must reuse those exact bytes and pin that source revision. Live-provider, actual owner-profile restart, actual macOS database recovery and owner acceptance remain NOT_RUN; Electron and host-pair gates are recorded separately, never inferred from this runtime suite.
 
 The 12 excluded live-provider cases are the streamed-text, structured-output, core-read-roundtrip and repeated-long-context-cache scenarios for Gemini, OpenAI and Anthropic. They remain NOT_RUN to avoid real network/provider effects.
+
+
+## Final immutable runtime qualification
+
+- Confirmed dev parent: `358b96d723daa0d2882158985c8245c7f8c7fb23`.
+- Three-way merge checkpoint: `4a0add1936e0369e16d5286289b280456eb913ca`, parents `0dcbf9c92a58f40de7c39d84fe35a40ff91fa8fc` and confirmed dev; tree `cc13548266726f53502075196fafaf9797ff4183`.
+- Final source checkpoint and required #383 host pin: `a7fa15d685b1130bf5678c1e493a51d2551185cf`, parent merge checkpoint; tree `e9fcc714c0756a8db67b4b9811b2829161e3bc30`. Publication and independent bare remote restoration verified both trees/parents. Subsequent evidence-only commits do not change this artifact provenance or host pin. #384 continues to use clean dev `358b96d` without #383 policy work.
+- Artifact: `unchain-0.2.0-py3-none-any.whl`, built once from a clean git archive of final source. Wheel SHA-256 `a88028bbb7d286d4792e49b5945f80e33d71203579298ddb053190cca1aced62`; source archive SHA-256 `3366f0216d54a10944a2dad385f1f130ca9ef479f9280a9551a8cf577871e992`.
+- Imported manifest digest: `sha256:b80cde70e35f93c21ed069990f26817d353e4fd1c9d3ff109cfda933f5295672`. Capability admission still depends on strict imported protocol shape/features/digest, not the Git pin.
+- Byte verification: all 346 package entries match clean immutable source and installed wheel; all 351 immutable distribution entries match installation. Pip's rewritten `RECORD` is excluded from byte equality. The same unchanged wheel is supplied to host consumers.
+
+### Terminal test evidence
+
+- Corrected focused policy/approval/permit regression: 73 passed, including 20 original-policy/omission and argument-shape cases plus five changed-array rejection cases.
+- Full source runtime suite: 4,239 passed, 3 skipped, 12 live-provider cases deselected, 5 existing expected failures; zero failures, 117.16 seconds.
+- Full installed-wheel runtime suite: identical counts, zero failures, 126.70 seconds. A separate immutable test mirror retains nested eval fixtures and points only its top-level `src` to the actual installed wheel, including cold subprocess imports.
+- Independent Sol final review: 237 critical source tests and 355 critical installed-wheel tests pass; 346 packaged files match immutable source/install; all five independently reproduced nested-array policy states execute once. No other source defect found in the combined #390/#383 paths.
+- Closed historical v1 RPC smoke: all 13 merged-dev codes round-trip as exact four-key v1 diagnostics. `UNAVAILABLE`/HTTP 503 survives a real temporary SQLite reopen with exact canonical lease bytes and SHA-256 `60a9138df7b0006adcb001b69c60de24716be28b32b572901002420a5e6adcb8`. Seven unknown/hybrid diagnostic and three crossed lease cases are rejected; a terminal historical lease cannot authorize resend. The existing diagnostics-v2/leases-v4 matrices remain part of both full suites. This synthetic fixture is not the inaccessible owner's macOS database record.
+- Clean-process import, compileall and whitespace checks pass. The final wheel digest is unchanged after every qualification run.
+
+### Explicit remaining coverage limits
+
+The three skips are Windows named-mutex acceptance, Windows destination-handle replacement and the opt-in live MCP stdio smoke. The five inherited strict XFAILs are four workspace virtual-path guard cases and the long-term recall/current-user ordering case. They are retained, not relabeled as passes. Twelve credentialed provider scenarios are deselected as listed above. Two SDK warnings arise from synthetic finish-reason negatives.
+
+The final runtime source and installed artifact are qualified. Host-pair/frontend/Electron/CI acceptance, frozen desktop packaging and deployed/real-profile behavior require their own evidence. No profile restart, real database modification, live paid provider call, deployment, force push or merge of PR47 into dev/main was performed.
+
+Independent review deliverable: [scoped Sol runtime review](ticket-383-dev390-independent-review.md). Structured identities and terminal evidence: [runtime qualification record](ticket-383-dev390-runtime-evidence.json). Standalone runtime CI is NOT_RUN: `.github/workflows/ci.yml` accepts pull requests only with base `dev`/`main` and pushes only to `dev`/`main`, with no `workflow_dispatch`. PR47 still targets `codex/ticket-386-gemini-5xx-catalog`; GitHub returned zero runs for both source `a7fa15d` and merge `4a0add1`. The base retarget was outside the authorized scope and is deferred; no retry or base mutation is performed. The old stacked PR view also includes already-merged #390; source review compares current dev to the candidate. Host QA independently tests pinned `a7fa15d`, but it does not substitute for standalone runtime CI proof.
