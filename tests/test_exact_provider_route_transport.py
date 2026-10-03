@@ -736,6 +736,31 @@ def test_google_sdk_http_failures_have_exact_retry_classification(status, expect
     assert (kind.value if kind else None) == expected
 
 
+def test_google_503_requires_the_actual_http_response_to_be_rejected():
+    import httpx
+    from google.genai.errors import APIError
+    from unchain.providers.durable_turn_runtime import ExactProviderRouteFailureKind
+    from unchain.providers.exact_route_transport import _classified_failure_kind
+
+    body = {"error": {"code": 503, "message": "provider content is private"}}
+    request = httpx.Request("POST", "https://example.test/stream")
+    rejected = APIError(503, body, httpx.Response(503, request=request))
+    streamed_error = APIError(503, body, httpx.Response(200, request=request))
+    missing_response = APIError(503, body)
+    mismatched_code = APIError(500, body, httpx.Response(503, request=request))
+    spoofed_status = RuntimeError("not an SDK response")
+    spoofed_status.status_code = 503
+
+    assert (
+        _classified_failure_kind(rejected)
+        is ExactProviderRouteFailureKind.TRANSIENT_RETRY_SAFE
+    )
+    assert _classified_failure_kind(streamed_error) is None
+    assert _classified_failure_kind(missing_response) is None
+    assert _classified_failure_kind(mismatched_code) is None
+    assert _classified_failure_kind(spoofed_status) is None
+
+
 def test_arbitrary_numeric_error_code_is_not_http_evidence():
     from unchain.providers.exact_route_transport import _classified_failure_kind
 

@@ -391,6 +391,11 @@ class AnthropicModelIO(_NativeModelIOBase):
             )
 
         for block in raw_blocks:
+            # ParsedTextBlock exposes parsed_output as SDK-only response state.
+            # Normalize it before semantic/replay fan-out: it is never an
+            # Anthropic Messages input field, whether null or populated.
+            if block.get("type") == "text":
+                block.pop("parsed_output", None)
             # The SDK materializes an omitted caller as None. Anthropic-compatible
             # endpoints (Kimi, DeepSeek, ...) omit it, so keep capture aligned
             # with canonical tool calls without discarding real metadata.

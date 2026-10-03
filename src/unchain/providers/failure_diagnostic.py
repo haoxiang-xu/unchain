@@ -1,4 +1,4 @@
-"""Closed, non-content-bearing diagnostics for provider HTTP failures."""
+"""Closed, non-content-bearing diagnostics for HTTP and response failures."""
 
 from __future__ import annotations
 
@@ -14,7 +14,28 @@ _CODES = frozenset({
     "unsupported_parameter", "unsupported_value", "missing_required_parameter",
     "unknown_parameter", "context_length_exceeded", "content_policy_violation",
     "insufficient_quota", "rate_limit_exceeded", "billing_hard_limit_reached",
+    "INVALID_ARGUMENT", "NOT_FOUND", "PERMISSION_DENIED", "UNAUTHENTICATED",
+    "RESOURCE_EXHAUSTED", "FAILED_PRECONDITION", "OUT_OF_RANGE", "UNAVAILABLE",
+    "INTERNAL", "DEADLINE_EXCEEDED", "ABORTED", "ALREADY_EXISTS", "CANCELLED",
 })
+_RESPONSE_CODES = frozenset({
+    "SAFETY", "RECITATION", "LANGUAGE", "OTHER", "BLOCKLIST",
+    "PROHIBITED_CONTENT", "SPII", "MALFORMED_FUNCTION_CALL", "IMAGE_SAFETY",
+    "IMAGE_PROHIBITED_CONTENT", "IMAGE_OTHER", "NO_IMAGE", "IMAGE_RECITATION",
+    "UNEXPECTED_TOOL_CALL", "TOO_MANY_TOOL_CALLS", "MISSING_THOUGHT_SIGNATURE",
+    "MALFORMED_RESPONSE", "ESCALATION", "PUP_LIMITED_DISABLED",
+    "PROMPT_BLOCKED", "EMPTY_RESPONSE",
+})
+
+
+class GeminiResponseFailure(RuntimeError):
+    """An explicit provider outcome, distinct from an interrupted stream."""
+
+    def __init__(self, reason: str) -> None:
+        if type(reason) is not str or reason not in _RESPONSE_CODES:
+            raise ValueError("Unknown Gemini response failure reason")
+        self.reason = reason
+        super().__init__(f"Gemini response failed: {reason}")
 _PARAMETER_PARTS = frozenset({
     "model", "input", "messages", "content", "type", "role", "text",
     "tools", "function", "name", "parameters", "properties", "required",
@@ -42,12 +63,22 @@ def _safe_parameter(value: object) -> str:
 @dataclass(frozen=True, slots=True)
 class ProviderFailureDiagnostic:
     SCHEMA: ClassVar[str] = "unchain.provider_failure_diagnostic.v1"
+    RESPONSE_SCHEMA: ClassVar[str] = "unchain.provider_failure_diagnostic.v2"
 
-    http_status: int
+    http_status: int | None
     provider_code: str = ""
     parameter: str = ""
 
     def __post_init__(self) -> None:
+        if self.http_status is None:
+            if (
+                type(self.provider_code) is not str
+                or self.provider_code not in _RESPONSE_CODES
+                or type(self.parameter) is not str
+                or self.parameter != ""
+            ):
+                raise ValueError("provider response diagnostic is invalid")
+            return
         if type(self.http_status) is not int or not 400 <= self.http_status <= 599:
             raise ValueError("provider diagnostic HTTP status is invalid")
         if type(self.provider_code) is not str or self.provider_code not in _CODES:
@@ -56,19 +87,22 @@ class ProviderFailureDiagnostic:
             raise ValueError("provider diagnostic parameter is invalid")
 
     def to_dict(self) -> dict:
-        return {"schema": self.SCHEMA, "http_status": self.http_status,
+        return {"schema": self.RESPONSE_SCHEMA if self.http_status is None else self.SCHEMA, "http_status": self.http_status,
                 "provider_code": self.provider_code, "parameter": self.parameter}
 
     @classmethod
     def from_dict(cls, value: dict) -> ProviderFailureDiagnostic:
         if type(value) is not dict or set(value) != {"schema", "http_status", "provider_code", "parameter"}:
             raise ValueError("provider diagnostic fields are invalid")
-        if value["schema"] != cls.SCHEMA:
+        expected = cls.RESPONSE_SCHEMA if value["http_status"] is None else cls.SCHEMA
+        if value["schema"] != expected:
             raise ValueError("provider diagnostic schema is invalid")
         return cls(value["http_status"], value["provider_code"], value["parameter"])
 
     @classmethod
     def from_exception(cls, error: BaseException) -> ProviderFailureDiagnostic | None:
+        if type(error) is GeminiResponseFailure:
+            return cls(None, error.reason)
         status = getattr(error, "status_code", None)
         if type(status) is not int:
             status = getattr(getattr(error, "response", None), "status_code", None)
@@ -84,10 +118,16 @@ class ProviderFailureDiagnostic:
         if type(body.get("error")) is dict:
             body = body["error"]
         code = body.get("code", getattr(error, "code", ""))
+        from google.genai.errors import APIError
+
+        if isinstance(error, APIError):
+            code = error.status
         parameter = body.get("param", getattr(error, "param", ""))
         return cls(status, code if type(code) is str and code in _CODES else "", _safe_parameter(parameter))
 
     def summary(self) -> str:
+        if self.http_status is None:
+            return f"Gemini generation stopped (reason={self.provider_code})"
         message = {
             400: "Provider rejected the request",
             401: "Provider rejected the credentials",

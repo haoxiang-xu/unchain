@@ -13,6 +13,30 @@ def _context():
     )
 
 
+def test_v4_normalizes_only_bounded_gemini_retry_progress():
+    raw = {
+        "type": "provider_retry", "run_id": "run-root", "iteration": 2,
+        "timestamp": 1790970507.0, "provider": "gemini", "http_status": 503,
+        "retry_ordinal": 1, "max_retries": 2, "delay_ms": 500,
+    }
+    [event] = normalize_raw_event(raw, context=_context())
+    assert event.type == "step.delta"
+    assert event.turn_id == "run-root:turn-2"
+    assert event.links.step_id == "model:run-root:turn-2:response"
+    assert event.payload == {
+        "step_id": "model:run-root:turn-2:response",
+        "step_type": "model_response", "kind": "provider_retry",
+        "provider": "gemini", "http_status": 503,
+        "retry_ordinal": 1, "max_retries": 2, "delay_ms": 500,
+    }
+    for mutation in (
+        {"response_body": "private-provider-content"},
+        {"provider": "openai"}, {"http_status": 200},
+        {"retry_ordinal": 3}, {"delay_ms": -1},
+    ):
+        assert normalize_raw_event({**raw, **mutation}, context=_context()) == []
+
+
 def test_v4_normalizes_tool_call_to_step_started():
     events = normalize_raw_event(
         {

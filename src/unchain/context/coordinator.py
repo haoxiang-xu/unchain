@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import Any, Callable
 
 from unchain.journal import (
+    ArtifactRef,
     BoundExecutionJournal,
     EventCursor,
     JournalEvent,
@@ -18,6 +19,16 @@ from unchain.journal import (
     journal_event_sha256,
     journal_event_to_semantic_event,
 )
+from unchain.journal.provider_result import (
+    ProviderTurnResultEventFields,
+    ProviderTurnResultEnvelope,
+    provider_turn_result_event_fields,
+)
+from unchain.journal.provider_wire import (
+    PROVIDER_WIRE_SNAPSHOT_EVENT_TYPE,
+    provider_wire_snapshot_event_fields,
+)
+from unchain.providers.wire_envelope import ProviderWireEnvelope
 
 from ..durability import mark_durable_persistence_failure
 from .checkpoints import (
@@ -33,8 +44,15 @@ from .compiler import (
     _CheckpointBinding,
     _CheckpointConsumption,
     _ContextCompilePass,
+    _CurrentProviderTurnProjection,
     _JournalMessageProjection,
+    _NATIVE_TOOL_PROVIDERS,
     _canonical_journal_message_projection,
+    _current_completed_tool_batch,
+    _interaction_is_child,
+    _pending_inputs,
+    _tool_call_ids,
+    _validated_projection_events,
     project_canonical_journal_messages,
 )
 from .models import ContextCompileRequest
@@ -86,6 +104,7 @@ _DURABLE_INTERNAL_EVENT_TYPES = frozenset(
         "provider.turn_result",
     }
 )
+ProviderTurnResultArtifactReader = Callable[..., bytes]
 
 
 class ContextCompileCoordinatorError(RuntimeError):
@@ -134,6 +153,7 @@ class _PreparedJournalView:
     journal_projection: _JournalMessageProjection
     events_by_cursor: Mapping[tuple[str, int], JournalEvent]
     input_receipt: JournalEvent
+    current_provider_turn: _CurrentProviderTurnProjection | None = None
 
 
 def _event_claim(raw: Mapping[str, Any]) -> tuple[str, int, str]:
@@ -345,11 +365,400 @@ def _validated_pending_task_inputs(
     return tuple(rebuilt), tuple(receipts)
 
 
+def _validate_semantic_tool_call_group(
+    *,
+    provider: str,
+    assistant_messages: Sequence[Mapping[str, Any]],
+    expected_calls: Sequence[tuple[str, str, Any]],
+) -> None:
+    """Require native semantic calls to match the durable canonical call group."""
+
+    observed: list[tuple[str, str, Any]] = []
+    for message in assistant_messages:
+        if provider in {"anthropic", "hyperspace"}:
+            blocks = message.get("content")
+            if not isinstance(blocks, Sequence) or isinstance(
+                blocks, (str, bytes, bytearray)
+            ):
+                continue
+            for block in blocks:
+                if not isinstance(block, Mapping) or block.get("type") != "tool_use":
+                    continue
+                call_id = str(block.get("id") or "").strip()
+                name = str(block.get("name") or "").strip()
+                arguments = block.get("input")
+                if not call_id or not name or not isinstance(arguments, Mapping):
+                    raise ContextCompileCoordinatorError(
+                        "provider result semantic tool call is invalid"
+                    )
+                observed.append((call_id, name, _plain(arguments)))
+            continue
+        if provider == "gemini":
+            parts = message.get("parts")
+            if not isinstance(parts, Sequence) or isinstance(
+                parts, (str, bytes, bytearray)
+            ):
+                continue
+            for part in parts:
+                call = part.get("function_call") if isinstance(part, Mapping) else None
+                if call is None:
+                    continue
+                if not isinstance(call, Mapping):
+                    raise ContextCompileCoordinatorError(
+                        "provider result semantic tool call is invalid"
+                    )
+                call_id = str(call.get("id") or "").strip()
+                name = str(call.get("name") or "").strip()
+                arguments = call.get("args")
+                if not call_id or not name or not isinstance(arguments, Mapping):
+                    raise ContextCompileCoordinatorError(
+                        "provider result semantic tool call is invalid"
+                    )
+                observed.append((call_id, name, _plain(arguments)))
+            continue
+        if provider == "openai" and message.get("type") == "function_call":
+            call_id = str(message.get("call_id") or message.get("id") or "").strip()
+            name = str(message.get("name") or "").strip()
+            arguments = message.get("arguments")
+            if not call_id or not name or not isinstance(arguments, (str, Mapping)):
+                raise ContextCompileCoordinatorError(
+                    "provider result semantic tool call is invalid"
+                )
+            observed.append((call_id, name, _plain(arguments)))
+            continue
+        if provider == "openai" and message.get("type") == "computer_call":
+            call_id = str(message.get("call_id") or message.get("id") or "").strip()
+            actions = message.get("actions")
+            if (
+                not call_id
+                or not isinstance(actions, Sequence)
+                or isinstance(actions, (str, bytes, bytearray))
+            ):
+                raise ContextCompileCoordinatorError(
+                    "provider result semantic tool call is invalid"
+                )
+            observed.append(
+                (
+                    call_id,
+                    "computer",
+                    {
+                        "provider": "openai",
+                        "protocol": "openai.responses.computer.v1",
+                        "actions": _plain(actions),
+                    },
+                )
+            )
+            continue
+        if provider == "ollama":
+            calls = message.get("tool_calls")
+            if not isinstance(calls, Sequence) or isinstance(
+                calls, (str, bytes, bytearray)
+            ):
+                continue
+            for call in calls:
+                function = call.get("function") if isinstance(call, Mapping) else None
+                if not isinstance(function, Mapping):
+                    raise ContextCompileCoordinatorError(
+                        "provider result semantic tool call is invalid"
+                    )
+                call_id = str(call.get("id") or "").strip()
+                name = str(function.get("name") or "").strip()
+                arguments = function.get("arguments")
+                if not call_id or not name or not isinstance(arguments, Mapping):
+                    raise ContextCompileCoordinatorError(
+                        "provider result semantic tool call is invalid"
+                    )
+                observed.append((call_id, name, _plain(arguments)))
+    if tuple(observed) != tuple(expected_calls):
+        raise ContextCompileCoordinatorError(
+            "provider result semantic tool call group does not match journal calls"
+        )
+
+
+def _verified_provider_wire_snapshot_for_result(
+    *,
+    provider: str,
+    iteration: int,
+    result_event: JournalEvent,
+    result_fields: ProviderTurnResultEventFields,
+    generation_events: Sequence[JournalEvent],
+    artifact_reader: ProviderTurnResultArtifactReader,
+) -> None:
+    """Bind a durable result to the one request snapshot that sent it."""
+
+    candidates = tuple(
+        event
+        for event in generation_events
+        if event.event_type == PROVIDER_WIRE_SNAPSHOT_EVENT_TYPE
+        and event.attempt == result_event.attempt
+        and event.payload.get("iteration") == iteration
+    )
+    if not candidates:
+        raise ContextCompileCoordinatorError(
+            "current native tool batch provider wire snapshot is missing"
+        )
+    if len(candidates) != 1:
+        raise ContextCompileCoordinatorError(
+            "current native tool batch has conflicting provider wire snapshots"
+        )
+    event = candidates[0]
+    if event.store_seq >= result_event.store_seq:
+        raise ContextCompileCoordinatorError(
+            "current native tool batch provider wire snapshot does not precede its result"
+        )
+    try:
+        fields = provider_wire_snapshot_event_fields(event)
+        content = artifact_reader(artifact=fields.artifact)
+        if type(content) is not bytes:
+            raise TypeError("provider wire artifact reader returned non-bytes")
+        if (
+            len(content) != fields.artifact.byte_length
+            or hashlib.sha256(content).hexdigest() != fields.artifact.sha256
+        ):
+            raise ValueError("provider wire artifact bytes changed")
+        decoded = json.loads(content.decode("utf-8"))
+        envelope = ProviderWireEnvelope.from_dict(decoded)
+        if envelope.canonical_bytes() != content:
+            raise ValueError("provider wire artifact is not canonical")
+        if (
+            envelope.attempt != result_event.attempt
+            or envelope.iteration != iteration
+            or envelope.provider != fields.provider
+            or envelope.adapter_revision != fields.adapter_revision
+            or envelope.catalog_sha256 != fields.catalog_sha256
+            or envelope.envelope_sha256 != fields.envelope_sha256
+            or fields.provider != provider
+            or result_fields.subject.envelope_sha256 != fields.envelope_sha256
+        ):
+            raise ValueError("provider wire snapshot crossed the result subject")
+        routes = tuple(
+            route
+            for route in envelope.routes
+            if route.name == result_fields.subject.route
+        )
+        if len(routes) != 1 or routes[0].route_sha256 != result_fields.route_sha256:
+            raise ValueError("provider wire snapshot route changed")
+    except ContextCompileCoordinatorError:
+        raise
+    except Exception as exc:
+        raise ContextCompileCoordinatorError(
+            "current native tool batch provider wire snapshot is invalid"
+        ) from exc
+
+
+def _verified_current_provider_turn(
+    *,
+    request: ContextCompileRequest,
+    generation_events: Sequence[JournalEvent],
+    artifact_reader: ProviderTurnResultArtifactReader | None,
+) -> _CurrentProviderTurnProjection | None:
+    """Recover one current native tool turn from its exact durable result."""
+
+    provider = str(request.provider or "").strip().casefold()
+    if provider not in _NATIVE_TOOL_PROVIDERS:
+        return None
+    projection_events = tuple(_validated_projection_events(request))
+    batch = _current_completed_tool_batch(
+        request,
+        projection_events=projection_events,
+        pending_inputs=_pending_inputs(request),
+    )
+    if batch is None:
+        pending_inputs = _pending_inputs(request)
+        if pending_inputs and pending_inputs[-1].get("type") == "tool_result":
+            pending_event_id = str(pending_inputs[-1].get("event_id") or "")
+            pending_store_seq = pending_inputs[-1].get("store_seq")
+            pending_events = tuple(
+                event
+                for _event_index, _raw, event in projection_events
+                if event.get("type") == "tool_result"
+                and event.get("event_id") == pending_event_id
+                and event.get("store_seq") == pending_store_seq
+            )
+            if len(pending_events) == 1:
+                pending_event = pending_events[0]
+                iteration = pending_event.get("iteration")
+                attempt_id = str(
+                    pending_event.get("attempt_id")
+                    or pending_event.get("run_id")
+                    or request.attempt_id
+                    or ""
+                ).strip()
+                pending_call_id = str(
+                    pending_event.get("call_id")
+                    or pending_event.get("tool_call_id")
+                    or ""
+                ).strip()
+                pending_observation = pending_event.get("observation")
+                pending_is_non_authoritative = (
+                    isinstance(pending_observation, Mapping)
+                    and pending_observation.get("authoritative") is False
+                )
+                has_current_native_call = any(
+                    event.get("type") == "tool_call"
+                    and not (
+                        isinstance(event.get("observation"), Mapping)
+                        and event["observation"].get("authoritative") is False
+                    )
+                    and (
+                        event.get("iteration") == iteration
+                        or str(
+                            event.get("call_id") or event.get("tool_call_id") or ""
+                        ).strip() == pending_call_id
+                    )
+                    and str(
+                        event.get("attempt_id")
+                        or event.get("run_id")
+                        or request.attempt_id
+                        or ""
+                    ).strip() == attempt_id
+                    and not _interaction_is_child(
+                        event,
+                        root_attempt_id=request.attempt_id or "",
+                    )
+                    and event.get("source_provider") == provider
+                    for _event_index, _raw, event in projection_events
+                )
+                if (
+                    has_current_native_call
+                    and not pending_is_non_authoritative
+                    and not _interaction_is_child(
+                        pending_event,
+                        root_attempt_id=request.attempt_id or "",
+                    )
+                ):
+                    raise ContextCompileCoordinatorError(
+                        "current native tool batch is incomplete or conflicting"
+                    )
+        return None
+    if any(
+        event.get("source_provider") != provider
+        for _event_index, event in batch.calls
+    ):
+        raise ContextCompileCoordinatorError(
+            "current native tool batch provider does not match the request"
+        )
+    iterations = {event.get("iteration") for _event_index, event in batch.calls}
+    if len(iterations) != 1:
+        raise ContextCompileCoordinatorError(
+            "current native tool batch has no unique iteration"
+        )
+    iteration = next(iter(iterations))
+    if isinstance(iteration, bool) or not isinstance(iteration, int) or iteration < 0:
+        raise ContextCompileCoordinatorError(
+            "current native tool batch iteration is invalid"
+        )
+    first_call_store_seq = min(
+        int(event.get("store_seq") or 0) for _event_index, event in batch.calls
+    )
+    candidates = tuple(
+        event
+        for event in generation_events
+        if event.event_type == "provider.turn_result"
+        and event.attempt.attempt_id == request.attempt_id
+        and event.payload.get("iteration") == iteration
+    )
+    if not candidates:
+        raise ContextCompileCoordinatorError(
+            "current native tool batch provider result is missing"
+        )
+    if len(candidates) != 1:
+        raise ContextCompileCoordinatorError(
+            "current native tool batch has conflicting provider turn results"
+        )
+    event = candidates[0]
+    if event.store_seq >= first_call_store_seq:
+        raise ContextCompileCoordinatorError(
+            "current native tool batch provider result does not precede its calls"
+        )
+    if artifact_reader is None:
+        raise ContextCompileCoordinatorError(
+            "provider turn result artifact reader is unavailable"
+        )
+    try:
+        fields = provider_turn_result_event_fields(event)
+        content = artifact_reader(artifact=fields.artifact)
+        if type(content) is not bytes:
+            raise TypeError("provider turn result artifact reader returned non-bytes")
+        if (
+            len(content) != fields.artifact.byte_length
+            or hashlib.sha256(content).hexdigest() != fields.artifact.sha256
+        ):
+            raise ValueError("provider turn result artifact bytes changed")
+        decoded = json.loads(content.decode("utf-8"))
+        envelope = ProviderTurnResultEnvelope.from_dict(decoded)
+        if envelope.canonical_bytes() != content:
+            raise ValueError("provider turn result artifact is not canonical")
+        if (
+            fields.subject != envelope.subject
+            or fields.route_sha256 != envelope.route_sha256
+            or fields.visible_output != envelope.visible_output
+            or fields.result_sha256 != envelope.result_sha256
+            or fields.subject.attempt != event.attempt
+            or fields.subject.iteration != iteration
+        ):
+            raise ValueError("provider turn result receipt disagrees with artifact")
+        result = envelope.to_model_turn_result()
+    except Exception as exc:
+        raise ContextCompileCoordinatorError(
+            "current native tool batch provider result is invalid"
+        ) from exc
+    _verified_provider_wire_snapshot_for_result(
+        provider=provider,
+        iteration=iteration,
+        result_event=event,
+        result_fields=fields,
+        generation_events=generation_events,
+        artifact_reader=artifact_reader,
+    )
+    expected_calls = tuple(
+        (
+            str(event.get("call_id") or event.get("tool_call_id") or "").strip(),
+            str(event.get("tool_name") or "").strip(),
+            _plain(event.get("arguments")),
+        )
+        for _event_index, event in batch.calls
+    )
+    actual_calls = tuple(
+        (call.call_id, call.name, _plain(call.arguments)) for call in result.tool_calls
+    )
+    assistant_messages = tuple(
+        _plain(message) for message in result.assistant_messages
+        if isinstance(message, Mapping)
+    )
+    if (
+        actual_calls != expected_calls
+        or len(assistant_messages) != len(result.assistant_messages)
+    ):
+        raise ContextCompileCoordinatorError(
+            "current native tool batch provider result does not match journal calls"
+        )
+    _validate_semantic_tool_call_group(
+        provider=provider,
+        assistant_messages=assistant_messages,
+        expected_calls=expected_calls,
+    )
+    return _CurrentProviderTurnProjection(
+        subject=fields.subject,
+        subject_sha256=fields.subject_sha256,
+        result_cursor=EventCursor(event.store_seq, event.event_id),
+        result_sha256=fields.result_sha256,
+        replay_frame_sha256=(
+            hashlib.sha256(_canonical_bytes(result.provider_replay_frame)).hexdigest()
+            if result.provider_replay_frame is not None
+            else None
+        ),
+        assistant_messages=assistant_messages,
+        call_ids=batch.call_ids,
+    )
+
+
 def _prepare_journal_view(
     *,
     request: ContextCompileRequest,
     snapshot: JournalSnapshot,
     artifacts: ArtifactService | None = None,
+    provider_turn_result_reader: ProviderTurnResultArtifactReader | None = None,
 ) -> tuple[ContextCompileRequest, _PreparedJournalView]:
     if not isinstance(snapshot, JournalSnapshot):
         raise ContextCompileCoordinatorError("journal did not return a JournalSnapshot")
@@ -415,6 +824,11 @@ def _prepare_journal_view(
         pending_task_inputs=pending_task_inputs,
     )
     projected_request = project_canonical_journal_messages(snapshot_request)
+    current_provider_turn = _verified_current_provider_turn(
+        request=projected_request,
+        generation_events=generation_events,
+        artifact_reader=provider_turn_result_reader,
+    )
     journal_projection = _canonical_journal_message_projection(projected_request)
     bound_source_indexes = {
         cursor.message_index for cursor in projected_request.source_message_cursors
@@ -515,6 +929,7 @@ def _prepare_journal_view(
             journal_projection=journal_projection,
             events_by_cursor=MappingProxyType(events_by_cursor),
             input_receipt=admitted_input_receipts[-1],
+            current_provider_turn=current_provider_turn,
         ),
     )
 
@@ -874,6 +1289,7 @@ class ContextCompileCoordinator:
         partial_attempt_sink: Callable[[ContextCompileRequest, Exception], None],
         model_projection: ModelContextProjection | None = None,
         artifacts: ArtifactService | None = None,
+        provider_turn_result_reader: ProviderTurnResultArtifactReader | None = None,
         journal_snapshot_source: JournalSnapshotSource | None = None,
     ) -> None:
         if not isinstance(journal, BoundExecutionJournal):
@@ -904,7 +1320,12 @@ class ContextCompileCoordinator:
             or artifacts.execution_id != journal.execution_id
         ):
             raise ContextCompileCoordinatorError("artifact service scope mismatch")
+        if provider_turn_result_reader is not None and not callable(
+            provider_turn_result_reader
+        ):
+            raise TypeError("provider turn result artifact reader must be callable")
         self._artifacts = artifacts
+        self._provider_turn_result_reader = provider_turn_result_reader
         self._compiler = ContextCompiler()
         self._journal = journal
         self._checkpoint_repository = checkpoint_repository
@@ -960,6 +1381,7 @@ class ContextCompileCoordinator:
                 request=request,
                 snapshot=snapshot,
                 artifacts=self._artifacts,
+                provider_turn_result_reader=self._provider_turn_result_reader,
             )
             self._verify_input_trigger_claim(request, journal_view.input_receipt)
         except Exception as error:
@@ -1016,6 +1438,7 @@ class ContextCompileCoordinator:
                         prepared_request,
                         checkpoint_binding=binding,
                         journal_projection=journal_view.journal_projection,
+                        current_provider_turn=journal_view.current_provider_turn,
                     )
                 except ContextCompilerError as error:
                     if str(error) != "checkpoint_consumption_invalid":
@@ -1035,6 +1458,7 @@ class ContextCompileCoordinator:
                     prepared_request,
                     journal_projection=journal_view.journal_projection,
                     checkpoint_ref_resolver=prospective_checkpoint_ref,
+                    current_provider_turn=journal_view.current_provider_turn,
                 )
             except Exception as error:
                 self._mark_partial(request, error)
@@ -1094,6 +1518,7 @@ class ContextCompileCoordinator:
                         checkpoint_ref=prepared.checkpoint_ref,
                     ),
                     journal_projection=journal_view.journal_projection,
+                    current_provider_turn=journal_view.current_provider_turn,
                 )
                 consumption = _verify_checkpoint_consumption(
                     compiled=bound,
@@ -1123,6 +1548,7 @@ class ContextCompileCoordinator:
                         journal_projection=journal_view.journal_projection,
                         minimum_checkpoint_cutoff=dropped_turn_count + 1,
                         checkpoint_ref_resolver=prospective_checkpoint_ref,
+                        current_provider_turn=journal_view.current_provider_turn,
                     )
                 except Exception as retry_error:
                     self._mark_partial(request, retry_error)
@@ -1220,6 +1646,7 @@ class ContextCompileCoordinator:
         checkpoint_ref_resolver: (
             Callable[[CheckpointRequest], ResourceRef | None] | None
         ) = None,
+        current_provider_turn: _CurrentProviderTurnProjection | None = None,
     ) -> _ContextCompilePass:
         result = self._compiler._compile_for_coordinator(
             request,
@@ -1227,6 +1654,7 @@ class ContextCompileCoordinator:
             journal_projection=journal_projection,
             minimum_checkpoint_cutoff=minimum_checkpoint_cutoff,
             checkpoint_ref_resolver=checkpoint_ref_resolver,
+            current_provider_turn=current_provider_turn,
         )
         if not isinstance(result, _ContextCompilePass):
             raise TypeError("compiler must return the internal compile pass")

@@ -16,6 +16,7 @@ from enum import StrEnum
 from typing import Any, ClassVar
 
 from .failure_diagnostic import ProviderFailureDiagnostic
+from .uncertainty_diagnostic import ProviderUncertaintyDiagnostic
 
 from unchain.journal.models import (
     ArtifactRef,
@@ -299,6 +300,7 @@ class ProviderRequestLease:
 
     SCHEMA: ClassVar[str] = "unchain.provider_request_lease.v2"
     DIAGNOSTIC_SCHEMA: ClassVar[str] = "unchain.provider_request_lease.v3"
+    UNCERTAINTY_SCHEMA: ClassVar[str] = "unchain.provider_request_lease.v4"
 
     subject: ProviderRequestSubject
     route_sha256: str
@@ -311,6 +313,7 @@ class ProviderRequestLease:
     result_binding: ProviderTurnResultBinding | None = None
     predecessor_sha256: str | None = None
     failure_diagnostic: ProviderFailureDiagnostic | None = None
+    uncertainty_diagnostic: ProviderUncertaintyDiagnostic | None = None
 
     def __post_init__(self) -> None:
         diagnostic = self.failure_diagnostic
@@ -319,6 +322,12 @@ class ProviderRequestLease:
         elif diagnostic is not None and type(diagnostic) is not ProviderFailureDiagnostic:
             raise TypeError("failure diagnostic must be exact or null")
         object.__setattr__(self, "failure_diagnostic", diagnostic)
+        uncertainty = self.uncertainty_diagnostic
+        if type(uncertainty) is dict:
+            uncertainty = ProviderUncertaintyDiagnostic.from_dict(uncertainty)
+        elif uncertainty is not None and type(uncertainty) is not ProviderUncertaintyDiagnostic:
+            raise TypeError("uncertainty diagnostic must be exact or null")
+        object.__setattr__(self, "uncertainty_diagnostic", uncertainty)
         subject = self.subject
         if type(subject) is dict:
             subject = ProviderRequestSubject.from_dict(subject)
@@ -339,6 +348,8 @@ class ProviderRequestLease:
         object.__setattr__(self, "status", status)
         if diagnostic is not None and status is not ProviderRequestStatus.FAILED:
             raise ModelValidationError("only failed leases can contain failure diagnostics")
+        if uncertainty is not None and status is not ProviderRequestStatus.STARTED:
+            raise ModelValidationError("only started leases can contain uncertainty diagnostics")
         object.__setattr__(self, "revision", _positive_revision(self.revision))
         if type(self.visible_output) is not bool:
             raise TypeError("visible_output must be an exact boolean")
@@ -457,6 +468,9 @@ class ProviderRequestLease:
         if self.failure_diagnostic is not None:
             record["schema"] = self.DIAGNOSTIC_SCHEMA
             record["failure_diagnostic"] = self.failure_diagnostic.to_dict()
+        if self.uncertainty_diagnostic is not None:
+            record["schema"] = self.UNCERTAINTY_SCHEMA
+            record["uncertainty_diagnostic"] = self.uncertainty_diagnostic.to_dict()
         return record
 
     @classmethod
@@ -478,7 +492,11 @@ class ProviderRequestLease:
             }
         )
         schema = value.get("schema")
-        if schema == cls.DIAGNOSTIC_SCHEMA:
+        if schema == cls.UNCERTAINTY_SCHEMA:
+            fields = fields | {"uncertainty_diagnostic"}
+            if type(value.get("uncertainty_diagnostic")) is not dict:
+                raise ModelValidationError("v4 started lease requires an uncertainty diagnostic")
+        elif schema == cls.DIAGNOSTIC_SCHEMA:
             fields = fields | {"failure_diagnostic"}
             if type(value.get("failure_diagnostic")) is not dict:
                 raise ModelValidationError("v3 failure lease requires a diagnostic")
@@ -493,7 +511,7 @@ class ProviderRequestLease:
 
         if type(value) is not dict:
             raise TypeError("provider request lease must be an exact dict")
-        if value.get("schema") in {cls.SCHEMA, cls.DIAGNOSTIC_SCHEMA}:
+        if value.get("schema") in {cls.SCHEMA, cls.DIAGNOSTIC_SCHEMA, cls.UNCERTAINTY_SCHEMA}:
             return cls.from_dict(value)
         legacy_schema = "unchain.provider_request_lease.v1"
         legacy_fields = frozenset(
@@ -696,6 +714,26 @@ class ProviderRequestLeaseCoordinator:
             expected_revision=current.revision,
             replacement=replacement,
         )
+
+    def record_uncertainty(
+        self,
+        lease: ProviderRequestLease,
+        *,
+        diagnostic: ProviderUncertaintyDiagnostic,
+        operation: OperationRef,
+    ) -> ProviderRequestLease:
+        current = self._current(lease)
+        if current.status is not ProviderRequestStatus.STARTED:
+            raise ProviderRequestTransitionError("only a started request can record uncertainty")
+        if current.uncertainty_diagnostic is not None:
+            raise ProviderRequestTransitionError("uncertainty is already recorded")
+        replacement = ProviderRequestLease(
+            subject=current.subject, route_sha256=current.route_sha256,
+            status=ProviderRequestStatus.STARTED, revision=current.revision + 1,
+            visible_output=False, retryable=False, classification="",
+            operation=operation, uncertainty_diagnostic=diagnostic,
+        )
+        return self._cas(expected_revision=current.revision, replacement=replacement)
 
     def record_completed(
         self,

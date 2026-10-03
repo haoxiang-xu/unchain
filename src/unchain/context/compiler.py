@@ -32,6 +32,7 @@ from unchain.journal.interaction_resolution_compat import (
     legacy_interaction_resolution_supersessions,
 )
 from unchain.kernel.types import ToolCall
+from unchain.providers.request_lease import ProviderRequestSubject
 from unchain.tools.messages import (
     coalesce_provider_tool_result_messages,
     get_provider_message_builder,
@@ -438,6 +439,19 @@ class _ImmediateToolBatch:
     call_ids: tuple[str, ...]
     pending_event_id: str
     pending_store_seq: int
+
+
+@dataclass(frozen=True)
+class _CurrentProviderTurnProjection:
+    """Verified semantic assistant messages for one completed native tool turn."""
+
+    subject: ProviderRequestSubject
+    subject_sha256: str
+    result_cursor: EventCursor
+    result_sha256: str
+    replay_frame_sha256: str | None
+    assistant_messages: tuple[Mapping[str, Any], ...]
+    call_ids: tuple[str, ...]
 
 
 def _compact_ref(value: Any) -> dict[str, Any] | None:
@@ -2607,6 +2621,7 @@ def _current_native_tool_batch(
     request: ContextCompileRequest,
     *,
     batch: _ImmediateToolBatch | None,
+    current_provider_turn: _CurrentProviderTurnProjection | None = None,
 ) -> _NativeToolBatch | None:
     provider = str(request.provider or "").strip().casefold()
     if provider not in _NATIVE_TOOL_PROVIDERS or batch is None:
@@ -2632,7 +2647,14 @@ def _current_native_tool_batch(
             )
         )
 
-    call_messages = _native_tool_call_messages(provider, typed_calls)
+    if current_provider_turn is not None:
+        if current_provider_turn.call_ids != batch.call_ids:
+            raise ContextCompilerError("provider turn projection call group changed")
+        call_messages = [
+            _plain(message) for message in current_provider_turn.assistant_messages
+        ]
+    else:
+        call_messages = _native_tool_call_messages(provider, typed_calls)
     if call_messages is None:
         return None
     try:
@@ -2819,6 +2841,7 @@ def _neutral_context(
     *,
     checkpoint_covered_through_store_seq: int | None = None,
     journal_projection: _JournalMessageProjection | None = None,
+    current_provider_turn: _CurrentProviderTurnProjection | None = None,
 ) -> tuple[dict[str, Any], list[str], tuple[int, ...], _NativeToolBatch | None,]:
     message_projection = journal_projection or _canonical_journal_message_projection(
         request
@@ -2849,6 +2872,7 @@ def _neutral_context(
     native_batch = _current_native_tool_batch(
         request,
         batch=immediate_batch,
+        current_provider_turn=current_provider_turn,
     )
     native_call_ids = set(native_batch.call_ids if native_batch is not None else ())
     for event_index, raw, event in projection_events:
@@ -3197,6 +3221,7 @@ def _assemble(
     checkpoint_covered_through_store_seq: int | None = None,
     journal_projection: _JournalMessageProjection | None = None,
     include_optional_history: bool = True,
+    current_provider_turn: _CurrentProviderTurnProjection | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], list[str], tuple[int, ...]]:
     source: list[dict[str, Any]] = []
     for index, raw_message in enumerate(request.source_messages):
@@ -3222,6 +3247,7 @@ def _assemble(
         request,
         checkpoint_covered_through_store_seq=checkpoint_covered_through_store_seq,
         journal_projection=journal_projection,
+        current_provider_turn=current_provider_turn,
     )
     optional_payload = {
         "schema_version": _CONTEXT_SCHEMA,
@@ -4027,6 +4053,7 @@ class ContextCompiler:
         checkpoint_ref_resolver: (
             Callable[[CheckpointRequest], ResourceRef | None] | None
         ) = None,
+        current_provider_turn: _CurrentProviderTurnProjection | None = None,
     ) -> _CoreCompilation:
         _validate_generation_scope(request)
         if journal_projection is None:
@@ -4094,6 +4121,7 @@ class ContextCompiler:
                     checkpoint_covered_through_store_seq
                 ),
                 journal_projection=journal_projection,
+                current_provider_turn=current_provider_turn,
             )
             messages, reduction, checkpoint_requests = _reduce(
                 combined,
@@ -4122,6 +4150,7 @@ class ContextCompiler:
                 planning_request,
                 journal_projection=journal_projection,
                 include_optional_history=False,
+                current_provider_turn=current_provider_turn,
             )
             recovered = False
             for minimum_cutoff in range(
@@ -4161,6 +4190,7 @@ class ContextCompiler:
                             planned_checkpoint.source_range.end.store_seq
                         ),
                         journal_projection=journal_projection,
+                        current_provider_turn=current_provider_turn,
                     )
                     messages, reduction, checkpoint_requests = _reduce(
                         combined,
@@ -4247,6 +4277,7 @@ class ContextCompiler:
         checkpoint_ref_resolver: (
             Callable[[CheckpointRequest], ResourceRef | None] | None
         ) = None,
+        current_provider_turn: _CurrentProviderTurnProjection | None = None,
     ) -> _ContextCompilePass:
         """Compile one coordinator-owned pass with private durable evidence."""
 
@@ -4276,6 +4307,7 @@ class ContextCompiler:
             journal_projection=journal_projection,
             minimum_checkpoint_cutoff=minimum_checkpoint_cutoff,
             checkpoint_ref_resolver=checkpoint_ref_resolver,
+            current_provider_turn=current_provider_turn,
         )
         result = compiled.result
         if checkpoint_binding is None:

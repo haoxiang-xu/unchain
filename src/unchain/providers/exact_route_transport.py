@@ -29,6 +29,7 @@ from .durable_turn_runtime import (
 from .ollama import OllamaModelIO
 from .openai import OpenAIModelIO
 from .wire_envelope import ProviderWireEnvelope, ProviderWireRoute
+from .failure_diagnostic import GeminiResponseFailure
 
 
 def _explicit_status_code(error: BaseException) -> int | None:
@@ -50,9 +51,26 @@ def _explicit_status_code(error: BaseException) -> int | None:
 def _classified_failure_kind(
     error: BaseException,
 ) -> ExactProviderRouteFailureKind | None:
+    if type(error) is GeminiResponseFailure:
+        return ExactProviderRouteFailureKind.TERMINAL
     status_code = _explicit_status_code(error)
     if status_code in {429, 529}:
         return ExactProviderRouteFailureKind.TRANSIENT_RETRY_SAFE
+    if status_code == 503:
+        # A rejected HTTP response cannot have delivered stream content. The
+        # Gemini SDK also raises APIError(503) for an error *inside* an HTTP 200
+        # SSE stream; that case must stay uncertain and must not be replayed.
+        import httpx
+        from google.genai.errors import APIError
+
+        response = getattr(error, "response", None)
+        if (
+            isinstance(error, APIError)
+            and error.code == 503
+            and type(response) is httpx.Response
+            and response.status_code == 503
+        ):
+            return ExactProviderRouteFailureKind.TRANSIENT_RETRY_SAFE
     if (
         status_code is not None
         and 400 <= status_code < 500

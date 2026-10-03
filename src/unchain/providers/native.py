@@ -147,6 +147,16 @@ def _translate_content_blocks_for_anthropic(messages: list[dict[str, Any]]) -> N
                 })
                 continue
 
+            if btype == "text" and message.get("role") == "assistant":
+                # Older Anthropic result artifacts may contain the SDK-only
+                # ParsedTextBlock helper. This is an outbound copy after replay
+                # verification, so retain the durable record and reject every
+                # other unknown text field through the closed validator below.
+                next_block = copy.deepcopy(block)
+                next_block.pop("parsed_output", None)
+                new_content.append(next_block)
+                continue
+
             if btype == "input_image":
                 source = _anthropic_source_from_input_image(block)
                 if source is None:
