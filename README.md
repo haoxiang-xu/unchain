@@ -154,7 +154,7 @@ HarnessDelta.append(
 |----------|--------|-----------|-------|-----------|
 | OpenAI | gpt-5, gpt-4.1, gpt-5-codex | Yes | Yes | Yes (gpt-5) |
 | Anthropic | claude-sonnet-4, claude-opus-4-6, claude-haiku-3.5 | Yes | Yes | Yes (thinking) |
-| Google Gemini | gemini-2.5-pro, gemini-2.5-flash | Yes | Yes | Yes |
+| Google Gemini | gemini-3.8-flash, gemini-3.6-flash, gemini-3.5-flash, gemini-3.1-pro-preview | Yes | Yes | Yes (thinking levels) |
 | Ollama | Any local model | Yes | Yes | Model-dependent |
 | SAP Hyperspace | hyperspace--claude-opus-4-6/4-7, hyperspace--claude-sonnet-4-6, hyperspace--claude-haiku-4-5 | Yes | Yes | Yes (thinking) |
 

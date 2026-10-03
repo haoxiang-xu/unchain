@@ -32,6 +32,9 @@ _EPHEMERAL_EVENT_TYPES = frozenset(
         "content_delta",
         "message_delta",
         "response_delta",
+        # Retry waits are presentation; the provider request leases are the
+        # durable record of every try (BC-386-5).
+        "provider_retry",
     }
 )
 _LIFECYCLE_EVENT_TYPES = frozenset(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import json
 
 import pytest
@@ -118,6 +119,52 @@ def test_anthropic_projects_canonical_media_to_native_blocks() -> None:
     ]
     assert messages[0]["content"][1]["source"]["type"] == "base64"
     assert messages[0]["content"][2]["source"]["type"] == "base64"
+
+
+@pytest.mark.parametrize("parsed_output", [None, {"schema": {"answer": "ready"}}])
+def test_anthropic_legacy_sdk_text_helper_is_removed_only_from_outbound_copy(
+    parsed_output,
+) -> None:
+    stored_messages = [
+        {"role": "user", "content": "continue"},
+        {
+            "role": "assistant",
+            "content": [{
+                "type": "text",
+                "text": "I checked the result.",
+                "citations": None,
+                "parsed_output": parsed_output,
+            }],
+        },
+    ]
+    outbound_messages = copy.deepcopy(stored_messages)
+
+    _translate_content_blocks_for_anthropic(outbound_messages)
+
+    assert stored_messages[1]["content"][0]["parsed_output"] == parsed_output
+    assert outbound_messages[1]["content"] == [{
+        "type": "text",
+        "text": "I checked the result.",
+        "citations": None,
+    }]
+
+
+def test_anthropic_legacy_sdk_helper_does_not_open_text_schema() -> None:
+    messages = [
+        {"role": "user", "content": "continue"},
+        {
+            "role": "assistant",
+            "content": [{
+                "type": "text",
+                "text": "I checked the result.",
+                "parsed_output": None,
+                "extension": {"untrusted": True},
+            }],
+        },
+    ]
+
+    with pytest.raises(ProviderMessageContractError, match="unknown fields: extension"):
+        _translate_content_blocks_for_anthropic(messages)
 
 
 def test_ollama_projects_base64_image_and_rejects_pdf() -> None:

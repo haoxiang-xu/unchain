@@ -72,6 +72,10 @@ def _envelope(
             "unchain.ollama.chat.request.v1",
             "ollama.api.chat.post",
         ),
+        "gemini": (
+            "unchain.gemini.contents.request.v1",
+            "gemini.models.generate_content_stream",
+        ),
     }
     catalog = _catalog(provider, model)
     adapter_revision, transport_kind = profiles[provider]
@@ -726,14 +730,65 @@ def test_anthropic_exact_transport_classifies_explicit_bad_request_as_terminal()
     assert caught.value.kind is ExactProviderRouteFailureKind.TERMINAL
 
 
-@pytest.mark.parametrize('status,expected', [(400, 'terminal'), (401, 'terminal'), (429, 'transient_retry_safe'), (503, None)])
+@pytest.mark.parametrize('status,expected', [
+    (400, 'terminal'), (401, 'terminal'), (404, 'terminal'), (429, 'transient_retry_safe'),
+    (502, 'transient_retry_safe'), (503, 'transient_retry_safe'),
+    # 500 and 504 may have been processed by the provider, so they stay unclassified.
+    (500, None), (504, None),
+])
 def test_google_sdk_http_failures_have_exact_retry_classification(status, expected):
+    import httpx
     from google.genai.errors import APIError
     from unchain.providers.exact_route_transport import _classified_failure_kind
 
-    error = APIError(status, {'error': {'code': status, 'message': 'private'}})
+    error = APIError(
+        status, {'error': {'code': status, 'message': 'private'}},
+        httpx.Response(status, request=httpx.Request('POST', 'https://example.invalid/gemini')),
+    )
     kind = _classified_failure_kind(error)
     assert (kind.value if kind else None) == expected
+
+
+def test_google_503_requires_the_actual_http_response_to_be_rejected():
+    import httpx
+    from google.genai.errors import APIError
+    from unchain.providers.durable_turn_runtime import ExactProviderRouteFailureKind
+    from unchain.providers.exact_route_transport import _classified_failure_kind
+
+    body = {"error": {"code": 503, "message": "provider content is private"}}
+    request = httpx.Request("POST", "https://example.test/stream")
+    rejected = APIError(503, body, httpx.Response(503, request=request))
+    streamed_error = APIError(503, body, httpx.Response(200, request=request))
+    missing_response = APIError(503, body)
+    mismatched_code = APIError(500, body, httpx.Response(503, request=request))
+    spoofed_status = RuntimeError("not an SDK response")
+    spoofed_status.status_code = 503
+
+    assert (
+        _classified_failure_kind(rejected)
+        is ExactProviderRouteFailureKind.TRANSIENT_RETRY_SAFE
+    )
+    assert _classified_failure_kind(streamed_error) is None
+    assert _classified_failure_kind(missing_response) is None
+    assert _classified_failure_kind(mismatched_code) is None
+    assert _classified_failure_kind(spoofed_status) is None
+
+
+@pytest.mark.parametrize("provider_code", [429, 502, 503, 529])
+@pytest.mark.parametrize("http_status", [None, 200])
+def test_google_numeric_error_codes_without_rejected_http_response_are_not_retry_evidence(
+    provider_code, http_status,
+):
+    import httpx
+    from google.genai.errors import APIError
+    from unchain.providers.exact_route_transport import _classified_failure_kind
+
+    response = (
+        None if http_status is None else
+        httpx.Response(http_status, request=httpx.Request("POST", "https://example.invalid/gemini"))
+    )
+    error = APIError(provider_code, {"error": {"code": provider_code, "message": "PRIVATE"}}, response)
+    assert _classified_failure_kind(error) is None
 
 
 def test_arbitrary_numeric_error_code_is_not_http_evidence():
@@ -742,3 +797,69 @@ def test_arbitrary_numeric_error_code_is_not_http_evidence():
     error = RuntimeError('private')
     error.code = 429
     assert _classified_failure_kind(error) is None
+
+
+@pytest.mark.parametrize(
+    ("status", "provider_status", "expected"),
+    [
+        (503, "UNAVAILABLE", "TRANSIENT_RETRY_SAFE"),
+        (502, "UNAVAILABLE", "TRANSIENT_RETRY_SAFE"),
+        (429, "RESOURCE_EXHAUSTED", "TRANSIENT_RETRY_SAFE"),
+        (404, "NOT_FOUND", "TERMINAL"),
+    ],
+)
+def test_gemini_exact_transport_classifies_real_sdk_http_failures(
+    status, provider_status, expected
+):
+    import httpx
+    from google.genai import errors
+
+    from unchain.providers.durable_turn_runtime import (
+        ExactProviderRouteFailure,
+        ExactProviderRouteFailureKind,
+    )
+    from unchain.providers.exact_route_transport import GeminiExactRouteTransport
+    from unchain.providers.gemini import GeminiModelIO
+
+    request = {
+        "model": "gemini-3.8-flash",
+        "contents": [{"role": "user", "parts": [{"text": "hello"}]}],
+        "config": {
+            "automatic_function_calling": {"disable": True},
+            "max_output_tokens": 64,
+        },
+    }
+    catalog, envelope = _envelope(
+        provider="gemini", model="gemini-3.8-flash", request=request
+    )
+    sends = []
+    error_type = errors.ServerError if status >= 500 else errors.ClientError
+
+    def factory(**_kwargs):
+        def send(**kwargs):
+            sends.append(kwargs["model"])
+            raise error_type(
+                status,
+                {"error": {"code": status, "message": "private", "status": provider_status}},
+                httpx.Response(
+                    status,
+                    request=httpx.Request("POST", "https://example.invalid/gemini"),
+                ),
+            )
+
+        return SimpleNamespace(
+            models=SimpleNamespace(generate_content_stream=send), close=lambda: None
+        )
+
+    transport = GeminiExactRouteTransport(
+        model_io=GeminiModelIO(
+            model="gemini-3.8-flash", api_key="secret", client_factory=factory
+        ),
+        catalog=catalog,
+    )
+
+    with pytest.raises(ExactProviderRouteFailure) as caught:
+        transport.send(envelope=envelope, route=envelope.routes[0], retry_ordinal=0)
+
+    assert caught.value.kind is ExactProviderRouteFailureKind[expected]
+    assert sends == ["gemini-3.8-flash"]

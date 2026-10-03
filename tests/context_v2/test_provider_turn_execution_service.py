@@ -1560,24 +1560,49 @@ def test_cold_retry_reopens_with_the_same_physical_receipt_identity(
 
 
 def test_base_receipt_factory_error_is_never_downgraded_by_composition(tmp_path):
+    import traceback
+
     class BaseReceiptFailure(RuntimeError):
         pass
 
+    private = "PRIVATE-base-receipt-fixture"
     request = replace(
         _request(),
         internal_context_composition_v1=_composition_manifest(),
     )
 
     def fail_factory(*_args):
-        raise BaseReceiptFailure("base receipt failed")
+        raise BaseReceiptFailure(private)
 
-    with pytest.raises(BaseReceiptFailure, match="base receipt failed"):
-        _service(tmp_path, DurableProviderTurnMode.ENFORCE_TEST).fetch_prepared(
-            model_io=_model_io([]),
+    service = _service(tmp_path, DurableProviderTurnMode.ENFORCE_TEST)
+    sends = []
+    with pytest.raises(DurableProviderTurnUncertainError) as caught:
+        service.fetch_prepared(
+            model_io=_model_io(sends),
             request=request,
             retry_config=RetryConfig(max_retries=0),
             run_receipt_factory=fail_factory,
         )
+    diagnostic = caught.value.diagnostic.to_dict()
+    assert diagnostic["reason"] == "local_processing_error"
+    assert diagnostic["phase"] == "result_processing"
+    assert private not in "".join(traceback.format_exception(caught.value))
+    assert len(sends) == 1
+    assert service.store.load_receipts(
+        root_run_id=ATTEMPT.attempt_id,
+        owner_run_id=ATTEMPT.attempt_id,
+        attempt_id=ATTEMPT.attempt_id,
+    ) == ()
+    cold_sends = []
+    with pytest.raises(DurableProviderTurnUncertainError) as recovered:
+        _service(tmp_path, DurableProviderTurnMode.ENFORCE_TEST).fetch_prepared(
+            model_io=_model_io(cold_sends),
+            request=request,
+            retry_config=RetryConfig(max_retries=2),
+            run_receipt_factory=_run_receipt_factory(),
+        )
+    assert recovered.value.diagnostic.to_dict() == diagnostic
+    assert cold_sends == []
 
 
 def test_base_receipt_physical_identity_mismatch_fails_before_ledger_append(

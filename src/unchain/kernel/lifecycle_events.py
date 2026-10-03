@@ -87,7 +87,33 @@ def build_run_completed_payload(state: RunState, *, status: str) -> dict[str, An
     }
 
 
+def build_provider_retry_payload(
+    wait: Any,
+    *,
+    provider: str,
+    remaining_ms: int,
+) -> dict[str, Any]:
+    """Closed payload of a ``provider_retry`` event (BC-386-4).
+
+    Status fields come only from the closed failure diagnostic, never from
+    provider text.
+    """
+
+    diagnostic = getattr(wait, "diagnostic", None)
+    return {
+        "provider": str(provider or ""),
+        "attempt_failed": int(wait.attempt_failed),
+        "next_attempt": int(wait.next_attempt),
+        "max_attempts": int(wait.max_attempts),
+        "delay_ms": int(wait.delay_ms),
+        "remaining_ms": max(0, int(remaining_ms)),
+        "http_status": diagnostic.http_status if diagnostic is not None else None,
+        "provider_status": diagnostic.provider_status if diagnostic is not None else "",
+    }
+
+
 __all__ = [
+    "build_provider_retry_payload",
     "build_final_message_payload",
     "build_iteration_completed_payload",
     "build_iteration_started_payload",

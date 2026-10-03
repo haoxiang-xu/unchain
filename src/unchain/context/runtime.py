@@ -2876,6 +2876,7 @@ class ContextRuntime:
                 "run_receipt_observed",
                 None,
             ),
+            retry_wait=getattr(before_attempt, "retry_wait", None),
         )
 
     def _validate_provider_turn_boundary(

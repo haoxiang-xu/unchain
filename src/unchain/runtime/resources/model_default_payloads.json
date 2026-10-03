@@ -207,15 +207,33 @@
       "include_thoughts": true
     }
   },
-  "gemini-2.5-pro": {
+  "gemini-3.5-flash": {
     "max_output_tokens": 65536,
-    "temperature": 0.7,
-    "top_p": 1
+    "thinking_config": {
+      "thinking_level": "medium",
+      "include_thoughts": true
+    }
   },
-  "gemini-2.5-flash": {
+  "gemini-3.1-flash-lite": {
     "max_output_tokens": 65536,
-    "temperature": 0.7,
-    "top_p": 1
+    "thinking_config": {
+      "thinking_level": "minimal",
+      "include_thoughts": true
+    }
+  },
+  "gemini-3.1-pro-preview": {
+    "max_output_tokens": 65536,
+    "thinking_config": {
+      "thinking_level": "high",
+      "include_thoughts": true
+    }
+  },
+  "gemini-3-flash-preview": {
+    "max_output_tokens": 65536,
+    "thinking_config": {
+      "thinking_level": "high",
+      "include_thoughts": true
+    }
   },
   "text-embedding-3-small": {
     "encoding_format": "float"
