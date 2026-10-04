@@ -396,6 +396,12 @@ class ToolExecutionHarness(BaseToolHarness):
         ):
             return None
 
+        tool_obj = toolkit.get(tool_call.name)
+        timeline_merge_policy = (
+            getattr(tool_obj, "timeline_merge_policy", None)
+            or ("never" if is_human_input_tool_name(tool_call.name) else "approved")
+        )
+
         emit_loop_event(
             context.loop,
             context.callback,
@@ -405,6 +411,7 @@ class ToolExecutionHarness(BaseToolHarness):
             tool_name=tool_call.name,
             call_id=tool_call.call_id,
             arguments=copy.deepcopy(tool_call.arguments),
+            timeline_merge_policy=timeline_merge_policy,
         )
 
         workspace_change_tracker = None

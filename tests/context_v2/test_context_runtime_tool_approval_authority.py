@@ -50,6 +50,10 @@ def _approval_tool_runtime(
     attempt_id: str = "attempt-approval",
     interaction_store=None,
     bind_interaction_runtime: bool = True,
+    timeline_merge_policy: str | None = None,
+    include_source_provider: bool = False,
+    query_value: object = "journal-owned",
+    query_annotation: object = str,
 ):
     bundles = {}
 
@@ -108,7 +112,7 @@ def _approval_tool_runtime(
         raise
     bundle = bundles[(execution_id, attempt_id)]
 
-    invocations: list[str] = []
+    invocations: list[object] = []
     policy = {
         "requires_confirmation": True,
         "description": "Approve lookup",
@@ -120,19 +124,21 @@ def _approval_tool_runtime(
 
     toolkit = Toolkit()
 
-    @toolkit.tool(
+    def lookup(query: str):
+        invocations.append(query)
+        return {"seen": query}
+
+    lookup.__annotations__["query"] = query_annotation
+    toolkit.tool(
+        lookup,
         name="lookup",
         description="Lookup a value",
         requires_confirmation=True,
         confirmation_resolver=confirmation_resolver,
     )
-    def lookup(query: str):
-        invocations.append(query)
-        return {"seen": query}
 
-    arguments = {"query": "journal-owned"}
-    bundle.durable_event_sink(
-        {
+    arguments = {"query": copy.deepcopy(query_value)}
+    intent_event = {
             "type": "tool_call",
             "run_id": attempt_id,
             "iteration": 0,
@@ -140,7 +146,11 @@ def _approval_tool_runtime(
             "call_id": "call-approval",
             "arguments": arguments,
         }
-    )
+    if include_source_provider:
+        intent_event["source_provider"] = "openai"
+    if timeline_merge_policy is not None:
+        intent_event["timeline_merge_policy"] = timeline_merge_policy
+    bundle.durable_event_sink(intent_event)
     context = HarnessContext(
         state=bootstrap.state,
         phase="on_tool_call",
@@ -256,7 +266,7 @@ def _resume_approval_context(
         "tool_call": ToolCall(
             call_id="call-approval",
             name="lookup",
-            arguments={"query": "journal-owned"},
+            arguments=copy.deepcopy(original.event["tool_call"].arguments),
         ),
     }
     if raw_request is not None:
@@ -326,6 +336,126 @@ def test_tool_authority_harness_applies_runtime_owned_approval_suspension():
         assert [event.event_type for event in fixture["bundle"].journal.events] == [
             "tool_call"
         ]
+    finally:
+        fixture["guard"].release()
+
+
+@pytest.mark.parametrize(
+    "original_policy", [None, "never", "no_feedback", "approved", "always"]
+)
+@pytest.mark.parametrize(
+    "query_value,query_annotation",
+    [
+        pytest.param("journal-owned", str, id="scalar"),
+        pytest.param(["journal-owned"], list[str], id="array"),
+        pytest.param(
+            [["journal-owned"], ["nested"]], list[list[str]], id="nested-array"
+        ),
+        pytest.param(
+            {"nested": [{"values": ["journal-owned"]}]},
+            dict[str, list[dict[str, list[str]]]],
+            id="object-array",
+        ),
+    ],
+)
+def test_approval_resume_reuses_original_timeline_policy_after_tool_config_changes(
+    original_policy, query_value, query_annotation,
+):
+    fixture = _approval_tool_runtime(
+        attempt_id="attempt-policy-resume",
+        timeline_merge_policy=original_policy,
+        include_source_provider=True,
+        query_value=query_value,
+        query_annotation=query_annotation,
+    )
+    tool = fixture["toolkit"].get("lookup")
+    tool.timeline_merge_policy = original_policy or "approved"
+    try:
+        harness = fixture["runtime"].build_harnesses()[1]
+        approval = fixture["runtime"].prepare_tool_execution(fixture["context"])
+        approval, _request = _assert_durable_approval_pending(approval)
+        _persist_approval_pending(
+            fixture,
+            approval,
+            {"approved": True, "modified_arguments": None, "reason": ""},
+        )
+
+        intent_before = next(
+            event for event in fixture["bundle"].journal.events
+            if event.event_type == "tool_call"
+        )
+        intent_record_before = intent_before.to_dict()
+        request_record_before = _request.to_dict()
+        request_digest_before = _request.request_digest
+        # A developer may reconfigure the live toolkit between pause and resume.
+        # The same durable call ID must retain its original journal intent bytes.
+        tool.timeline_merge_policy = "never" if original_policy == "always" else "always"
+        resumed = _resume_approval_context(fixture)
+        resumed.state.run_status = "running"
+        resumed.event["callback"] = fixture["runtime"].compose_event_callback(None)
+        outcome = harness.build_delta(resumed)
+        assert outcome is not None
+        assert fixture["invocations"] == [query_value]
+        durable_request_after = fixture["interaction_runtime"].require_receipt(
+            fixture["execution_id"]
+        ).request
+        assert durable_request_after.to_dict() == request_record_before
+        assert durable_request_after.request_digest == request_digest_before
+        intent = next(
+            event
+            for event in fixture["bundle"].journal.events
+            if event.event_type == "tool_call"
+        )
+        assert intent.to_dict() == intent_record_before
+        assert [
+            event.event_type for event in fixture["bundle"].journal.events
+        ] == ["tool_call", "tool.started", "tool_result"]
+        if original_policy is None:
+            assert "timeline_merge_policy" not in intent.payload
+        else:
+            assert intent.payload["timeline_merge_policy"] == original_policy
+    finally:
+        fixture["guard"].release()
+
+
+
+@pytest.mark.parametrize(
+    "original_policy", [None, "never", "no_feedback", "approved", "always"]
+)
+def test_approval_resume_policy_recovery_rejects_changed_array_arguments(original_policy):
+    fixture = _approval_tool_runtime(
+        attempt_id="attempt-array-subject-mismatch",
+        timeline_merge_policy=original_policy,
+        include_source_provider=True,
+        query_value=[["journal-owned"]],
+        query_annotation=list[list[str]],
+    )
+    try:
+        approval = fixture["runtime"].prepare_tool_execution(fixture["context"])
+        _persist_approval_pending(
+            fixture,
+            approval,
+            {"approved": True, "modified_arguments": None, "reason": ""},
+        )
+        fixture["toolkit"].get("lookup").timeline_merge_policy = (
+            "never" if original_policy == "always" else "always"
+        )
+        resumed = _resume_approval_context(fixture)
+        changed = ToolCall(
+            call_id="call-approval",
+            name="lookup",
+            arguments={"query": [["changed-without-approval"]]},
+        )
+        resumed.event["tool_call"] = changed
+        resumed.event["tool_calls"] = [changed]
+        resumed.state.run_status = "running"
+        resumed.event["callback"] = fixture["runtime"].compose_event_callback(None)
+        with pytest.raises(RuntimeError, match="journal operation conflict"):
+            fixture["runtime"].build_harnesses()[1].build_delta(resumed)
+        assert fixture["invocations"] == []
+        assert [
+            event.event_type for event in fixture["bundle"].journal.events
+        ] == ["tool_call"]
     finally:
         fixture["guard"].release()
 

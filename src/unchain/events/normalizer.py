@@ -8,6 +8,7 @@ from ..tool_outcomes import (
     DURABLE_TOOL_RESULT_OUTCOMES,
     classify_durable_tool_result,
 )
+from ..tools.timeline_policy import TIMELINE_MERGE_POLICIES
 from .types import RuntimeEventLinks, RuntimeEventSurface, Visibility
 
 
@@ -35,6 +36,13 @@ def _str_value(value: Any, fallback: str = "") -> str:
     if isinstance(value, str) and value:
         return value
     return fallback
+
+
+def _timeline_merge_policy(raw: dict[str, Any]) -> str | None:
+    if "timeline_merge_policy" not in raw:
+        return None
+    value = raw.get("timeline_merge_policy")
+    return value if isinstance(value, str) and value in TIMELINE_MERGE_POLICIES else "never"
 
 
 def _int_value(value: Any) -> int | None:
@@ -269,6 +277,9 @@ def _interaction_payload(raw: dict[str, Any], *, raw_type: str) -> tuple[str, di
     if selection_mode:
         payload["selection_mode"] = selection_mode
         payload["config"].setdefault("selection_mode", selection_mode)
+    policy = _timeline_merge_policy(raw)
+    if policy is not None:
+        payload["timeline_merge_policy"] = policy
     for key in ("allow_other", "other_label", "other_placeholder", "min_selected", "max_selected"):
         if key in raw:
             payload[key] = copy.deepcopy(raw[key])
@@ -481,6 +492,51 @@ def normalize_raw_event(
             )
         ]
 
+    if raw_type == "provider_retry" and (
+        "retry_ordinal" in raw_event or "max_retries" in raw_event
+    ):
+        allowed = {
+            "type", "run_id", "iteration", "timestamp", "provider",
+            "http_status", "retry_ordinal", "max_retries", "delay_ms",
+            "workflow_node_id", "workflow_step_index", "workflow_step_count",
+        }
+        ordinal = _int_value(raw_event.get("retry_ordinal"))
+        max_retries = _int_value(raw_event.get("max_retries"))
+        delay_ms = _int_value(raw_event.get("delay_ms"))
+        if (
+            set(raw_event) - allowed
+            or turn_id is None
+            or raw_event.get("provider") != "gemini"
+            or _int_value(raw_event.get("http_status")) != 503
+            or ordinal is None or max_retries is None or delay_ms is None
+            or not 1 <= max_retries <= 2
+            or not 1 <= ordinal <= max_retries
+            or not 0 <= delay_ms <= 3_600_000
+        ):
+            return []
+        step_id = f"model:{turn_id}:response"
+        return [
+            RuntimeEventDraft(
+                type="step.delta",
+                run_id=run_id,
+                agent_id=agent_id,
+                turn_id=turn_id,
+                links=RuntimeEventLinks(step_id=step_id),
+                surface=_trace_surface("model"),
+                payload={
+                    "step_id": step_id,
+                    "step_type": "model_response",
+                    "kind": "provider_retry",
+                    "provider": "gemini",
+                    "http_status": 503,
+                    "retry_ordinal": ordinal,
+                    "max_retries": max_retries,
+                    "delay_ms": delay_ms,
+                },
+                metadata=metadata,
+            )
+        ]
+
     if raw_type == "reasoning_preview_discarded":
         if (
             set(raw_event)
@@ -605,6 +661,9 @@ def normalize_raw_event(
         ):
             if key in raw_event:
                 payload[key] = copy.deepcopy(raw_event[key])
+        policy = _timeline_merge_policy(raw_event)
+        if policy is not None:
+            payload["timeline_merge_policy"] = policy
         return [
             RuntimeEventDraft(
                 type="step.started",
@@ -661,6 +720,10 @@ def normalize_raw_event(
             if durable_payload is None:
                 return []
             interaction_id, payload, call_id = durable_payload
+            policy = _timeline_merge_policy(raw_event)
+            if policy is not None:
+                # Presentation metadata stays beside, never inside, the hashed request.
+                payload["timeline_merge_policy"] = policy
         else:
             interaction_id, payload = _interaction_payload(
                 raw_event,

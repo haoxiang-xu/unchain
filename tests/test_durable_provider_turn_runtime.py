@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import traceback
 
 import pytest
 
@@ -21,6 +22,7 @@ from unchain.providers.durable_turn_runtime import (
     DurableProviderTurnMode,
     DurableProviderTurnRuntime,
     DurableProviderTurnStatus,
+    DurableProviderTurnTerminalError,
     DurableProviderTurnUncertainError,
     ExactProviderRouteFailure,
     ExactProviderRouteFailureKind,
@@ -32,6 +34,7 @@ from unchain.providers.request_lease import (
     ProviderRequestSubject,
 )
 from unchain.providers.wire_envelope import ProviderWireEnvelope, ProviderWireRoute
+from unchain.providers.uncertainty_diagnostic import ProviderUncertaintyDiagnostic
 from unchain.retry import RetryConfig, RetriesExhaustedError
 from unchain.run_bundle import RunIdentity
 
@@ -1127,12 +1130,17 @@ def _gemini_transport(catalog, outcomes):
 
 
 def _google_error(status: int, provider_status: str, message: str = "private body"):
+    import httpx
     from google.genai import errors
 
     error_type = errors.ServerError if status >= 500 else errors.ClientError
     return error_type(
         status,
         {"error": {"code": status, "message": message, "status": provider_status}},
+        httpx.Response(
+            status,
+            request=httpx.Request("POST", "https://example.invalid/gemini"),
+        ),
     )
 
 
@@ -1267,27 +1275,31 @@ def test_gemini_404_replacement_reaches_the_error_and_survives_sqlite_reopen(tmp
 
 
 def test_gemini_503_budget_exhaustion_names_the_status_and_attempts(tmp_path) -> None:
-    """AC-386-2: an exhausted budget reads as a provider overload, not as a bare code."""
+    """An exhausted Gemini budget is terminal after the bounded three sends."""
 
     _store_value, repository, authority, catalog = _gemini_authority(tmp_path)
     transport, calls = _gemini_transport(
         catalog, [_google_error(503, "UNAVAILABLE") for _ in range(3)]
     )
 
-    with pytest.raises(RetriesExhaustedError) as caught:
+    with pytest.raises(DurableProviderTurnTerminalError) as caught:
         _runtime(repository, transport).execute(
             authority=authority,
             retry_config=RetryConfig(
-                max_retries=2, base_delay_ms=1, max_delay_ms=1, jitter_ratio=0
+                max_retries=99, base_delay_ms=1, max_delay_ms=1, jitter_ratio=0
             ),
         )
 
     assert len(calls) == 3
-    assert caught.value.code == "retries_exhausted"
-    assert str(caught.value) == (
-        "retries_exhausted; Provider service is unavailable or overloaded "
-        "(HTTP 503, status=UNAVAILABLE) after 2 retries"
-    )
+    assert caught.value.code == "durable_provider_turn_terminal_failed"
+    assert str(caught.value) == "Provider temporarily busy (HTTP 503). Please try again later."
+    assert "private" not in "".join(traceback.format_exception(caught.value))
+    reopened = _store(tmp_path).bind_execution(ATTEMPT.generation.execution_id)
+    no_send = _Transport([])
+    with pytest.raises(DurableProviderTurnTerminalError) as recovered:
+        _runtime(reopened, no_send).execute(authority=authority, retry_config=RetryConfig(max_retries=99))
+    assert str(recovered.value) == str(caught.value)
+    assert no_send.calls == []
 
 
 def test_gemini_500_stays_uncertain_but_names_the_status(tmp_path) -> None:
@@ -1301,29 +1313,31 @@ def test_gemini_500_stays_uncertain_but_names_the_status(tmp_path) -> None:
             authority=authority, retry_config=RetryConfig(max_retries=3)
         )
     assert caught.value.code == "durable_provider_turn_uncertain"
+    assert caught.value.diagnostic == ProviderUncertaintyDiagnostic(
+        "provider_stream_error", "reading_response", 500, "INTERNAL"
+    )
     assert str(caught.value) == (
-        "durable_provider_turn_uncertain; Provider reported an internal error "
-        "(HTTP 500, status=INTERNAL)"
+        "Provider request outcome is uncertain: The provider reported an error while "
+        "processing the request (reason=provider_stream_error, phase=reading_response, "
+        "HTTP 500, code=INTERNAL)"
     )
     assert calls == [GEMINI_MODEL]
-    # The raw provider error is not in the text, but it stays as the cause, so the
-    # sidecar's stderr traceback still shows what really happened (AC-386-5).
-    assert type(caught.value.__cause__).__name__ == "ServerError"
+    assert caught.value.__cause__ is None
+    assert "private" not in "".join(traceback.format_exception(caught.value))
 
     no_send = _Transport([])
     with pytest.raises(DurableProviderTurnUncertainError) as again:
-        _runtime(repository, no_send).execute(
+        _runtime(_store(tmp_path).bind_execution(ATTEMPT.generation.execution_id), no_send).execute(
             authority=authority, retry_config=RetryConfig(max_retries=3)
         )
     assert no_send.calls == []
-    assert str(again.value) == (
-        "durable_provider_turn_uncertain; An earlier send of this request did not "
-        "finish and is not repeated; the provider may still have processed it"
-    )
+    assert str(again.value) == str(caught.value)
+    assert again.value.diagnostic == caught.value.diagnostic
+    assert b"private body" not in (tmp_path / "memory_v2" / "context_v2.sqlite3").read_bytes()
 
 
 def test_an_unexpected_send_error_is_named_by_its_class_only(tmp_path) -> None:
-    """#386 bare uncertain: the class names the failure; its message never appears."""
+    """An unknown failure keeps a closed category without message or class text."""
 
     _store_value, repository, authority = _authority(tmp_path)
     transport = _Transport([RuntimeError("PRIVATE unknown network outcome")])
@@ -1333,12 +1347,16 @@ def test_an_unexpected_send_error_is_named_by_its_class_only(tmp_path) -> None:
             authority=authority, retry_config=RetryConfig(max_retries=3)
         )
     assert str(caught.value) == (
-        "durable_provider_turn_uncertain; Provider call failed with an unexpected "
-        "error; the provider may still have processed it (RuntimeError)"
+        "Provider request outcome is uncertain: A local error interrupted provider "
+        "response processing (reason=local_processing_error, phase=reading_response)"
     )
     assert "PRIVATE" not in str(caught.value)
     assert len(transport.calls) == 1
-    assert isinstance(caught.value.__cause__, RuntimeError)
+    assert caught.value.diagnostic == ProviderUncertaintyDiagnostic("local_processing_error", "reading_response")
+    assert caught.value.__cause__ is None
+    assert "RuntimeError" not in str(caught.value)
+    assert "PRIVATE" not in "".join(traceback.format_exception(caught.value))
+    _assert_same_uncertainty_after_reopen(tmp_path, authority, caught.value)
 
 
 def test_an_unsafe_exception_class_name_is_not_shown(tmp_path) -> None:
@@ -1350,8 +1368,11 @@ def test_an_unsafe_exception_class_name_is_not_shown(tmp_path) -> None:
         _runtime(repository, transport).execute(
             authority=authority, retry_config=RetryConfig(max_retries=1)
         )
-    assert str(caught.value).endswith("(unknown error)")
+    assert caught.value.diagnostic == ProviderUncertaintyDiagnostic("local_processing_error", "reading_response")
     assert "PRIVATE" not in str(caught.value)
+    assert "PRIVATE" not in "".join(traceback.format_exception(caught.value))
+    assert len(transport.calls) == 1
+    _assert_same_uncertainty_after_reopen(tmp_path, authority, caught.value)
 
 
 def test_a_failed_before_send_says_the_request_was_not_started(tmp_path) -> None:
@@ -1368,9 +1389,13 @@ def test_a_failed_before_send_says_the_request_was_not_started(tmp_path) -> None
             before_send=before_send,
         )
     assert str(caught.value) == (
-        "durable_provider_turn_uncertain; Provider request could not be started (ValueError)"
+        "Provider request outcome is uncertain: The request preparation callback failed "
+        "before the provider send (reason=before_send_failed, phase=before_send)"
     )
     assert transport.calls == []
+    assert caught.value.diagnostic == ProviderUncertaintyDiagnostic("before_send_failed", "before_send")
+    assert "PRIVATE" not in "".join(traceback.format_exception(caught.value))
+    _assert_same_uncertainty_after_reopen(tmp_path, authority, caught.value)
 
 
 def test_an_unusable_result_is_named_by_its_type(tmp_path) -> None:
@@ -1382,8 +1407,13 @@ def test_an_unusable_result_is_named_by_its_type(tmp_path) -> None:
             authority=authority, retry_config=RetryConfig(max_retries=1)
         )
     assert str(caught.value) == (
-        "durable_provider_turn_uncertain; Provider returned an unusable result (dict)"
+        "Provider request outcome is uncertain: The provider adapter returned an invalid "
+        "result (reason=invalid_result, phase=result_processing)"
     )
+    assert caught.value.diagnostic == ProviderUncertaintyDiagnostic("invalid_result", "result_processing")
+    assert len(transport.calls) == 1
+    assert "PRIVATE" not in "".join(traceback.format_exception(caught.value))
+    _assert_same_uncertainty_after_reopen(tmp_path, authority, caught.value)
 
 
 def test_an_answer_that_cannot_be_sealed_says_it_was_not_recorded(tmp_path, monkeypatch) -> None:
@@ -1403,8 +1433,13 @@ def test_an_answer_that_cannot_be_sealed_says_it_was_not_recorded(tmp_path, monk
             authority=authority, retry_config=RetryConfig(max_retries=1)
         )
     assert str(caught.value) == (
-        "durable_provider_turn_uncertain; Provider answer could not be recorded (OverflowError)"
+        "Provider request outcome is uncertain: The provider adapter returned an invalid "
+        "result (reason=invalid_result, phase=result_processing)"
     )
+    assert caught.value.diagnostic == ProviderUncertaintyDiagnostic("invalid_result", "result_processing")
+    assert len(transport.calls) == 1
+    assert "PRIVATE" not in "".join(traceback.format_exception(caught.value))
+    _assert_same_uncertainty_after_reopen(tmp_path, authority, caught.value)
 
 
 def test_an_invalid_run_receipt_says_the_call_record_failed(tmp_path) -> None:
@@ -1418,8 +1453,12 @@ def test_an_invalid_run_receipt_says_the_call_record_failed(tmp_path) -> None:
             build_run_receipt=lambda *_args: {"not": "a receipt"},
         )
     assert str(caught.value) == (
-        "durable_provider_turn_uncertain; Provider call record could not be built"
+        "Provider request outcome is uncertain: The provider adapter returned an invalid "
+        "result (reason=invalid_result, phase=result_processing)"
     )
+    assert caught.value.diagnostic == ProviderUncertaintyDiagnostic("invalid_result", "result_processing")
+    assert len(transport.calls) == 1
+    _assert_same_uncertainty_after_reopen(tmp_path, authority, caught.value)
 
 
 def test_gemini_503_retry_survives_a_restart_without_resending_the_failed_ordinal(tmp_path) -> None:
@@ -1474,10 +1513,14 @@ def test_a_hostile_provider_error_cannot_replace_the_uncertain_error(tmp_path) -
             authority=authority, retry_config=RetryConfig(max_retries=1)
         )
     assert str(caught.value) == (
-        "durable_provider_turn_uncertain; Provider call failed with an unexpected "
-        "error; the provider may still have processed it (_Hostile)"
+        "Provider request outcome is uncertain: A local error interrupted provider "
+        "response processing (reason=local_processing_error, phase=reading_response)"
     )
-    assert isinstance(caught.value.__cause__, _Hostile)
+    assert caught.value.diagnostic == ProviderUncertaintyDiagnostic("local_processing_error", "reading_response")
+    assert caught.value.__cause__ is None
+    assert "_Hostile" not in str(caught.value)
+    assert len(transport.calls) == 1
+    _assert_same_uncertainty_after_reopen(tmp_path, authority, caught.value)
 
 
 def test_gemini_timeout_stays_uncertain_but_says_it_timed_out(tmp_path) -> None:
@@ -1496,11 +1539,27 @@ def test_gemini_timeout_stays_uncertain_but_says_it_timed_out(tmp_path) -> None:
         )
     assert calls == [GEMINI_MODEL]
     assert str(caught.value) == (
-        "durable_provider_turn_uncertain; Provider request timed out before a "
-        "response arrived; the provider may still have processed it"
+        "Provider request outcome is uncertain: The provider request timed out "
+        "(reason=timeout, phase=requesting)"
     )
     assert "private" not in str(caught.value)
-    assert isinstance(caught.value.__cause__, httpx.ReadTimeout)
+    assert caught.value.diagnostic == ProviderUncertaintyDiagnostic("timeout", "requesting")
+    assert caught.value.__cause__ is None
+    assert "private" not in "".join(traceback.format_exception(caught.value))
+    _assert_same_uncertainty_after_reopen(tmp_path, authority, caught.value)
+
+
+def _assert_same_uncertainty_after_reopen(tmp_path, authority, error) -> None:
+    reopened = _store(tmp_path).bind_execution(ATTEMPT.generation.execution_id)
+    no_send = _Transport([])
+    with pytest.raises(DurableProviderTurnUncertainError) as recovered:
+        _runtime(reopened, no_send).execute(
+            authority=authority, retry_config=RetryConfig(max_retries=3)
+        )
+    assert no_send.calls == []
+    assert recovered.value.diagnostic == error.diagnostic
+    assert str(recovered.value) == str(error)
+    assert b"PRIVATE" not in (tmp_path / "memory_v2" / "context_v2.sqlite3").read_bytes()
 
 
 def _uncertain_text_for(tmp_path, outcome) -> str:
@@ -1511,7 +1570,9 @@ def _uncertain_text_for(tmp_path, outcome) -> str:
             authority=authority, retry_config=RetryConfig(max_retries=3)
         )
     assert calls == [GEMINI_MODEL]  # never resent
-    assert caught.value.__cause__ is not None
+    assert caught.value.__cause__ is None
+    assert "PRIVATE" not in "".join(traceback.format_exception(caught.value))
+    _assert_same_uncertainty_after_reopen(tmp_path, authority, caught.value)
     return str(caught.value)
 
 
@@ -1520,20 +1581,35 @@ def _uncertain_text_for(tmp_path, outcome) -> str:
     [
         (
             lambda: __import__("httpx").RemoteProtocolError("PRIVATE peer closed"),
-            "durable_provider_turn_uncertain; Provider connection closed before the "
-            "response completed; the provider may still have processed it "
-            "(RemoteProtocolError)",
+            "Provider request outcome is uncertain: The connection was interrupted "
+            "(reason=connection_interrupted, phase=requesting)",
         ),
         (
             lambda: __import__("httpx").ReadError("PRIVATE reset"),
-            "durable_provider_turn_uncertain; Provider connection closed before the "
-            "response completed; the provider may still have processed it (ReadError)",
+            "Provider request outcome is uncertain: The connection was interrupted "
+            "(reason=connection_interrupted, phase=requesting)",
         ),
         (
             lambda: __import__("httpx").ConnectError("PRIVATE dns"),
-            "durable_provider_turn_uncertain; Provider connection could not be "
-            "established (ConnectError)",
+            "Provider request outcome is uncertain: The connection was interrupted "
+            "(reason=connection_interrupted, phase=requesting)",
         ),
+    ],
+)
+def test_uncertain_failures_without_http_status_say_what_happened(
+    tmp_path, outcome_factory, expected
+) -> None:
+    """Transport failures use fixed local categories and never invent HTTP metadata."""
+
+    text = _uncertain_text_for(tmp_path, outcome_factory())
+    assert text == expected
+    assert "PRIVATE" not in text
+    assert "HTTP" not in text
+
+
+@pytest.mark.parametrize(
+    ("outcome_factory", "reason"),
+    [
         (
             lambda: {
                 "candidates": [
@@ -1543,12 +1619,11 @@ def _uncertain_text_for(tmp_path, outcome) -> str:
                     }
                 ]
             },
-            "durable_provider_turn_uncertain; Provider ended the response early "
-            "(MALFORMED_FUNCTION_CALL)",
+            "MALFORMED_FUNCTION_CALL",
         ),
         (
             lambda: {"prompt_feedback": {"block_reason": "SAFETY"}},
-            "durable_provider_turn_uncertain; Provider blocked the prompt (SAFETY)",
+            "PROMPT_BLOCKED",
         ),
         (
             lambda: {
@@ -1556,18 +1631,41 @@ def _uncertain_text_for(tmp_path, outcome) -> str:
                     {"content": {"role": "model", "parts": []}, "finish_reason": "STOP"}
                 ]
             },
-            "durable_provider_turn_uncertain; Provider returned no content",
+            "EMPTY_RESPONSE",
         ),
     ],
 )
-def test_uncertain_failures_without_http_status_say_what_happened(
-    tmp_path, outcome_factory, expected
+def test_explicit_gemini_response_outcomes_are_terminal_without_http_metadata(
+    tmp_path, outcome_factory, reason
 ) -> None:
-    """#386: no provider failure surfaces as a bare code; wording is fixed and local."""
+    """An explicit response outcome is settled, unlike an interrupted stream."""
 
-    text = _uncertain_text_for(tmp_path, outcome_factory())
-    assert text == expected
-    assert "PRIVATE" not in text
+    _store_value, repository, authority, catalog = _gemini_authority(tmp_path)
+    transport, calls = _gemini_transport(catalog, [outcome_factory()])
+    with pytest.raises(DurableProviderTurnTerminalError) as caught:
+        _runtime(repository, transport).execute(
+            authority=authority, retry_config=RetryConfig(max_retries=3)
+        )
+    assert caught.value.code == "durable_provider_turn_terminal_failed"
+    assert str(caught.value) == (
+        f"durable_provider_turn_terminal_failed:non_retryable; "
+        f"Gemini generation stopped (reason={reason})"
+    )
+    assert caught.value.diagnostic.http_status is None
+    assert caught.value.diagnostic.provider_code == reason
+    assert calls == [GEMINI_MODEL]
+    assert "HTTP" not in str(caught.value)
+    assert "PRIVATE" not in "".join(traceback.format_exception(caught.value))
+    reopened = _store(tmp_path).bind_execution(ATTEMPT.generation.execution_id)
+    no_send = _Transport([])
+    with pytest.raises(DurableProviderTurnTerminalError) as recovered:
+        _runtime(reopened, no_send).execute(
+            authority=authority, retry_config=RetryConfig(max_retries=3)
+        )
+    assert str(recovered.value) == str(caught.value)
+    assert recovered.value.diagnostic == caught.value.diagnostic
+    assert no_send.calls == []
+    assert b"PRIVATE" not in (tmp_path / "memory_v2" / "context_v2.sqlite3").read_bytes()
 
 
 def test_retry_wait_hook_receives_each_retryable_failure(tmp_path) -> None:
@@ -1600,7 +1698,8 @@ def test_retry_wait_hook_receives_each_retryable_failure(tmp_path) -> None:
 
     assert outcome.result.final_text == "after two waits"
     assert calls == [GEMINI_MODEL] * 3
-    assert [(w.attempt_failed, w.next_attempt, w.max_attempts) for w in waits] == [(1, 2, 5), (2, 3, 5)]
+    # HTTP 503 is capped at two retries; the later HTTP 429 retains the configured four.
+    assert [(w.attempt_failed, w.next_attempt, w.max_attempts) for w in waits] == [(1, 2, 3), (2, 3, 5)]
     assert [w.delay_ms for w in waits] == [10, 20]
     assert [(w.diagnostic.http_status, w.diagnostic.provider_status) for w in waits] == [
         (503, "UNAVAILABLE"),
@@ -1650,4 +1749,3 @@ def test_without_a_hook_the_old_delay_is_used(tmp_path) -> None:
     )
     assert sleeps == [0.007]
     assert calls == [GEMINI_MODEL, GEMINI_MODEL]
-

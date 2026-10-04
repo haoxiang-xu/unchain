@@ -142,7 +142,11 @@ class RuntimeEventBridge:
             self._dropped_events.append(
                 {
                     "type": raw_type if isinstance(raw_type, str) else "",
-                    "event": copy.deepcopy(raw_event),
+                    "event": (
+                        {"type": "provider_retry"}
+                        if raw_type == "provider_retry"
+                        else copy.deepcopy(raw_event)
+                    ),
                 }
             )
         else:

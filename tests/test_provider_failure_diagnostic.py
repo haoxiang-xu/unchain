@@ -225,4 +225,3 @@ def test_provider_response_end_rejects_unknown_kinds():
 
     with pytest.raises(ValueError):
         ProviderResponseEndedError("private", "SAFETY")
-

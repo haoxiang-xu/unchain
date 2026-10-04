@@ -13,6 +13,46 @@ def _context():
     )
 
 
+@pytest.mark.parametrize("marker", ["retry_ordinal", "max_retries"])
+def test_retry_formats_cannot_fall_through_with_hybrid_fields(marker):
+    grouped = {
+        "type": "provider_retry", "run_id": "run-root", "iteration": 2,
+        "provider": "gemini", "http_status": 503, "provider_status": "UNAVAILABLE",
+        "attempt_failed": 1, "next_attempt": 2, "max_attempts": 3,
+        "delay_ms": 500, "remaining_ms": 500,
+    }
+    [valid] = normalize_raw_event(grouped, context=_context())
+    assert valid.payload["remaining_ms"] == 500
+    assert valid.payload["next_attempt"] == 2
+    # Even a malformed marker selects the strict ordinal-format validator;
+    # the event cannot escape into the other format's projection.
+    assert normalize_raw_event({**grouped, marker: None}, context=_context()) == []
+
+
+def test_v4_normalizes_only_bounded_gemini_retry_progress():
+    raw = {
+        "type": "provider_retry", "run_id": "run-root", "iteration": 2,
+        "timestamp": 1790970507.0, "provider": "gemini", "http_status": 503,
+        "retry_ordinal": 1, "max_retries": 2, "delay_ms": 500,
+    }
+    [event] = normalize_raw_event(raw, context=_context())
+    assert event.type == "step.delta"
+    assert event.turn_id == "run-root:turn-2"
+    assert event.links.step_id == "model:run-root:turn-2:response"
+    assert event.payload == {
+        "step_id": "model:run-root:turn-2:response",
+        "step_type": "model_response", "kind": "provider_retry",
+        "provider": "gemini", "http_status": 503,
+        "retry_ordinal": 1, "max_retries": 2, "delay_ms": 500,
+    }
+    for mutation in (
+        {"response_body": "private-provider-content"},
+        {"provider": "openai"}, {"http_status": 200},
+        {"retry_ordinal": 3}, {"delay_ms": -1},
+    ):
+        assert normalize_raw_event({**raw, **mutation}, context=_context()) == []
+
+
 def test_v4_normalizes_tool_call_to_step_started():
     events = normalize_raw_event(
         {
@@ -409,4 +449,3 @@ def test_v4_provider_retry_never_copies_unknown_fields():
     event = normalize_raw_event(raw, context=_context())[0]
     assert "message" not in event.payload and "toolkit_id" not in event.payload
     assert "PRIVATE" not in repr(event.payload)
-

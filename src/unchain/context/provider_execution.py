@@ -9,6 +9,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 
 from unchain.journal import AttemptRef, GenerationRef
+from unchain.durability import mark_durable_persistence_failure
 from unchain.journal.provider_wire import BoundProviderWireStore
 from unchain.kernel.types import ModelTurnResult
 from unchain.run_bundle import ProviderCallReceipt
@@ -264,9 +265,13 @@ class ContextProviderTurnExecutionService:
                 or identity.iteration != subject.iteration
                 or identity.retry_ordinal != send_context.physical_ordinal
             ):
-                raise ContextProviderTurnExecutionError(
-                    "provider accounting receipt changed the physical send subject"
-                )
+                # An identity mismatch at the ledger boundary is authoritative,
+                # unlike an ordinary observer failure after the provider send.
+                raise mark_durable_persistence_failure(
+                    ContextProviderTurnExecutionError(
+                        "provider accounting receipt changed the physical send subject"
+                    )
+                ) from None
             from .composition import enrich_provider_call_receipt
 
             return enrich_provider_call_receipt(
@@ -314,9 +319,11 @@ class ContextProviderTurnExecutionService:
                 or active_process_send_number is None
                 or started_at is None
             ):
-                raise ContextProviderTurnExecutionError(
-                    "provider attempt completed without a matching start"
-                )
+                raise mark_durable_persistence_failure(
+                    ContextProviderTurnExecutionError(
+                        "provider attempt completed without a matching start"
+                    )
+                ) from None
             active_send_context = None
             active_process_send_number = None
             active_started_at = None
@@ -331,14 +338,18 @@ class ContextProviderTurnExecutionService:
                 )
                 append_receipt = getattr(self._store, "append_receipt", None)
                 if not callable(append_receipt):
-                    raise ContextProviderTurnExecutionError(
-                        "durable provider store lacks the accounting ledger"
-                    )
+                    raise mark_durable_persistence_failure(
+                        ContextProviderTurnExecutionError(
+                            "durable provider store lacks the accounting ledger"
+                        )
+                    ) from None
                 durable = append_receipt(run_receipt)
                 if durable != run_receipt:
-                    raise ContextProviderTurnExecutionError(
-                        "durable provider store changed the accounting receipt"
-                    )
+                    raise mark_durable_persistence_failure(
+                        ContextProviderTurnExecutionError(
+                            "durable provider store changed the accounting receipt"
+                        )
+                    ) from None
                 if run_receipt_observed is not None:
                     run_receipt_observed(run_receipt)
             if after_attempt is not None:
@@ -376,6 +387,23 @@ class ContextProviderTurnExecutionService:
                 result,
             )
 
+        def on_retry(
+            retry_ordinal: int, max_retries: int, delay_ms: int
+        ) -> None:
+            if request.callback is None:
+                return
+            request.callback({
+                "type": "provider_retry",
+                "run_id": request.run_id,
+                "iteration": request.iteration,
+                "timestamp": time.time(),
+                "provider": "gemini",
+                "http_status": 503,
+                "retry_ordinal": retry_ordinal,
+                "max_retries": max_retries,
+                "delay_ms": delay_ms,
+            })
+
         try:
             outcome = runtime.execute(
                 authority=authority,
@@ -385,6 +413,7 @@ class ContextProviderTurnExecutionService:
                 build_run_receipt=(
                     build_run_receipt if run_receipt_factory is not None else None
                 ),
+                on_retry=on_retry if request.callback is not None and retry_wait is None else None,
                 retry_wait=retry_wait,
             )
         except BaseException:

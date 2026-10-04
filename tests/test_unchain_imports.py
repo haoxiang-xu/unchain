@@ -1,4 +1,5 @@
 import importlib
+from pathlib import Path
 
 import unchain
 
@@ -37,11 +38,11 @@ def test_unchain_common_subpackages_are_available():
     assert not hasattr(toolkits, "CodeToolkit")
     assert not hasattr(toolkits, "AskUserToolkit")
     assert hasattr(runtime, "load_model_capabilities")
-    assert "/src/unchain/kernel/" in kernel.__file__
-    assert "/src/unchain/agent/" in agent.__file__
-    assert "/src/unchain/memory/" in memory.__file__
-    assert "/src/unchain/optimizers/" in optimizers.__file__
-    assert "/src/unchain/providers/" in providers_pkg.__file__
-    assert "/src/unchain/subagents/" in subagents.__file__
-    assert "/src/unchain/tools/" in tools.__file__
-    assert "/src/unchain/toolkits/" in toolkits.__file__
+    # Both source checkouts and installed wheels must load one coherent package.
+    package_root = Path(unchain.__file__).resolve().parent
+    for module, name in (
+        (kernel, "kernel"), (agent, "agent"), (memory, "memory"),
+        (optimizers, "optimizers"), (providers_pkg, "providers"),
+        (subagents, "subagents"), (tools, "tools"), (toolkits, "toolkits"),
+    ):
+        assert Path(module.__file__).resolve().parent == package_root / name

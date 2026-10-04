@@ -1,0 +1,233 @@
+{
+  "schema": "unchain.dev390_integration_runtime_evidence.v1",
+  "bugfix_line": "ticket-383",
+  "recorded_date_utc": "2026-10-03",
+  "runtime_status": "PASS",
+  "required_host_pin": "a7fa15d685b1130bf5678c1e493a51d2551185cf",
+  "source_tree": "e9fcc714c0756a8db67b4b9811b2829161e3bc30",
+  "merge_checkpoint": "4a0add1936e0369e16d5286289b280456eb913ca",
+  "merge_parents": [
+    "0dcbf9c92a58f40de7c39d84fe35a40ff91fa8fc",
+    "358b96d723daa0d2882158985c8245c7f8c7fb23"
+  ],
+  "independent_remote_restore": "PASS",
+  "artifact": {
+    "filename": "unchain-0.2.0-py3-none-any.whl",
+    "sha256": "a88028bbb7d286d4792e49b5945f80e33d71203579298ddb053190cca1aced62",
+    "source_archive_sha256": "3366f0216d54a10944a2dad385f1f130ca9ef479f9280a9551a8cf577871e992",
+    "built_once_for_candidate": true,
+    "manifest": {
+      "manifest_digest": "sha256:b80cde70e35f93c21ed069990f26817d353e4fd1c9d3ff109cfda933f5295672",
+      "protocols": [
+        {
+          "features": [
+            "artifact_handoff",
+            "canonical_journal",
+            "chat_deletion_sqlite_scope_closure",
+            "context_compiler",
+            "context_content_paging_v1",
+            "context_content_read_recovery_v1",
+            "context_contribution_manifest_v1",
+            "generation_rebase_live_interaction_cycles",
+            "interaction_resolution_compat",
+            "long_term_promotion",
+            "memory_curator",
+            "memory_toolkit",
+            "memory_workspace",
+            "tool_output_management_v1"
+          ],
+          "id": "context_memory",
+          "major": 1,
+          "minor": 0
+        },
+        {
+          "features": [
+            "cancel_pending",
+            "expected_interaction_id_cas",
+            "fresh_run_lineage",
+            "graph_interaction_lineage_preflight_v1",
+            "host_controlled_resume",
+            "interaction_resolution_atomic_acceptance_v1"
+          ],
+          "id": "durable_interaction",
+          "major": 1,
+          "minor": 0
+        },
+        {
+          "features": [
+            "atomic_receipt_cas",
+            "auxiliary_calls",
+            "enforce_mode",
+            "graph_runs",
+            "memory_off",
+            "ollama_reasoning_preview_v1",
+            "provider_response_outcomes_v1",
+            "provider_uncertainty_diagnostics_v1",
+            "subagent_runs"
+          ],
+          "id": "provider_turn_ownership",
+          "major": 1,
+          "minor": 0
+        },
+        {
+          "features": [
+            "canonical_metrics",
+            "completion_diagnostics_ref",
+            "context_composition_ref_v1",
+            "continuation_claim",
+            "immutable_pricing_snapshot",
+            "provider_call_set_union",
+            "provider_call_usage_v1",
+            "run_bundle_v1",
+            "run_bundle_v2"
+          ],
+          "id": "run_bundle",
+          "major": 1,
+          "minor": 0
+        },
+        {
+          "features": [
+            "active_skills_snapshot_v1",
+            "catalog_v1",
+            "skill_md_registry_v1",
+            "skill_tool_v1",
+            "toolkit_embedded_skills_v1",
+            "user_invocation_v1"
+          ],
+          "id": "skills",
+          "major": 1,
+          "minor": 0
+        }
+      ],
+      "runtime": "unchain",
+      "schema": "unchain.runtime_protocol_manifest.v1"
+    },
+    "byte_verification": {
+      "wheel_entries_verified": 351,
+      "package_entries_verified_against_clean_source": 346,
+      "excluded_installer_metadata": [
+        "unchain-0.2.0.dist-info/RECORD"
+      ],
+      "result": "all immutable wheel entries match; pip rewrites RECORD at installation"
+    }
+  },
+  "environment": {
+    "python": "3.12.14 (main, Aug 25 2026, 14:00:49) [Clang 22.1.3 ]",
+    "dependencies": {
+      "anthropic": "1.11.0",
+      "google-genai": "2.28.0",
+      "openai": "3.24.0",
+      "pytest": "9.1.1",
+      "httpx": "0.28.1",
+      "mcp": "1.30.0",
+      "socksio": "1.0.0",
+      "setuptools": "84.0.0",
+      "wheel": "0.48.0"
+    }
+  },
+  "tests": {
+    "focused": {
+      "status": "PASS",
+      "passed": 73
+    },
+    "full_source": {
+      "status": "PASS",
+      "passed": 4239,
+      "skipped": 3,
+      "deselected": 12,
+      "xfailed": 5,
+      "failed": 0,
+      "seconds": 117.16
+    },
+    "full_installed": {
+      "status": "PASS",
+      "passed": 4239,
+      "skipped": 3,
+      "deselected": 12,
+      "xfailed": 5,
+      "failed": 0,
+      "seconds": 126.7
+    },
+    "independent_source_critical": {
+      "status": "PASS",
+      "passed": 237
+    },
+    "independent_installed_critical": {
+      "status": "PASS",
+      "passed": 355
+    }
+  },
+  "legacy_v1_rpc_smoke": {
+    "status": "PASS",
+    "source_commit": "a7fa15d685b1130bf5678c1e493a51d2551185cf",
+    "rpc_v1_roundtrips": 13,
+    "diagnostic_unknown_hybrid_negatives": 7,
+    "lease_hybrid_negatives": 3,
+    "legacy_diagnostic": {
+      "schema": "unchain.provider_failure_diagnostic.v1",
+      "http_status": 503,
+      "provider_code": "UNAVAILABLE",
+      "parameter": ""
+    },
+    "canonical_lease_sha256": "60a9138df7b0006adcb001b69c60de24716be28b32b572901002420a5e6adcb8",
+    "sqlite_exact_bytes_and_hash_after_reopen": true,
+    "terminal_no_resend": true,
+    "actual_macos_database_record": "NOT_ACCESSIBLE_NOT_RUN"
+  },
+  "log_digests": {
+    "build.log": {
+      "sha256": "fd6b430b346bbbb2011d0317706c22db4b960a6772414739bf79f372a99db463"
+    },
+    "full-source.log": {
+      "sha256": "f52e26375a5c4ceaf6573610b85322a781c2a4771379c23ce7e8e55b6d67beaa"
+    },
+    "full-installed.log": {
+      "sha256": "857633345f5a20681c4134c5730ce476aa06cc0dcdae1f0f5dae761105aa7d2c"
+    },
+    "legacy-v1-smoke.log": {
+      "sha256": "7e355317d6cb4352433f4b54a24683285184eba72ec203190ad80e1e0cae124a"
+    },
+    "known-exclusions.log": {
+      "sha256": "06d012765975982a4a95d9b6d6ea0acb2ff0075dc71fd4943ab36218f4ee6c9a"
+    }
+  },
+  "limits": {
+    "live_provider": "NOT_RUN_12_DESELECTED",
+    "live_mcp": "NOT_RUN_OPT_IN",
+    "windows_native": "NOT_RUN_2_SKIPPED",
+    "inherited_strict_xfail": "4_VIRTUAL_PATH_CASES_1_RECALL_ORDERING_CASE",
+    "actual_macos_database": "NOT_ACCESSIBLE_NOT_RUN",
+    "owner_profile_restart": "NOT_RUN",
+    "host_pair_electron_ci": "TRACKED_SEPARATELY",
+    "frozen_desktop_package": "NOT_RUN_IN_RUNTIME_QUALIFICATION",
+    "remote_ci": "NOT_ESTABLISHED_EVENT_BRANCH_FILTER_LIMITATION",
+    "pr47_base_retarget": "DEFERRED"
+  },
+  "prohibited_actions_performed": [],
+  "independent_review": {
+    "verdict": "PASS_SCOPED_RUNTIME",
+    "report": "ticket-383-dev390-independent-review.md",
+    "report_sha256": "a2dac54adc56d5490d8b3119e2363f01101e8aa93339de485979c845106e631d",
+    "review_record_sha256": "adf076f84801594109a848dcbb80db6a6e9d00a381758df2c429137d238999e8"
+  },
+  "remote_ci": {
+    "status": "NOT_RUN",
+    "workflow": ".github/workflows/ci.yml",
+    "pull_request_base_filter": [
+      "dev",
+      "main"
+    ],
+    "push_branch_filter": [
+      "dev",
+      "main"
+    ],
+    "workflow_dispatch": false,
+    "pr47_current_base": "codex/ticket-386-gemini-5xx-catalog",
+    "verified_zero_run_heads": [
+      "a7fa15d685b1130bf5678c1e493a51d2551185cf",
+      "4a0add1936e0369e16d5286289b280456eb913ca"
+    ],
+    "retarget": "DEFERRED_OUTSIDE_AUTHORIZED_SCOPE",
+    "host_qa_substitutes_standalone_runtime_ci": false
+  }
+}
