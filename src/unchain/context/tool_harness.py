@@ -89,6 +89,28 @@ class ContextToolAuthorityHarness(BaseRuntimeHarness):
                 )
             )
         receipt = self.runtime.execute_prepared_tool(context, permit)
+        if type(receipt) is DurableToolApprovalPending:
+            suspend_op = build_tool_approval_suspend_request(
+                interaction_request=receipt.interaction_request,
+                continuation=receipt.continuation,
+            )
+            return CapabilityOutcome(delta=RunDelta(
+                created_by=f"context.{self.name}",
+                context_ops=(suspend_op,),
+                state_updates={
+                    "run_status": "awaiting_interaction",
+                    "last_continuation": receipt.continuation,
+                    "pending_tool_calls": list(context.event.get("tool_calls") or []),
+                    "tool_batch_state": batch_state,
+                },
+                trace={
+                    "awaiting_tool_approval": True,
+                    "tool_call": tool_call.name,
+                    "call_id": tool_call.call_id,
+                    "interaction_id": receipt.interaction_request["interaction_id"],
+                    "context_v2_tool_authority": True,
+                },
+            ))
 
         project_result = getattr(self.runtime, "project_tool_result_for_model", None)
         if callable(project_result):

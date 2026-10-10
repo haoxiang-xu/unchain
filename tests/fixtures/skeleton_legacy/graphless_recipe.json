@@ -1,0 +1,1 @@
+{"name":"Default","description":"d","model":null,"max_iterations":null,"agent":{"prompt_format":"soul","prompt":"{{USE_BUILTIN_DEVELOPER_PROMPT}}"},"toolkits":[],"subagent_pool":[],"merge_with_user_selected":true,"subagent_profile":{}}

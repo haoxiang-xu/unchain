@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 
 import pytest
 
@@ -11,7 +12,7 @@ from unchain.context import (
     resolve_context_budget,
 )
 from unchain.context.compiler import JournalMessageProjectionError
-from unchain.journal import ResourceRef
+from unchain.journal import AttemptRef, EventCursor, GenerationRef, ResourceRef
 
 
 def _request(*events: dict) -> ContextCompileRequest:
@@ -58,6 +59,56 @@ def _history_payload(messages: tuple[dict, ...]) -> dict:
         if "MEMORY_V2_UNTRUSTED_HISTORY" in str(item.get("content") or "")
     )
     return json.loads(message["content"].split("\n", 2)[2])
+
+
+def _subagent_settlement(*, outputs: dict, expected_outputs: dict) -> dict:
+    """Build a settlement whose descriptor is bound to expected child bytes."""
+
+    consumer = AttemptRef(
+        GenerationRef("execution-1", "generation-1"), "attempt-current"
+    )
+    source = AttemptRef(
+        GenerationRef("execution-1", "generation-1"), "attempt-child"
+    )
+    completion = {
+        "schema": "unchain.skeleton_child_completion.v1",
+        "status": "completed",
+        "outputs": expected_outputs,
+        "error": "",
+        "summary": expected_outputs["message"],
+    }
+    encoded = json.dumps(
+        completion, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
+    return _event(
+        "skeleton.subagent_tool_settlement",
+        "event-settlement",
+        2,
+        attempt_id="attempt-current",
+        schema="unchain.skeleton_subagent_tool_settlement.v2",
+        consumer_attempt=consumer.to_dict(),
+        source_attempt=source.to_dict(),
+        call_id="call-child",
+        tool_name="delegate_to_subagent",
+        status="completed",
+        outputs=outputs,
+        error="",
+        summary=expected_outputs["message"],
+        full_output_ref=ResourceRef("artifact", "child-output", 1).to_dict(),
+        result_bytes=len(encoded),
+        result_sha256=sha256(encoded).hexdigest(),
+        handoff_cursor=EventCursor(1, "event-handoff").to_dict(),
+    )
+
+
+def test_subagent_settlement_rejects_output_not_bound_to_child_artifact() -> None:
+    event = _subagent_settlement(
+        outputs={"message": "FORGED_CHILD_RESULT"},
+        expected_outputs={"message": "child done"},
+    )
+
+    with pytest.raises(ContextCompilerError, match="does not match its child artifact"):
+        ContextCompiler().compile(_request(event))
 
 
 @pytest.mark.parametrize(

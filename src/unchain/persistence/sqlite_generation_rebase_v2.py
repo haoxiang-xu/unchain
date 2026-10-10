@@ -91,7 +91,7 @@ _GRAPH_INTERACTION_RESOLUTION_EVENT_TYPES = INTERACTION_RESOLUTIONS
 _ATTEMPT_TERMINAL_EVENT_TYPES = CANONICAL_ATTEMPT_TERMINALS
 _TOOL_INTENT_EVENT_TYPES = frozenset({"tool_call"})
 _TOOL_STARTED_EVENT_TYPES = frozenset({"tool.started"})
-_TOOL_SEALED_EVENT_TYPES = frozenset({"tool.subagent_completion.sealed"})
+_TOOL_SEALED_EVENT_TYPES = frozenset({"tool.subagent_completion.sealed", "tool.hook_raw.sealed"})
 _TOOL_RESULT_EVENT_TYPES = frozenset({"tool.result", "tool_result"})
 _TOOL_LIFECYCLE_EVENT_TYPES = (
     _TOOL_INTENT_EVENT_TYPES
@@ -3150,6 +3150,21 @@ class SQLiteGenerationRebaseV2Service:
             self._store,
             intent.execution_id,
         )
+        from unchain.skeleton.rebase_quiescence import (
+            SkeletonRebaseQuiescenceError,
+            classify_skeleton_attempts,
+        )
+
+        try:
+            skeleton_attempts = classify_skeleton_attempts(
+                runtime_events, artifact_repository,
+            )
+        except SkeletonRebaseQuiescenceError as error:
+            raise _journal_incompatible(
+                "generation rebase Skeleton execution evidence is invalid",
+                reason=GenerationRebaseFailureReason.JOURNAL_AUTHORITY_INVALID,
+                event=runtime_events[-1],
+            ) from error
 
         blocked_failures: list[
             tuple[str, GenerationRebaseFailureReason, Mapping[str, Any]]
@@ -3497,6 +3512,19 @@ class SQLiteGenerationRebaseV2Service:
                     ),
                     event=graph_events[0],
                 )
+
+            skeleton_status = skeleton_attempts.get(attempt_id)
+            if skeleton_status == "quiescent":
+                continue
+            if skeleton_status == "open":
+                blocked_failures.append(
+                    (
+                        "generation rebase found an unfinished Skeleton attempt",
+                        GenerationRebaseFailureReason.ATTEMPT_OPEN,
+                        _failure_subject_for_event(attempt_events[-1]),
+                    )
+                )
+                continue
 
             selection = select_attempt_terminal(attempt_events)
             if selection.ambiguous:

@@ -92,6 +92,7 @@ TOOL_EXECUTION_RECEIPT_TYPES = frozenset(
         "tool_call",
         "tool.started",
         "tool.subagent_completion.sealed",
+        "tool.hook_raw.sealed",
         "tool_result",
         "tool.result",
     }

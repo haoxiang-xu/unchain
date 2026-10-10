@@ -13,7 +13,7 @@ from types import MappingProxyType
 from typing import Any, Callable, ClassVar
 from urllib.parse import unquote, urlsplit
 
-from unchain.journal import EventCursor, EventRange, ResourceRef
+from unchain.journal import AttemptRef, EventCursor, EventRange, ResourceRef
 from unchain.context_content import (
     ContextContentProtocolError,
     canonical_context_output_read_handle,
@@ -170,6 +170,7 @@ _CONTEXT_CONSUMED_EVENT_TYPES = (
             "human_input_requested",
             "interaction_resolved",
             "interaction.resolved",
+            "skeleton.subagent_tool_settlement",
         }
     )
 )
@@ -405,6 +406,7 @@ class _ContextCompilePass:
 class _CheckpointBinding:
     request: CheckpointRequest
     checkpoint_ref: ResourceRef
+    compression: dict | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.request, CheckpointRequest):
@@ -1843,7 +1845,9 @@ def _canonical_journal_message_projection(
         if event_type in {"message.user", "message.assistant"}:
             if not attempt_id or not run_id:
                 raise JournalMessageProjectionError("message_scope_invalid")
-            if not is_root:
+            # A child/node may read its own explicitly bound inputs and turns.
+            # Its parent and siblings still exclude these private messages.
+            if not is_root and not (attempt_id == request.attempt_id and run_id == attempt_id):
                 continue
             cursor = _required_semantic_event_cursor(raw, event)
             expected_role = event_type.split(".", 1)[1]
@@ -2383,6 +2387,11 @@ def _tool_event_attempt_id(
     ).strip()
 
 
+def _is_current_attempt_event(event, request):
+    return bool(request.attempt_id and event.get("attempt_id") == request.attempt_id
+                and event.get("run_id") == request.attempt_id)
+
+
 def _native_tool_result_payload(event: Mapping[str, Any]) -> dict[str, Any]:
     managed_projection = event.get("model_projection")
     if isinstance(managed_projection, Mapping):
@@ -2559,10 +2568,10 @@ def _current_completed_tool_batch(
         if str(event.get("type") or "") == "tool_call"
         and event.get("iteration") == iteration
         and _tool_event_attempt_id(event, request) == attempt_id
-        and not _interaction_is_child(
+        and (_is_current_attempt_event(event, request) or not _interaction_is_child(
             event,
             root_attempt_id=request.attempt_id or "",
-        )
+        ))
     ]
     results_with_indexes = [
         (event_index, event)
@@ -2570,10 +2579,10 @@ def _current_completed_tool_batch(
         if str(event.get("type") or "") == "tool_result"
         and event.get("iteration") == iteration
         and _tool_event_attempt_id(event, request) == attempt_id
-        and not _interaction_is_child(
+        and (_is_current_attempt_event(event, request) or not _interaction_is_child(
             event,
             root_attempt_id=request.attempt_id or "",
-        )
+        ))
     ]
     if not calls_with_indexes or not results_with_indexes:
         return None
@@ -2836,6 +2845,78 @@ def _is_durable_handoff_event(event: Mapping[str, Any]) -> bool:
     )
 
 
+def _subagent_tool_settlement(event: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate the immutable terminal result that supersedes a child wait."""
+
+    expected = {
+        "schema", "consumer_attempt", "source_attempt", "call_id", "tool_name",
+        "status", "outputs", "error", "full_output_ref", "result_bytes",
+        "result_sha256", "handoff_cursor", "summary",
+    }
+    if (
+        (set(event) & expected) != expected
+        or event.get("schema") != "unchain.skeleton_subagent_tool_settlement.v2"
+    ):
+        raise ContextCompilerError("subagent tool settlement has an invalid shape")
+    try:
+        consumer_attempt = AttemptRef.from_dict(event["consumer_attempt"])
+        source_attempt = AttemptRef.from_dict(event["source_attempt"])
+        handoff_cursor = EventCursor.from_dict(event["handoff_cursor"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ContextCompilerError("subagent tool settlement identity is invalid") from exc
+    if (consumer_attempt.to_dict() != event["consumer_attempt"]
+            or source_attempt.to_dict() != event["source_attempt"]
+            or source_attempt == consumer_attempt
+            or handoff_cursor.to_dict() != event["handoff_cursor"]):
+        raise ContextCompilerError("subagent tool settlement identity changed")
+    call_id = event.get("call_id")
+    tool_name = event.get("tool_name")
+    if (type(call_id) is not str or not call_id.strip()
+            or type(tool_name) is not str or not tool_name.strip()):
+        raise ContextCompilerError("subagent tool settlement call identity is invalid")
+    status = event.get("status")
+    outputs = event.get("outputs")
+    error = event.get("error")
+    summary = event.get("summary")
+    if (status not in {"completed", "failed", "cancelled", "outcome_unknown"}
+            or outputs is not None and type(outputs) is not dict
+            or type(error) is not str
+            or type(summary) is not str):
+        raise ContextCompilerError("subagent tool settlement outcome is invalid")
+    full_output_ref = _compact_ref(event.get("full_output_ref"))
+    result_bytes = event.get("result_bytes")
+    result_sha256 = event.get("result_sha256")
+    if (full_output_ref is None or full_output_ref["kind"] != "artifact"
+            or isinstance(result_bytes, bool) or not isinstance(result_bytes, int)
+            or result_bytes < 0 or type(result_sha256) is not str
+            or len(result_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in result_sha256)):
+        raise ContextCompilerError("subagent tool settlement descriptor is invalid")
+    canonical_completion = {
+        "schema": "unchain.skeleton_child_completion.v1",
+        "status": status,
+        "outputs": _plain(outputs),
+        "error": error,
+        "summary": summary,
+    }
+    expected_bytes, expected_sha256 = _fingerprint(canonical_completion)
+    if (result_bytes != expected_bytes or result_sha256 != expected_sha256):
+        raise ContextCompilerError(
+            "subagent tool settlement outcome does not match its child artifact"
+        )
+    return {
+        "call_id": call_id,
+        "tool_name": tool_name,
+        "result": canonical_completion,
+        "durable_full_output_ref": full_output_ref,
+        "model_full_output_ref": full_output_ref,
+        "has_model_projection": False,
+        "model_projection_policy": None,
+        "result_bytes": result_bytes,
+        "result_sha256": result_sha256,
+    }
+
+
 def _neutral_context(
     request: ContextCompileRequest,
     *,
@@ -2883,6 +2964,7 @@ def _neutral_context(
                 root_attempt_id=request.attempt_id or "",
             )
             and event_type != "handoff.recorded"
+            and not _is_current_attempt_event(event, request)
         ):
             continue
         consumed = event_index in message_dependency_indexes
@@ -2967,6 +3049,17 @@ def _neutral_context(
                     else {}
                 ),
             }
+        elif event_type == "skeleton.subagent_tool_settlement":
+            settlement = _subagent_tool_settlement(event)
+            if consumer_attempt := event.get("consumer_attempt"):
+                if request.attempt_id and consumer_attempt.get("attempt_id") != request.attempt_id:
+                    raise ContextCompilerError("subagent tool settlement escaped consumer attempt")
+            call_id = settlement["call_id"]
+            prior = results.get(call_id)
+            if prior is not None and prior.get("tool_name") != settlement["tool_name"]:
+                raise ContextCompilerError("subagent tool settlement changed tool identity")
+            results[call_id] = settlement
+            consumed = True
         elif event_type in {
             "interaction_requested",
             "interaction.requested",
@@ -3188,6 +3281,17 @@ def _neutral_context(
         task_state = _plain(request.task_state)
         task_state.pop("covered_through_store_seq", None)
         payload["pinned_task_state"] = task_state
+    # A managed projection is the only model-visible representation. The
+    # sealed execution artifact's preview may still contain unreduced bytes.
+    managed_cursors = {
+        (event.get("event_id"), event.get("store_seq"))
+        for _index, _raw, event in projection_events
+        if event.get("type") == "tool_result" and "model_projection" in event
+    }
+    for record in pending_inputs:
+        if record.get("type") == "tool_result" and (record.get("event_id"), record.get("store_seq")) in managed_cursors:
+            record.pop("preview", None)
+            record.pop("preview_truncated", None)
     if native_batch is not None:
         for record in pending_inputs:
             if (
@@ -3330,6 +3434,7 @@ def _reduce(
     checkpoint_ref_resolver: (
         Callable[[CheckpointRequest], ResourceRef | None] | None
     ) = None,
+    compression: dict | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], tuple[CheckpointRequest, ...]]:
     if isinstance(minimum_cutoff, bool) or not isinstance(minimum_cutoff, int):
         raise TypeError("minimum_cutoff must be an integer")
@@ -3583,6 +3688,7 @@ def _reduce(
                     checkpoint_ref=projection_ref,
                     request=candidate_checkpoint_request,
                     omitted_complete_turns=cutoff,
+                    compression=compression,
                 )
                 checkpoint_message[
                     _CHECKPOINT_MARKER_KEY
@@ -3740,6 +3846,7 @@ def _portable_projection(
                 event,
                 root_attempt_id=request.attempt_id or "",
             )
+            or _is_current_attempt_event(event, request)
             or str(event.get("type") or "") == "handoff.recorded"
         ]
         results = {
@@ -4054,6 +4161,7 @@ class ContextCompiler:
             Callable[[CheckpointRequest], ResourceRef | None] | None
         ) = None,
         current_provider_turn: _CurrentProviderTurnProjection | None = None,
+        compression: dict | None = None,
     ) -> _CoreCompilation:
         _validate_generation_scope(request)
         if journal_projection is None:
@@ -4130,6 +4238,7 @@ class ContextCompiler:
                 journal_projection=journal_projection,
                 minimum_cutoff=minimum_checkpoint_cutoff,
                 checkpoint_ref_resolver=checkpoint_ref_resolver,
+                compression=compression,
             )
         except ContextBudgetExceededError as original_error:
             if checkpoint_covered_through_store_seq is not None:
@@ -4308,6 +4417,7 @@ class ContextCompiler:
             minimum_checkpoint_cutoff=minimum_checkpoint_cutoff,
             checkpoint_ref_resolver=checkpoint_ref_resolver,
             current_provider_turn=current_provider_turn,
+            compression=None if checkpoint_binding is None else checkpoint_binding.compression,
         )
         result = compiled.result
         if checkpoint_binding is None:
@@ -4343,6 +4453,7 @@ class ContextCompiler:
             checkpoint_ref=checkpoint_binding.checkpoint_ref,
             request=checkpoint_request,
             omitted_complete_turns=omitted_complete_turns,
+            compression=checkpoint_binding.compression,
         )
         if len(compiled.checkpoint_markers) != 1:
             raise ContextCompilerError("checkpoint_consumption_invalid")

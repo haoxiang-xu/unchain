@@ -43,6 +43,7 @@ class HostResolvedDerivedHandoffInput:
     operation_id: str
     artifact_refs: tuple[ResourceRef, ...] = ()
     summary: Any = None
+    message_index: int = 0
 
     def __post_init__(self) -> None:
         if not isinstance(self.consumer_attempt, AttemptRef):
@@ -102,6 +103,8 @@ class HostResolvedDerivedHandoffInput:
                 "summary",
                 _freeze_json(self.summary, path="summary"),
             )
+        if (type(self.message_index) is not int or self.message_index < 0):
+            raise ValueError("derived handoff message_index is invalid")
 
 
 @dataclass(frozen=True)
@@ -452,7 +455,7 @@ class DerivedHandoffInputIngress:
             HostResolvedCurrentInput(
                 attempt=self._consumer_attempt,
                 content=content,
-                message_index=0,
+                message_index=current_input.message_index,
                 attachments=(attachment,),
             )
         )

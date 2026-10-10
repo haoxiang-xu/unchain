@@ -56,6 +56,7 @@ from .compiler import (
     project_canonical_journal_messages,
 )
 from .models import ContextCompileRequest
+from .node_memory_view import NodeMemoryView
 from .artifacts import ArtifactService
 from .request_factory import _graph_seed_projections
 from .journal_view_cache import JournalSnapshotSource, RunLocalJournalViewCache
@@ -102,6 +103,13 @@ _DURABLE_INTERNAL_EVENT_TYPES = frozenset(
         "tool.catalog_snapshot",
         "provider.wire_snapshot",
         "provider.turn_result",
+        "context.node_memory_view",
+        "context.compression_intent",
+        "context.compression_result",
+        "skeleton.workflow_execution.saved",
+        "skeleton.kernel_result.saved",
+        "skeleton.hook_phase.receipt",
+        "tool.hook_raw.sealed",
     }
 )
 ProviderTurnResultArtifactReader = Callable[..., bytes]
@@ -631,6 +639,19 @@ def _verified_current_provider_turn(
                         "current native tool batch is incomplete or conflicting"
                     )
         return None
+    if all(not event.get("source_provider") for _event_index, event in batch.calls):
+        # Host-authored deterministic Tool events have no provider-native frame.
+        # They retain the neutral managed projection. A recorded provider turn
+        # cannot lose this identity and use that fallback to bypass replay checks.
+        iterations = {event.get("iteration") for _event_index, event in batch.calls}
+        if any(event.event_type == "provider.turn_result"
+               and event.attempt.attempt_id == request.attempt_id
+               and event.payload.get("iteration") in iterations
+               for event in generation_events):
+            raise ContextCompileCoordinatorError(
+                "current native tool batch provider identity is missing"
+            )
+        return None
     if any(
         event.get("source_provider") != provider
         for _event_index, event in batch.calls
@@ -759,6 +780,7 @@ def _prepare_journal_view(
     snapshot: JournalSnapshot,
     artifacts: ArtifactService | None = None,
     provider_turn_result_reader: ProviderTurnResultArtifactReader | None = None,
+    node_memory_view: NodeMemoryView | None = None,
 ) -> tuple[ContextCompileRequest, _PreparedJournalView]:
     if not isinstance(snapshot, JournalSnapshot):
         raise ContextCompileCoordinatorError("journal did not return a JournalSnapshot")
@@ -777,6 +799,15 @@ def _prepare_journal_view(
         for event in snapshot.events
         if event.attempt.generation.generation_id == generation_id
     )
+    if node_memory_view is not None:
+        if (node_memory_view.attempt.generation.execution_id != request.execution_id
+                or node_memory_view.attempt.generation.generation_id != request.generation_id
+                or node_memory_view.attempt.attempt_id != request.attempt_id):
+            raise ContextCompileCoordinatorError("node memory view request scope mismatch")
+        try:
+            generation_events = node_memory_view.select(snapshot)
+        except (TypeError, ValueError) as exc:
+            raise ContextCompileCoordinatorError("node memory view is invalid") from exc
     semantic_receipt_events = tuple(
         event
         for event in generation_events
@@ -823,13 +854,35 @@ def _prepare_journal_view(
         semantic_events=tuple(semantic_events),
         pending_task_inputs=pending_task_inputs,
     )
-    projected_request = project_canonical_journal_messages(snapshot_request)
+    journal_projection = _canonical_journal_message_projection(snapshot_request)
+    if node_memory_view is not None and node_memory_view.current_root_attempt_id is not None:
+        # Validate the original canonical attachment receipts first, then apply
+        # the persisted node policy to effective model/checkpoint messages.
+        # Original events, cursors and hashes remain unchanged.
+        current_root_cursors = {
+            (event.event_id, event.store_seq)
+            for event in generation_events
+            if event.event_type == "message.user"
+            and event.attempt.attempt_id == node_memory_view.current_root_attempt_id
+            and event.attempt.generation == node_memory_view.attempt.generation
+        }
+        candidates = []
+        for cursor, message in journal_projection.candidates:
+            effective = dict(message)
+            if cursor in current_root_cursors and "attachments" in effective:
+                effective.pop("attachments")
+                if not str(effective.get("content") or "").strip():
+                    continue
+            candidates.append((cursor, effective))
+        journal_projection = replace(journal_projection, candidates=tuple(candidates))
+    projected_request = project_canonical_journal_messages(
+        snapshot_request, journal_projection=journal_projection,
+    )
     current_provider_turn = _verified_current_provider_turn(
         request=projected_request,
         generation_events=generation_events,
         artifact_reader=provider_turn_result_reader,
     )
-    journal_projection = _canonical_journal_message_projection(projected_request)
     bound_source_indexes = {
         cursor.message_index for cursor in projected_request.source_message_cursors
     }
@@ -1192,6 +1245,7 @@ def _verify_checkpoint_consumption(
     compiled: _ContextCompilePass,
     checkpoint: CheckpointRequest,
     prepared: PreparedCheckpoint,
+    compression: dict | None = None,
 ) -> _CheckpointConsumption:
     if len(compiled.consumptions) != 1:
         raise ContextCompileCoordinatorError(
@@ -1213,6 +1267,7 @@ def _verify_checkpoint_consumption(
         checkpoint_ref=prepared.checkpoint_ref,
         request=checkpoint,
         omitted_complete_turns=consumption.omitted_complete_turns,
+        compression=compression,
     )
     messages = compiled.result.messages
     if (
@@ -1291,6 +1346,8 @@ class ContextCompileCoordinator:
         artifacts: ArtifactService | None = None,
         provider_turn_result_reader: ProviderTurnResultArtifactReader | None = None,
         journal_snapshot_source: JournalSnapshotSource | None = None,
+        node_memory_view: NodeMemoryView | None = None,
+        compression_service=None,
     ) -> None:
         if not isinstance(journal, BoundExecutionJournal):
             raise TypeError("journal must be a BoundExecutionJournal")
@@ -1326,6 +1383,19 @@ class ContextCompileCoordinator:
             raise TypeError("provider turn result artifact reader must be callable")
         self._artifacts = artifacts
         self._provider_turn_result_reader = provider_turn_result_reader
+        if node_memory_view is not None and (
+            type(node_memory_view) is not NodeMemoryView
+            or node_memory_view.attempt.generation.execution_id != journal.execution_id
+        ):
+            raise ContextCompileCoordinatorError("node memory view scope mismatch")
+        self._node_memory_view = node_memory_view
+        if compression_service is not None:
+            from .compression import ContextCompressionService
+            if (type(compression_service) is not ContextCompressionService
+                    or compression_service.journal is not journal
+                    or node_memory_view is None or compression_service.attempt != node_memory_view.attempt):
+                raise ContextCompileCoordinatorError("compression requires an exact node-bound service")
+        self._compression_service = compression_service
         self._compiler = ContextCompiler()
         self._journal = journal
         self._checkpoint_repository = checkpoint_repository
@@ -1346,6 +1416,14 @@ class ContextCompileCoordinator:
     @property
     def journal(self) -> BoundExecutionJournal:
         return self._journal
+
+    @property
+    def node_memory_view(self) -> NodeMemoryView | None:
+        return self._node_memory_view
+
+    @property
+    def compression_service(self):
+        return self._compression_service
 
     @property
     def model_projection(self) -> ModelContextProjection | None:
@@ -1382,6 +1460,7 @@ class ContextCompileCoordinator:
                 snapshot=snapshot,
                 artifacts=self._artifacts,
                 provider_turn_result_reader=self._provider_turn_result_reader,
+                node_memory_view=self._node_memory_view,
             )
             self._verify_input_trigger_claim(request, journal_view.input_receipt)
         except Exception as error:
@@ -1390,12 +1469,18 @@ class ContextCompileCoordinator:
 
         first: _ContextCompilePass | None = None
         final: _ContextCompilePass | None = None
+        build_snapshot = journal_view.snapshot
+        compression = None
         consumptions: tuple[_CheckpointConsumption, ...] = ()
         planned_checkpoint_refs: dict[str, ResourceRef] = {}
 
         def prospective_checkpoint_ref(
             checkpoint: CheckpointRequest,
         ) -> ResourceRef | None:
+            # Compression changes the checkpoint operation identity. Bind and
+            # budget its actual prepared ref after the durable summary receipt.
+            if self._compression_service is not None:
+                return None
             existing = planned_checkpoint_refs.get(checkpoint.request_id)
             if existing is not None:
                 return existing
@@ -1485,6 +1570,23 @@ class ContextCompileCoordinator:
                     checkpoint=checkpoint_request,
                     view=journal_view,
                 )
+                if self._compression_service is not None:
+                    budget = prepared_request.budget
+                    target_tokens = min(256, max(32, budget.available_input_tokens // 8))
+                    compression = self._compression_service.compress(checkpoint_request,
+                        materialization.source_messages, target_tokens=target_tokens)
+                    build_snapshot = self._compression_service.source_snapshot(compression)
+                    package = json.loads(materialization.summary)
+                    package["schema"] = "unchain.context_checkpoint_payload.v3"
+                    package["compression"] = compression
+                    content = _canonical_bytes(package)
+                    if len(content) > MAX_CHECKPOINT_PAYLOAD_BYTES:
+                        raise ContextCompileCoordinatorError("compressed checkpoint package exceeds limit")
+                    operation_payload = {"checkpoint_request": checkpoint_request.to_dict(),
+                        "summary_sha256": hashlib.sha256(content).hexdigest(),
+                        "refs": [ref.to_dict() for ref in materialization.refs]}
+                    materialization = replace(materialization, summary=content.decode("utf-8"),
+                        operation=_operation("context-checkpoint." + compression["operation_id"], operation_payload))
             except Exception as error:
                 self._mark_partial(request, error)
                 raise
@@ -1516,6 +1618,7 @@ class ContextCompileCoordinator:
                     checkpoint_binding=_CheckpointBinding(
                         request=checkpoint_request,
                         checkpoint_ref=prepared.checkpoint_ref,
+                        compression=compression,
                     ),
                     journal_projection=journal_view.journal_projection,
                     current_provider_turn=journal_view.current_provider_turn,
@@ -1524,6 +1627,7 @@ class ContextCompileCoordinator:
                     compiled=bound,
                     checkpoint=checkpoint_request,
                     prepared=prepared,
+                    compression=compression,
                 )
             except ContextCompilerError as error:
                 if str(error) != "checkpoint_consumption_invalid":
@@ -1598,7 +1702,7 @@ class ContextCompileCoordinator:
         try:
             recorded = self._record_build(
                 model_result,
-                snapshot=journal_view.snapshot,
+                snapshot=build_snapshot,
                 consumptions=consumptions,
                 trigger_cursor=EventCursor(
                     store_seq=journal_view.input_receipt.store_seq,

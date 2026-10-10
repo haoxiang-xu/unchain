@@ -10,6 +10,9 @@ from ..kernel.delta import SuspendSignal
 from ..kernel.types import ToolCall
 
 
+_SUBAGENT_WAIT_MARKER_SCHEMA = "unchain.skeleton_subagent_wait_marker.v1"
+
+
 @dataclass(frozen=True)
 class ToolRuntimeOutcome:
     handled: bool = True
@@ -18,6 +21,66 @@ class ToolRuntimeOutcome:
     state_updates: dict[str, Any] = field(default_factory=dict)
     should_observe: bool = False
     suspend_override: SuspendSignal | None = None
+
+
+def decode_subagent_wait_marker_details(
+    content: Any,
+) -> tuple[str, dict[str, Any], dict[str, str] | None] | None:
+    """Decode the internal terminal marker emitted for a durable child wait."""
+    if type(content) is not str:
+        return None
+    try:
+        value = json.loads(content)
+    except (TypeError, ValueError):
+        return None
+    if (type(value) is not dict or set(value) not in (
+            {"schema", "wait_id", "request"},
+            {"schema", "wait_id", "request", "parent_tool_call"},
+        )
+            or value.get("schema") != _SUBAGENT_WAIT_MARKER_SCHEMA
+            or type(value.get("wait_id")) is not str or not value["wait_id"]
+            or type(value.get("request")) is not dict):
+        return None
+    parent_tool_call = value.get("parent_tool_call")
+    if parent_tool_call is not None and (
+        type(parent_tool_call) is not dict
+        or set(parent_tool_call) != {"call_id", "tool_name"}
+        or any(type(item) is not str or not item.strip() for item in parent_tool_call.values())
+    ):
+        return None
+    return value["wait_id"], copy.deepcopy(value["request"]), copy.deepcopy(parent_tool_call)
+
+
+def decode_subagent_wait_marker(content: Any) -> tuple[str, dict[str, Any]] | None:
+    """Decode a marker while retaining the legacy two-value consumer contract."""
+
+    decoded = decode_subagent_wait_marker_details(content)
+    return None if decoded is None else decoded[:2]
+
+
+def subagent_wait_outcome(signal, context) -> ToolRuntimeOutcome:
+    marker_payload = {
+        "schema": _SUBAGENT_WAIT_MARKER_SCHEMA,
+        "wait_id": signal.wait_id,
+        "request": signal.request,
+    }
+    if signal.parent_tool_call is not None:
+        marker_payload["parent_tool_call"] = signal.parent_tool_call
+    marker = json.dumps(marker_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    latest = context.latest_messages()
+    return ToolRuntimeOutcome(
+        handled=True,
+        tool_result={"schema": _SUBAGENT_WAIT_MARKER_SCHEMA, "status": "waiting"},
+        state_updates={
+            "subagent_state": context.state.subagent_state.copy(),
+            "transcript": [*copy.deepcopy(latest), {"role": "assistant", "content": marker}],
+            "run_status": "awaiting_human_input",
+            "pending_tool_calls": [],
+            "tool_batch_state": {},
+            "last_continuation": None,
+            "next_model_input": None,
+        },
+    )
 
 
 @runtime_checkable
@@ -151,7 +214,13 @@ def run_tool_runtime_plugins(
             terminal_handler = manifest.get("terminal_handler") is True
         if execution_guard is not None:
             execution_guard.renew()
-        outcome = plugin.execute(tool_call=tool_call, context=context)
+        try:
+            outcome = plugin.execute(tool_call=tool_call, context=context)
+        except Exception as exc:
+            from ..subagents.types import SubagentWaitSignal
+            if not isinstance(exc, SubagentWaitSignal):
+                raise
+            outcome = subagent_wait_outcome(exc, context)
         if execution_guard is not None:
             execution_guard.assert_active()
         if isinstance(outcome, ToolRuntimeOutcome) and outcome.handled:

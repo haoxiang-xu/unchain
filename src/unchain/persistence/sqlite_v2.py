@@ -3948,6 +3948,18 @@ class SQLiteContextV2ReadOnlyJournal(BoundExecutionJournal):
     def _wal_exists(self) -> bool:
         return _context_v2_wal_exists(self._database_path)
 
+    def artifact_id_for(self, *, logical_kind: str, logical_key: str) -> str:
+        """Pure artifact identity used by integrity checks on durable graphs."""
+        return _SQLiteBoundContextV2Repository._artifact_id(
+            execution_id=self.execution_id,
+            logical_kind=_required_text(logical_kind, "logical_kind"),
+            logical_key=_required_text(logical_key, "logical_key"),
+        )
+
+    def read_full_verified(self, *, artifact: ArtifactRef) -> bytes:
+        """Expose the journal artifact-reader port without granting any write."""
+        return self.read_artifact_full_verified(artifact=artifact)
+
     def _event_from_row(
         self,
         connection: sqlite3.Connection,

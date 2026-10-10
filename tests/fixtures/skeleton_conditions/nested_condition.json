@@ -1,0 +1,13 @@
+{
+  "condition": {
+    "kind": "all",
+    "conditions": [
+      {"kind": "compare", "operator": "gt", "left": {"kind": "input", "path": ["score"]}, "right": {"kind": "literal", "value": 3}},
+      {"kind": "any", "conditions": [
+        {"kind": "compare", "operator": "eq", "left": {"kind": "input", "path": ["status"]}, "right": {"kind": "literal", "value": "ready"}},
+        {"kind": "compare", "operator": "is_null", "left": {"kind": "input", "path": ["override"]}}
+      ]}
+    ]
+  },
+  "inputs": {"score": 4, "status": "ready", "override": "unused"}
+}

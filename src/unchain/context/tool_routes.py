@@ -478,10 +478,17 @@ class ContextToolRouteResolver:
                     raise DurableToolExecutorContractError(
                         "tool runtime plugin manifest drifted after routing"
                     )
-                outcome = execute(
-                    tool_call=bound_call,
-                    context=captured_context,
-                )
+                try:
+                    outcome = execute(
+                        tool_call=bound_call,
+                        context=captured_context,
+                    )
+                except Exception as exc:
+                    from ..subagents.types import SubagentWaitSignal
+                    if not isinstance(exc, SubagentWaitSignal):
+                        raise
+                    from ..tools.runtime import subagent_wait_outcome
+                    outcome = subagent_wait_outcome(exc, captured_context)
                 if type(outcome) is not ToolRuntimeOutcome:
                     raise DurableToolExecutorContractError(
                         "tool runtime plugin returned an invalid outcome"

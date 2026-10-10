@@ -221,6 +221,8 @@ class Agent:
         _run_bundle_descriptor: Any = None,
         _continued_from_run_id: str | None = None,
         _provider_turn_ownership_factory: Any = None,
+        _initial_iteration: int = 0,
+        _recovered_tool_turn: Any = None,
     ) -> KernelRunResult:
         prepared = self._prepare(
             AgentCallContext(
@@ -253,6 +255,8 @@ class Agent:
                 tool_runtime_config=copy.deepcopy(tool_runtime_config)
                 if isinstance(tool_runtime_config, dict)
                 else None,
+                initial_iteration=_initial_iteration,
+                recovered_tool_turn=_recovered_tool_turn,
             )
         )
         return prepared.run()

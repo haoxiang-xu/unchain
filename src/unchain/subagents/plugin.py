@@ -19,7 +19,7 @@ from ..kernel.types import ToolCall
 from ..kernel.run_ledger import child_run_identity
 from .communication import AgentCommunicationRuntime, AgentThreadRecord
 from .executor import SubagentExecutor
-from .types import SubagentPolicy, SubagentResult, SubagentState, SubagentTemplate
+from .types import SubagentPolicy, SubagentResult, SubagentState, SubagentTemplate, SubagentWaitSignal
 
 if TYPE_CHECKING:
     from ..agent.agent import Agent as KernelAgent
@@ -343,7 +343,13 @@ class SubagentToolPlugin(ToolRuntimePlugin):
         tool_name = str(tool_call.name or "").strip()
         if tool_name not in _SUBAGENT_TOOL_NAMES | _COMMUNICATION_TOOL_NAMES:
             raise ValueError("subagent durable manifest requires a supported tool")
-        if tool_name == "handoff_to_subagent":
+        full_graph_wait = any(
+            getattr(template.agent, "manages_subagent_completion", False) is True
+            for template in self.templates
+        )
+        if tool_name == "handoff_to_subagent" or (
+            full_graph_wait and tool_name in _SUBAGENT_TOOL_NAMES
+        ):
             completion_contract = {
                 "schema": "unchain.tool_completion_contract.v1",
                 "state_transition_variants": [
@@ -405,6 +411,8 @@ class SubagentToolPlugin(ToolRuntimePlugin):
                 return self._return_to_parent(tool_call=tool_call, context=context)
             return ToolRuntimeOutcome(handled=False)
         except Exception as exc:
+            if isinstance(exc, SubagentWaitSignal):
+                raise exc.for_parent_tool_call(tool_call) from None
             if is_durable_persistence_failure(exc):
                 raise
             return ToolRuntimeOutcome(
@@ -557,7 +565,12 @@ class SubagentToolPlugin(ToolRuntimePlugin):
             return child
         return child.clone(modules=resolved_modules)
 
-    def _subagent_completion_sink(self, context, tool_call: ToolCall):
+    def _subagent_completion_sink(self, context, tool_call: ToolCall, agent=None):
+        # Full Skeleton child graphs commit their own typed End and execution
+        # receipts. The legacy single-Agent completion sink requires a bound
+        # Context handoff attempt and must not duplicate that graph receipt.
+        if getattr(agent, "manages_subagent_completion", False) is True:
+            return None
         parent_spec = getattr(self.parent_agent, "spec", None)
         parent_modules = tuple(getattr(parent_spec, "modules", ()) or ())
         providers = tuple(
@@ -726,6 +739,12 @@ class SubagentToolPlugin(ToolRuntimePlugin):
             raise SubagentRuntimeContextError(
                 "caller changed the parent runtime execution identity"
             )
+        if getattr(agent, "shares_parent_execution_session", False) is True:
+            if not normalized_parent_context_v2_execution_id:
+                raise SubagentRuntimeContextError(
+                    "shared-session subagent requires its parent execution identity"
+                )
+            effective_session_id = normalized_parent_context_v2_execution_id
         child_runtime_context = None
         if parent_runtime_context is not None:
             template = (
@@ -894,6 +913,8 @@ class SubagentToolPlugin(ToolRuntimePlugin):
                 else:
                     child_execution_guard.assert_active()
         except Exception as exc:
+            if isinstance(exc, SubagentWaitSignal):
+                raise
             if is_durable_persistence_failure(exc):
                 raise
             captured_delta = _captured_delta()
@@ -933,6 +954,7 @@ class SubagentToolPlugin(ToolRuntimePlugin):
                 summary=output,
                 messages=copy.deepcopy(result.messages),
                 lineage=lineage,
+                error=str(getattr(result, "error", "") or ""),
                 subagent_state=captured_delta,
                 run_bundle=copy.deepcopy(getattr(result, "run_bundle", None)),
             )
@@ -1103,6 +1125,7 @@ class SubagentToolPlugin(ToolRuntimePlugin):
                 completion_sink=self._subagent_completion_sink(
                     context,
                     tool_call,
+                    child,
                 ),
                 parent_run_bundle_identity=self._parent_run_bundle_identity(context),
                 provider_turn_ownership_factory=(
@@ -1110,6 +1133,8 @@ class SubagentToolPlugin(ToolRuntimePlugin):
                 ),
             )
         except Exception as exc:
+            if isinstance(exc, SubagentWaitSignal):
+                raise
             if is_durable_persistence_failure(exc):
                 raise
             failed_record = AgentThreadRecord(
@@ -1346,6 +1371,7 @@ class SubagentToolPlugin(ToolRuntimePlugin):
                 completion_sink=self._subagent_completion_sink(
                     context,
                     tool_call,
+                    child,
                 ),
                 parent_run_bundle_identity=self._parent_run_bundle_identity(context),
                 provider_turn_ownership_factory=(
@@ -1353,6 +1379,8 @@ class SubagentToolPlugin(ToolRuntimePlugin):
                 ),
             )
         except Exception as exc:
+            if isinstance(exc, SubagentWaitSignal):
+                raise
             if is_durable_persistence_failure(exc):
                 raise
             failed_record = AgentThreadRecord(
@@ -1928,6 +1956,7 @@ class SubagentToolPlugin(ToolRuntimePlugin):
                 completion_sink=self._subagent_completion_sink(
                     context,
                     tool_call,
+                    child,
                 ),
                 parent_run_bundle_identity=self._parent_run_bundle_identity(context),
                 provider_turn_ownership_factory=(
@@ -1935,6 +1964,8 @@ class SubagentToolPlugin(ToolRuntimePlugin):
                 ),
             )
         except Exception as exc:
+            if isinstance(exc, SubagentWaitSignal):
+                raise
             if is_durable_persistence_failure(exc):
                 raise
             failed_state = self._merge_child_exception_subagent_state(running_state, exc)
@@ -2104,6 +2135,7 @@ class SubagentToolPlugin(ToolRuntimePlugin):
                 completion_sink=self._subagent_completion_sink(
                     context,
                     tool_call,
+                    child,
                 ),
                 parent_run_bundle_identity=self._parent_run_bundle_identity(context),
                 provider_turn_ownership_factory=(
@@ -2111,6 +2143,8 @@ class SubagentToolPlugin(ToolRuntimePlugin):
                 ),
             )
         except Exception as exc:
+            if isinstance(exc, SubagentWaitSignal):
+                raise
             if is_durable_persistence_failure(exc):
                 raise
             failed_state = self._merge_child_exception_subagent_state(next_state, exc)
@@ -2248,6 +2282,7 @@ class SubagentToolPlugin(ToolRuntimePlugin):
                 completion_sink=self._subagent_completion_sink(
                     context,
                     tool_call,
+                    child,
                 ),
                 parent_run_bundle_identity=self._parent_run_bundle_identity(context),
                 provider_turn_ownership_factory=(
@@ -2255,6 +2290,8 @@ class SubagentToolPlugin(ToolRuntimePlugin):
                 ),
             )
         except Exception as exc:
+            if isinstance(exc, SubagentWaitSignal):
+                raise
             if is_durable_persistence_failure(exc):
                 raise
             failed_state = self._merge_child_exception_subagent_state(next_state, exc)
@@ -2520,6 +2557,7 @@ class SubagentToolPlugin(ToolRuntimePlugin):
                     completion_sink=self._subagent_completion_sink(
                         context,
                         tool_call,
+                        item["agent"],
                     ),
                     parent_run_bundle_identity=self._parent_run_bundle_identity(context),
                     provider_turn_ownership_factory=(
@@ -2533,6 +2571,8 @@ class SubagentToolPlugin(ToolRuntimePlugin):
                     run_bundle=copy.deepcopy(result.run_bundle),
                 )
             except Exception as exc:
+                if isinstance(exc, SubagentWaitSignal):
+                    raise
                 if is_durable_persistence_failure(exc):
                     raise
                 result = SubagentResult(

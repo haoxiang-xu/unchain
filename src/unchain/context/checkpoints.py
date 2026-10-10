@@ -711,6 +711,7 @@ def project_checkpoint_message(
     checkpoint_ref: ResourceRef,
     request: CheckpointRequest,
     omitted_complete_turns: int,
+    compression: dict | None = None,
 ) -> dict[str, Any]:
     """Project a durable v2 checkpoint as untrusted provider-neutral context."""
 
@@ -746,6 +747,10 @@ def project_checkpoint_message(
         },
         "trust": "UNTRUSTED_DATA",
     }
+    if compression is not None:
+        from .compression import validate_compression_projection
+        payload["compression"] = validate_compression_projection(
+            compression, checkpoint_request_id=request.request_id)
     from .untrusted import untrusted_context_message
 
     return untrusted_context_message("MEMORY_V2_CHECKPOINT", payload)
