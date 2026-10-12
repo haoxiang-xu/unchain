@@ -99,6 +99,14 @@ _TOOL_LIFECYCLE_EVENT_TYPES = (
     | _TOOL_SEALED_EVENT_TYPES
     | _TOOL_RESULT_EVENT_TYPES
 )
+_POST_TERMINAL_AUDIT_EVENT_TYPES = frozenset(
+    {
+        "memory.curator.enqueued",
+        "memory.curator.noop",
+        "memory.curator.isolated",
+        "memory.curator.failed",
+    }
+)
 
 
 class GenerationRebaseFailureReason(StrEnum):
@@ -3498,7 +3506,10 @@ class SQLiteGenerationRebaseV2Service:
                     event=graph_events[0],
                 )
 
-            selection = select_attempt_terminal(attempt_events)
+            selection = select_attempt_terminal(
+                attempt_events,
+                allowed_following_event_types=_POST_TERMINAL_AUDIT_EVENT_TYPES,
+            )
             if selection.ambiguous:
                 raise _journal_incompatible(
                     "generation rebase attempt has duplicate terminal events",
@@ -3581,7 +3592,19 @@ class SQLiteGenerationRebaseV2Service:
                     plan=plan,
                 )
             terminal = canonical_terminals[0] if canonical_terminals else None
-            if terminal is not None and terminal != attempt_events[-1]:
+            following_terminal = (
+                ()
+                if terminal is None
+                else tuple(
+                    event
+                    for event in attempt_events
+                    if event.store_seq > terminal.store_seq
+                )
+            )
+            if terminal is not None and any(
+                event.event_type not in _POST_TERMINAL_AUDIT_EVENT_TYPES
+                for event in following_terminal
+            ):
                 raise _journal_incompatible(
                     "generation rebase orchestration continued after its terminal",
                     reason=(

@@ -104,10 +104,12 @@ MEMORY_PROPOSE_PROMPT_SPEC = ToolPromptSpec(
             "user-confirmed promotion."
         ),
         (
-            "After memory_propose succeeds, say only that a memory candidate was proposed. "
-            "Claim formal memory was saved only when a curator or formal-write result "
-            "confirms it. If nothing passes this policy, do not call the tool, and never "
-            "interrupt the primary task merely to manufacture a memory."
+            "After memory_propose returns a non-empty candidate_ref, say only that a "
+            "memory candidate was proposed. Any tool error means no candidate was "
+            "proposed: do not claim success, and correct model-supplied arguments before "
+            "retrying. Claim formal memory was saved only when a curator or formal-write "
+            "result confirms it. If nothing passes this policy, do not call the tool, "
+            "and never interrupt the primary task merely to manufacture a memory."
         ),
     ),
 )
@@ -142,7 +144,10 @@ def render_memory_learning_block(toolkit: object) -> str:
         "outcome. Never weaken the Evidence, Future value, Durability, Novelty, "
         "duplicate, sensitivity, or secret checks merely to create a memory. Never "
         "copy a raw transcript, hidden reasoning, or full tool output. If a candidate "
-        "was already proposed successfully during this run, do not propose it again.\n"
+        "was already proposed successfully during this run, do not propose it again. "
+        "Treat the proposal as successful only when the tool result contains a non-empty "
+        "candidate_ref; a tool error means nothing was proposed and must never be "
+        "reported as saved or proposed.\n"
         f"{MEMORY_LEARNING_BLOCK_END}"
     )
 

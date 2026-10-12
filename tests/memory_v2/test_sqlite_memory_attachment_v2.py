@@ -111,6 +111,9 @@ def _attachment_factory(
         references=consolidation_factory.references,
         context=consolidation_factory.context,
         completion_factory_resolver=resolver,
+        proposal_source_refs_resolver=(
+            lambda _request: tuple(consolidation_factory.context.source_refs)
+        ),
         long_term=long_term,
         allowed_long_term_refs=allowed_long_term_refs,
     )
@@ -182,8 +185,6 @@ def test_root_attachment_exposes_exact_normal_tools_and_persists_current_run_can
     )
     host = _enabled_host(repository, consolidation_factory, clock)
     builder = _builder()
-    source_locator = consolidation_factory.references.encode(source_ref)
-
     class _LearningModelIO:
         provider = "openai"
         model = "gpt-test"
@@ -208,7 +209,6 @@ def test_root_attachment_exposes_exact_normal_tools_and_persists_current_run_can
                             "Confirmed context policy for long-running agent tasks"
                         ),
                         "content": "Keep the canonical execution journal.",
-                        "source_refs": [source_locator],
                     },
                 )
                 return ModelTurnResult(
@@ -250,6 +250,13 @@ def test_root_attachment_exposes_exact_normal_tools_and_persists_current_run_can
     assert "memory_upsert" not in builder.toolkit.tools
     assert "memory_promote" not in builder.toolkit.tools
     assert "memory_update_task_state" not in builder.toolkit.tools
+    for provider in ("openai", "anthropic", "gemini", "ollama"):
+        schema = builder.toolkit.tools["memory_propose"].to_provider_json(provider)
+        parameters = schema.get("parameters") or schema.get("input_schema")
+        if parameters is None:
+            parameters = schema["function"]["parameters"]
+        assert "source_refs" not in parameters["properties"]
+        assert "kind" not in parameters["properties"]
     assert len(builder.run_hooks) == 1
     assert resolver.requests == [
         _request(
