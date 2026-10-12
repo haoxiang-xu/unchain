@@ -21,11 +21,17 @@ from unchain.memory import (
     MemoryV2ModuleError,
 )
 from unchain.agent.spec import AgentSpec, AgentState
+from unchain.kernel import KernelLoop
+from unchain.kernel.harness import HarnessContext
 from unchain.kernel.types import KernelRunResult
 from unchain.memory.curator import RunCaptureStatus, SourceRunStatus
 from unchain.memory.curator.host import MemoryAgentHostAdapter
 from unchain.memory.toolkit import MemoryToolkitRunBinding
-from unchain.memory.toolkit.policy import MEMORY_PROPOSAL_POLICY_VERSION
+from unchain.memory.toolkit.policy import (
+    MEMORY_LEARNING_POLICY_VERSION,
+    MEMORY_PROPOSAL_POLICY_VERSION,
+    MemoryLearningPromptHarness,
+)
 from unchain.runtime import AgentRuntimeContext, ExecutionIdentity, ModuleGrant
 from unchain.tools import render_tool_prompt_block
 
@@ -45,10 +51,14 @@ class _CompletionFactory:
     def __init__(self, value):
         self.value = value
         self.results = []
+        self.enqueue_results = []
 
     def build(self, *, result):
         self.results.append(result)
         return self.value
+
+    def record_enqueue_result(self, *, completion, receipt):
+        self.enqueue_results.append((completion, receipt))
 
 
 class _AttachmentFactory:
@@ -205,6 +215,10 @@ def test_enabled_attachment_adds_granted_normal_toolkit_and_completion_hook():
         "memory_propose",
     )
     assert len(builder.run_hooks) == 1
+    assert sum(
+        isinstance(harness, MemoryLearningPromptHarness)
+        for harness in builder.harnesses
+    ) == 1
     runtime_context = builder.call_context.runtime_context
     assert factory.requests == [
         MemoryAttachmentRequest(
@@ -341,6 +355,10 @@ def test_any_descendant_lineage_gets_granted_tools_without_a_completion_hook():
     assert "memory_propose" in builder.toolkit.tools
     assert "memory_list" not in builder.toolkit.tools
     assert builder.run_hooks == []
+    assert not any(
+        isinstance(harness, MemoryLearningPromptHarness)
+        for harness in builder.harnesses
+    )
 
 
 def test_enabled_attachment_rejects_missing_runtime_context():
@@ -457,6 +475,88 @@ def test_recipe_tool_filter_removes_the_proposal_policy_with_its_tool():
     )
 
 
+def test_root_learning_instruction_tracks_provider_visible_proposal_tool():
+    host, _, _, _ = _enabled_host()
+    builder = _builder()
+    MemoryV2Module(
+        host=host,
+        attachment_factory=_AttachmentFactory(
+            completion_factory=_CompletionFactory(completion())
+        ),
+    ).configure(builder)
+    (harness,) = [
+        item
+        for item in builder.harnesses
+        if isinstance(item, MemoryLearningPromptHarness)
+    ]
+    state = KernelLoop().seed_state(
+        [{"role": "user", "content": "Remember that I prefer concise reports."}],
+        provider="openai",
+        model="gpt-test",
+    )
+
+    delta = harness.build_delta(
+        HarnessContext(
+            state=state,
+            phase="before_model",
+            event={"toolkit": builder.toolkit},
+        )
+    )
+    assert delta is not None
+    state.apply_delta(delta)
+    learning = [
+        message
+        for message in state.latest_messages()
+        if MEMORY_LEARNING_POLICY_VERSION in str(message.get("content") or "")
+    ]
+    assert len(learning) == 1
+    assert "Before returning the final answer" in learning[0]["content"]
+    assert "Never weaken" in learning[0]["content"]
+
+    builder.spec = replace(builder.spec, allowed_tools=("memory_list",))
+    builder._apply_allowed_tools_filter()
+    removal = harness.build_delta(
+        HarnessContext(
+            state=state,
+            phase="before_model",
+            event={"toolkit": builder.toolkit},
+        )
+    )
+    assert removal is not None
+    state.apply_delta(removal)
+    assert MEMORY_LEARNING_POLICY_VERSION not in str(state.latest_messages())
+
+
+@pytest.mark.parametrize(
+    "capabilities",
+    (
+        {MEMORY_CANDIDATE_PROPOSE},
+        {MEMORY_EXECUTION_COMPLETE},
+        {MEMORY_WORKSPACE_READ, MEMORY_EXECUTION_COMPLETE},
+    ),
+)
+def test_root_learning_instruction_requires_proposal_and_completion_authority(
+    capabilities,
+):
+    host, _, _, _ = _enabled_host()
+    builder = _builder(grant=_grant(capabilities))
+    MemoryV2Module(
+        host=host,
+        attachment_factory=_AttachmentFactory(
+            completion_factory=(
+                _CompletionFactory(completion())
+                if MEMORY_EXECUTION_COMPLETE in capabilities
+                else None
+            )
+        ),
+    ).configure(builder)
+
+    assert not any(
+        isinstance(harness, MemoryLearningPromptHarness)
+        for harness in builder.harnesses
+    )
+
+
 def test_completion_capability_requires_explicit_authority():
     identity = _runtime_context().identity
 
@@ -521,6 +621,11 @@ def test_no_candidate_root_completion_is_a_noop_without_running_curator_model():
 
     assert returned is None
     assert completion_factory.results == [result]
+    assert len(completion_factory.enqueue_results) == 1
+    recorded_completion, receipt = completion_factory.enqueue_results[0]
+    assert recorded_completion == completion()
+    assert receipt.enabled is True
+    assert receipt.reason == "no_pending_candidates"
     assert repository.jobs == {}
     assert worker_capabilities.calls == []
     assert invoker.calls == []
@@ -541,6 +646,10 @@ def test_replayed_root_completion_keeps_stable_identity_and_enqueues_once():
     second.run_hooks[0](_result())
 
     assert len(repository.jobs) == 1
+    assert [item[1].reason for item in completion_factory.enqueue_results] == [
+        "completed_root_run",
+        "already_enqueued",
+    ]
     assert len(factory.requests) == 2
     assert factory.requests[0] == factory.requests[1]
     assert worker_capabilities.calls == []
