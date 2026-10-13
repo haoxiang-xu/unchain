@@ -17,6 +17,10 @@ from .models import (
     _parse_docstring,
 )
 from .output_management import ToolOutputManagementError, normalize_tool_output_policy
+from .timeline_policy import (
+    DEFAULT_TIMELINE_MERGE_POLICY,
+    validate_timeline_merge_policy,
+)
 
 
 class _InvalidToolArgumentsType(TypeError):
@@ -48,6 +52,7 @@ class Tool:
         provider_native_specs: dict[str, dict[str, Any]] | None = None,
         required_betas: dict[str, list[str]] | None = None,
         output_policy: str = "default",
+        timeline_merge_policy: str = DEFAULT_TIMELINE_MERGE_POLICY,
     ):
         if callable(name) and func is None:
             func = name
@@ -76,6 +81,9 @@ class Tool:
         self.provider_native_specs = self._construct_provider_native_specs(provider_native_specs)
         self.required_betas = self._construct_required_betas(required_betas)
         self.output_policy = self._construct_output_policy(output_policy)
+        self.timeline_merge_policy = validate_timeline_merge_policy(
+            timeline_merge_policy
+        )
         self.parameters = self._construct_parameters(parameters)
 
         if self.func is not None and not self.parameters:
@@ -111,6 +119,7 @@ class Tool:
                 provider_native_specs=self.provider_native_specs,
                 required_betas=self.required_betas,
                 output_policy=self.output_policy,
+                timeline_merge_policy=self.timeline_merge_policy,
             )
 
         if self.func is not None:
@@ -180,6 +189,7 @@ class Tool:
         provider_native_specs: dict[str, dict[str, Any]] | None = None,
         required_betas: dict[str, list[str]] | None = None,
         output_policy: str = "default",
+        timeline_merge_policy: str = DEFAULT_TIMELINE_MERGE_POLICY,
     ) -> "Tool":
         summary, _ = _parse_docstring(func)
         return cls(
@@ -202,6 +212,7 @@ class Tool:
             provider_native_specs=provider_native_specs,
             required_betas=required_betas,
             output_policy=output_policy,
+            timeline_merge_policy=timeline_merge_policy,
         )
 
     @staticmethod
