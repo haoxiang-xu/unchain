@@ -2788,6 +2788,380 @@ def test_real_root_terminal_and_dead_graph_prefix_are_quiescent(
     assert dead_rebase.rebase(dead_request).head_revision == 2
 
 
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_kernel_failure_terminal_payloads_let_a_dead_graph_prefix_rebase(
+    tmp_path: Path,
+    cancelled: bool,
+) -> None:
+    """#389: the payload the kernel emits is accepted by the sink and by rebase."""
+
+    from unchain.kernel.lifecycle_events import build_run_failure_payload
+
+    store = _store(tmp_path)
+    service = SQLiteGenerationRebaseV2Service(store)
+    initial = service.rebase(_request(_intent(), operation_id="rebase-operation-k389"))
+    graph, plan, sinks = _graph_checkpoint_runtime(store, initial)
+    graph.start_step(plan, 0)
+    step = plan.steps[0]
+    terminal_type = "run_cancelled" if cancelled else "run_failed"
+    _append_graph_runtime_event(
+        sinks[step.attempt],
+        step.attempt,
+        terminal_type,
+        1,
+        **build_run_failure_payload(
+            iteration=0,
+            error_code="execution_cancelled" if cancelled else "kernel_run_failed",
+            cancelled=cancelled,
+        ),
+    )
+    graph.recover(plan)
+    _next_intent, request = _next(
+        initial,
+        kind=GenerationRebaseKind.EDIT,
+        ordinal=2,
+    )
+
+    assert service.rebase(request).head_revision == 2
+
+
+def _dead_graph_after_kernel_terminal(tmp_path: Path, *, cancelled: bool):
+    from unchain.kernel.lifecycle_events import build_run_failure_payload
+
+    store = _store(tmp_path)
+    service = SQLiteGenerationRebaseV2Service(store)
+    initial = service.rebase(_request(_intent(), operation_id="rebase-operation-u2"))
+    graph, plan, sinks = _graph_checkpoint_runtime(store, initial)
+    graph.start_step(plan, 0)
+    step = plan.steps[0]
+    _append_graph_runtime_event(
+        sinks[step.attempt],
+        step.attempt,
+        "run_cancelled" if cancelled else "run_failed",
+        1,
+        **build_run_failure_payload(
+            iteration=0,
+            error_code="execution_cancelled" if cancelled else "kernel_run_failed",
+            cancelled=cancelled,
+        ),
+    )
+    _next_intent, request = _next(
+        initial,
+        kind=GenerationRebaseKind.EDIT,
+        ordinal=2,
+    )
+    return store, service, graph, plan, sinks, request
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_a_step_sealed_at_run_time_allows_rebase_without_any_recovery(
+    tmp_path: Path,
+    cancelled: bool,
+) -> None:
+    """#389 AC-389-2: fail_step replaces the lazy recovery seal for a dead step."""
+
+    _store_value, service, graph, plan, _sinks, request = (
+        _dead_graph_after_kernel_terminal(tmp_path, cancelled=cancelled)
+    )
+    graph.fail_step(
+        plan,
+        0,
+        status=(
+            GraphTerminalStatus.CANCELLED if cancelled else GraphTerminalStatus.FAILED
+        ),
+    )
+
+    assert service.rebase(request).head_revision == 2
+
+
+def test_a_terminal_without_its_seal_still_asks_for_recovery_then_rebases(
+    tmp_path: Path,
+) -> None:
+    """Journals written before run-time sealing keep the existing recovery path."""
+
+    _store_value, service, graph, plan, _sinks, request = (
+        _dead_graph_after_kernel_terminal(tmp_path, cancelled=False)
+    )
+    with pytest.raises(GenerationRebaseRecoveryRequired) as required:
+        service.rebase(request)
+    assert required.value.reason == "graph_step_seal_missing"
+
+    graph.recover(plan)
+    assert service.rebase(request).head_revision == 2
+
+
+def _root_terminal_graph(tmp_path: Path, shape: str, terminal_type: str):
+    """S1-S4 from the #389 plan, with the root terminal already appended."""
+
+    from unchain.kernel.lifecycle_events import build_run_failure_payload
+
+    store = _store(tmp_path)
+    service = SQLiteGenerationRebaseV2Service(store)
+    initial = service.rebase(_request(_intent(), operation_id="rebase-operation-root"))
+    graph, plan, sinks = _graph_checkpoint_runtime(store, initial, step_count=2)
+    cancelled = terminal_type == "run_cancelled"
+
+    def terminate(attempt, event_type, sequence):
+        _append_graph_runtime_event(
+            sinks[attempt],
+            attempt,
+            event_type,
+            sequence,
+            **build_run_failure_payload(
+                iteration=0,
+                error_code="execution_cancelled" if cancelled else "kernel_run_failed",
+                cancelled=event_type == "run_cancelled",
+            ),
+        )
+
+    def complete(index, output):
+        graph.start_step(plan, index)
+        step = plan.steps[index]
+        _complete_graph_runtime(sinks[step.attempt], step.attempt, output=output)
+        graph.complete_step(plan, index, full_output={"output": output})
+
+    if shape == "S1":
+        graph.start_step(plan, 0)
+        terminate(plan.steps[0].attempt, terminal_type, 1)
+        graph.fail_step(
+            plan,
+            0,
+            status=(
+                GraphTerminalStatus.CANCELLED if cancelled else GraphTerminalStatus.FAILED
+            ),
+        )
+    elif shape == "S3":
+        complete(0, "o0")
+    elif shape == "S4":
+        complete(0, "o0")
+        complete(1, "o1")
+    else:
+        assert shape == "S2"
+    terminate(plan.orchestration_attempt, terminal_type, 40)
+    _next_intent, request = _next(initial, kind=GenerationRebaseKind.EDIT, ordinal=2)
+    return store, service, graph, plan, sinks, request
+
+
+ROOT_TERMINAL_SHAPES = [
+    ("S1", "run_failed"),
+    ("S1", "run_cancelled"),
+    ("S2", "run_cancelled"),
+    ("S3", "run_cancelled"),
+    ("S4", "run_cancelled"),
+]
+
+
+@pytest.mark.parametrize(("shape", "terminal_type"), ROOT_TERMINAL_SHAPES)
+def test_a_failed_or_cancelled_root_terminal_allows_rebase(
+    tmp_path: Path,
+    shape: str,
+    terminal_type: str,
+) -> None:
+    """#389: every attempt ends with one terminal; rebase accepts the dead graph."""
+
+    _store_value, service, _graph, _plan, _sinks, request = _root_terminal_graph(
+        tmp_path, shape, terminal_type
+    )
+
+    assert service.rebase(request).head_revision == 2
+
+
+@pytest.mark.parametrize("terminal_type", ["run_failed", "run_cancelled"])
+@pytest.mark.parametrize("audit_type", [
+    "memory.curator.enqueued", "memory.curator.noop",
+    "memory.curator.isolated", "memory.curator.failed",
+])
+def test_dead_root_curator_audit_tail_allows_rebase(
+    tmp_path: Path, terminal_type: str, audit_type: str,
+) -> None:
+    """#389 dead graph terminals retain #401's post-terminal audit contract."""
+    _store_value, service, _graph, plan, sinks, request = _root_terminal_graph(
+        tmp_path, "S1", terminal_type,
+    )
+    root = plan.orchestration_attempt
+    _append_graph_runtime_event(sinks[root], root, audit_type, 41)
+
+    assert service.rebase(request).head_revision == 2
+
+
+@pytest.mark.parametrize("terminal_type", ["run_failed", "run_cancelled"])
+@pytest.mark.parametrize(("tail_type", "reason"), [
+    ("final_message", "attempt_continued_after_terminal"),
+    ("run_failed", "attempt_duplicate_terminal"),
+])
+def test_dead_root_curator_audit_does_not_hide_illegal_tail(
+    tmp_path: Path, terminal_type: str, tail_type: str, reason: str,
+) -> None:
+    store, service, _graph, plan, sinks, request = _root_terminal_graph(
+        tmp_path, "S1", terminal_type,
+    )
+    root = plan.orchestration_attempt
+    _append_graph_runtime_event(sinks[root], root, "memory.curator.noop", 41)
+    _append_graph_runtime_event(sinks[root], root, tail_type, 42)
+    before = _durable_counts(store)
+
+    with pytest.raises(GenerationRebaseJournalIncompatible) as incompatible:
+        service.rebase(request)
+    assert incompatible.value.reason == reason
+    assert _durable_counts(store) == before
+
+
+@pytest.mark.parametrize("terminal_type", ["run_failed", "run_cancelled"])
+def test_dead_root_curator_audit_before_terminal_is_not_a_tail(
+    tmp_path: Path, terminal_type: str,
+) -> None:
+    store = _store(tmp_path)
+    service = SQLiteGenerationRebaseV2Service(store)
+    initial = service.rebase(_request(_intent(), operation_id="rebase-operation-audit-prefix"))
+    _graph, plan, sinks = _graph_checkpoint_runtime(store, initial, step_count=2)
+    root = plan.orchestration_attempt
+    _append_graph_runtime_event(sinks[root], root, "memory.curator.noop", 40)
+    _append_graph_runtime_event(sinks[root], root, terminal_type, 41)
+    _next_intent, request = _next(initial, kind=GenerationRebaseKind.EDIT, ordinal=2)
+    before = _durable_counts(store)
+
+    with pytest.raises(GenerationRebaseJournalIncompatible) as incompatible:
+        service.rebase(request)
+    assert incompatible.value.reason == "graph_step_sequence_invalid"
+    assert _durable_counts(store) == before
+
+
+def test_a_root_terminal_does_not_hide_an_unsealed_step(tmp_path: Path) -> None:
+    """A step with a terminal but no seal still asks for recovery first."""
+
+    from unchain.kernel.lifecycle_events import build_run_failure_payload
+
+    store = _store(tmp_path)
+    service = SQLiteGenerationRebaseV2Service(store)
+    initial = service.rebase(_request(_intent(), operation_id="rebase-operation-unsealed"))
+    graph, plan, sinks = _graph_checkpoint_runtime(store, initial, step_count=2)
+    graph.start_step(plan, 0)
+    step = plan.steps[0]
+    _append_graph_runtime_event(
+        sinks[step.attempt], step.attempt, "run_failed", 1,
+        **build_run_failure_payload(iteration=0, error_code="kernel_run_failed", cancelled=False),
+    )
+    _append_graph_runtime_event(
+        sinks[plan.orchestration_attempt], plan.orchestration_attempt, "run_failed", 40,
+        **build_run_failure_payload(iteration=0, error_code="kernel_run_failed", cancelled=False),
+    )
+    _next_intent, request = _next(initial, kind=GenerationRebaseKind.EDIT, ordinal=2)
+
+    with pytest.raises(GenerationRebaseRecoveryRequired) as required:
+        service.rebase(request)
+    assert required.value.reason == "graph_step_seal_missing"
+    graph.recover(plan)
+    assert service.rebase(request).head_revision == 2
+
+
+def test_a_root_terminal_does_not_hide_a_started_step_without_a_terminal(
+    tmp_path: Path,
+) -> None:
+    from unchain.kernel.lifecycle_events import build_run_failure_payload
+
+    store = _store(tmp_path)
+    service = SQLiteGenerationRebaseV2Service(store)
+    initial = service.rebase(_request(_intent(), operation_id="rebase-operation-open-step"))
+    graph, plan, sinks = _graph_checkpoint_runtime(store, initial, step_count=2)
+    graph.start_step(plan, 0)
+    _append_graph_runtime_event(
+        sinks[plan.orchestration_attempt], plan.orchestration_attempt, "run_cancelled", 40,
+        **build_run_failure_payload(iteration=0, error_code="execution_cancelled", cancelled=True),
+    )
+    _next_intent, request = _next(initial, kind=GenerationRebaseKind.EDIT, ordinal=2)
+
+    with pytest.raises(GenerationRebasePreflightBlocked) as blocked:
+        service.rebase(request)
+    assert blocked.value.reason == "attempt_open"
+
+
+def _completed_graph_with_root_event(tmp_path: Path, *, root_first: bool):
+    store = _store(tmp_path)
+    service = SQLiteGenerationRebaseV2Service(store)
+    initial = service.rebase(_request(_intent(), operation_id="rebase-operation-sealed"))
+    graph, plan, sinks = _graph_checkpoint_runtime(store, initial, step_count=1)
+    graph.start_step(plan, 0)
+    step = plan.steps[0]
+    _complete_graph_runtime(sinks[step.attempt], step.attempt, output="o")
+    graph.complete_step(plan, 0, full_output={"output": "o"})
+    root = plan.orchestration_attempt
+    if root_first:
+        _append_graph_runtime_event(sinks[root], root, "run_cancelled", 40, status="cancelled")
+        # The service refuses this order; write it as an older build could.
+        graph.repository.finalize(plan, graph.repository.scan(plan).recovery.completed_steps[0])
+    else:
+        graph.finalize(plan)
+        _append_graph_runtime_event(sinks[root], root, "run_failed", 40, status="failed")
+    _next_intent, request = _next(initial, kind=GenerationRebaseKind.EDIT, ordinal=2)
+    return service, request
+
+
+def test_a_root_failure_after_a_completed_graph_is_still_accepted(tmp_path: Path) -> None:
+    """The root's own outcome after `graph.execution.completed` is unchanged."""
+
+    service, request = _completed_graph_with_root_event(tmp_path, root_first=False)
+
+    assert service.rebase(request).head_revision == 2
+
+
+def test_a_root_terminal_before_the_execution_seal_is_refused(tmp_path: Path) -> None:
+    """A cancelled root followed by a completed graph is a contradiction."""
+
+    service, request = _completed_graph_with_root_event(tmp_path, root_first=True)
+
+    with pytest.raises(GenerationRebaseJournalIncompatible) as incompatible:
+        service.rebase(request)
+    assert incompatible.value.reason == "attempt_continued_after_terminal"
+
+
+def test_a_root_terminal_must_be_the_last_root_event(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    service = SQLiteGenerationRebaseV2Service(store)
+    initial = service.rebase(_request(_intent(), operation_id="rebase-operation-last"))
+    graph, plan, sinks = _graph_checkpoint_runtime(store, initial, step_count=2)
+    _append_graph_runtime_event(
+        sinks[plan.orchestration_attempt], plan.orchestration_attempt, "run_cancelled", 40,
+        status="cancelled",
+    )
+    _append_graph_runtime_event(
+        sinks[plan.orchestration_attempt], plan.orchestration_attempt, "final_message", 41,
+        content="late",
+    )
+    _next_intent, request = _next(initial, kind=GenerationRebaseKind.EDIT, ordinal=2)
+
+    with pytest.raises(GenerationRebaseJournalIncompatible) as incompatible:
+        service.rebase(request)
+    assert incompatible.value.reason == "attempt_continued_after_terminal"
+
+
+def test_two_root_terminals_are_refused(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    service = SQLiteGenerationRebaseV2Service(store)
+    initial = service.rebase(_request(_intent(), operation_id="rebase-operation-two"))
+    _graph, plan, sinks = _graph_checkpoint_runtime(store, initial, step_count=2)
+    for seq, kind in ((40, "run_cancelled"), (41, "run_failed")):
+        _append_graph_runtime_event(
+            sinks[plan.orchestration_attempt], plan.orchestration_attempt, kind, seq,
+            status="failed",
+        )
+    _next_intent, request = _next(initial, kind=GenerationRebaseKind.EDIT, ordinal=2)
+
+    with pytest.raises(GenerationRebaseJournalIncompatible) as incompatible:
+        service.rebase(request)
+    assert incompatible.value.reason == "attempt_duplicate_terminal"
+
+
+def test_a_legacy_dead_graph_without_a_root_terminal_still_rebases(tmp_path: Path) -> None:
+    """Journals from before this change (root left at admitted) keep their paths."""
+
+    _store_value, service, graph, plan, _sinks, request = _dead_graph_after_kernel_terminal(
+        tmp_path, cancelled=False
+    )
+    graph.fail_step(plan, 0, status=GraphTerminalStatus.FAILED)
+
+    assert service.rebase(request).head_revision == 2
+
+
 def test_max_iterations_never_suppresses_pending_interaction(
     tmp_path: Path,
 ) -> None:

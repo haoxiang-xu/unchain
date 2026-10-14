@@ -13,6 +13,7 @@ from unchain.context.graph_checkpoint import (
     GraphExecutionPlan,
     GraphStepBinding,
     GraphStepDisposition,
+    GraphTerminalStatus,
     JournalGraphCheckpointRepository,
 )
 from unchain.context.handoff import DurableHandoffRecorder, HandoffService
@@ -476,3 +477,349 @@ def test_completed_step_replay_rejects_changed_full_output(tmp_path):
             0,
             full_output={"output": "changed"},
         )
+
+
+def _terminate_runtime(sinks, attempt: AttemptRef, terminal_type: str, *, base: int = 1):
+    from unchain.kernel.lifecycle_events import build_run_failure_payload
+
+    cancelled = terminal_type == "run_cancelled"
+    _append(sinks[attempt], attempt, "run_started", base, status="running")
+    return _append(
+        sinks[attempt],
+        attempt,
+        terminal_type,
+        base + 1,
+        **build_run_failure_payload(
+            iteration=0,
+            error_code="execution_cancelled" if cancelled else "kernel_run_failed",
+            cancelled=cancelled,
+        ),
+    )
+
+
+def _step_seals(journal):
+    return [
+        event.event_type
+        for event in journal.capture_snapshot().events
+        if event.event_type.startswith("graph.step.")
+        and event.event_type
+        not in {"graph.step.started", "graph.step.resume.admitted"}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("terminal_type", "status", "seal"),
+    [
+        ("run_failed", GraphTerminalStatus.FAILED, "graph.step.failed"),
+        ("run_cancelled", GraphTerminalStatus.CANCELLED, "graph.step.cancelled"),
+    ],
+)
+def test_fail_step_seals_a_failed_or_cancelled_step_at_run_time(
+    tmp_path, terminal_type, status, seal
+):
+    """#389 AC-389-2: the seal is written when the run ends, not by a later recovery."""
+
+    _store, journal, _artifacts, sinks, service, plan = _bootstrap(tmp_path)
+    service.start_step(plan, 0)
+    terminal = _terminate_runtime(sinks, STEP_0, terminal_type)
+
+    recovery = service.fail_step(plan, 0, status=status)
+
+    assert _step_seals(journal) == [seal]
+    assert recovery.terminal_status is status
+    assert recovery.next_step_index is None
+    assert recovery.uncertain_step_index is None
+    sealed = [e for e in journal.capture_snapshot().events if e.event_type == seal][0]
+    assert sealed.attempt == STEP_0
+    assert sealed.payload["terminal_cursor"] == terminal.cursor.to_dict()
+    # A sealed dead step ends the graph: neither a replay of it nor the next
+    # step can start.
+    with pytest.raises(GraphCheckpointError, match="cannot advance"):
+        service.start_step(plan, 0)
+    with pytest.raises(GraphCheckpointError, match="cannot advance"):
+        service.start_step(plan, 1)
+
+
+def test_fail_step_is_idempotent_and_agrees_with_recovery(tmp_path):
+    _store, journal, _artifacts, sinks, service, plan = _bootstrap(tmp_path)
+    service.start_step(plan, 0)
+    _terminate_runtime(sinks, STEP_0, "run_failed")
+
+    first = service.fail_step(plan, 0, status=GraphTerminalStatus.FAILED)
+    again = service.fail_step(plan, 0, status=GraphTerminalStatus.FAILED)
+    recovered = service.recover(plan)
+
+    assert _step_seals(journal) == ["graph.step.failed"]
+    assert first.terminal_status is again.terminal_status is GraphTerminalStatus.FAILED
+    assert recovered.terminal_status is GraphTerminalStatus.FAILED
+
+
+def test_recovery_after_fail_step_does_not_seal_twice_across_a_restart(tmp_path):
+    _store, _journal, _artifacts, sinks, service, plan = _bootstrap(tmp_path)
+    service.start_step(plan, 0)
+    _terminate_runtime(sinks, STEP_0, "run_cancelled")
+    service.fail_step(plan, 0, status=GraphTerminalStatus.CANCELLED)
+
+    _store, reopened, _artifacts, _sinks, restarted = _open(tmp_path)
+    recovery = restarted.recover(plan)
+
+    assert recovery.terminal_status is GraphTerminalStatus.CANCELLED
+    assert _step_seals(reopened) == ["graph.step.cancelled"]
+
+
+def test_journal_with_the_terminal_but_no_seal_still_recovers(tmp_path):
+    """Journals written before run-time sealing keep recovering (both orders)."""
+
+    _store, journal, _artifacts, sinks, service, plan = _bootstrap(tmp_path)
+    service.start_step(plan, 0)
+    _terminate_runtime(sinks, STEP_0, "run_failed")
+    assert _step_seals(journal) == []
+
+    _store, reopened, _artifacts, _sinks, restarted = _open(tmp_path)
+    recovery = restarted.recover(plan)
+
+    assert recovery.terminal_status is GraphTerminalStatus.FAILED
+    assert _step_seals(reopened) == ["graph.step.failed"]
+    # A later run-time call finds the seal and changes nothing.
+    assert (
+        restarted.fail_step(plan, 0, status=GraphTerminalStatus.FAILED).terminal_status
+        is GraphTerminalStatus.FAILED
+    )
+    assert _step_seals(reopened) == ["graph.step.failed"]
+
+
+@pytest.mark.parametrize(
+    ("terminal_type", "wrong_status"),
+    [
+        ("run_failed", GraphTerminalStatus.CANCELLED),
+        ("run_cancelled", GraphTerminalStatus.FAILED),
+    ],
+)
+def test_fail_step_refuses_a_status_that_disagrees_with_the_terminal(
+    tmp_path, terminal_type, wrong_status
+):
+    _store, journal, _artifacts, sinks, service, plan = _bootstrap(tmp_path)
+    service.start_step(plan, 0)
+    _terminate_runtime(sinks, STEP_0, terminal_type)
+
+    with pytest.raises(GraphCheckpointConflict, match="disagrees"):
+        service.fail_step(plan, 0, status=wrong_status)
+    assert _step_seals(journal) == []
+
+
+def test_fail_step_refuses_to_reseal_with_a_different_status(tmp_path):
+    _store, journal, _artifacts, sinks, service, plan = _bootstrap(tmp_path)
+    service.start_step(plan, 0)
+    _terminate_runtime(sinks, STEP_0, "run_failed")
+    service.fail_step(plan, 0, status=GraphTerminalStatus.FAILED)
+
+    with pytest.raises(GraphCheckpointConflict, match="different terminal"):
+        service.fail_step(plan, 0, status=GraphTerminalStatus.CANCELLED)
+    assert _step_seals(journal) == ["graph.step.failed"]
+
+
+def test_fail_step_refuses_a_completed_step(tmp_path):
+    _store, journal, _artifacts, sinks, service, plan = _bootstrap(tmp_path)
+    service.start_step(plan, 0)
+    _complete_runtime(sinks, STEP_0, output="done")
+    service.complete_step(plan, 0, full_output="done")
+
+    with pytest.raises(GraphCheckpointConflict, match="already completed"):
+        service.fail_step(plan, 0, status=GraphTerminalStatus.FAILED)
+    assert _step_seals(journal) == ["graph.step.completed"]
+
+
+def test_fail_step_requires_a_durable_start_and_a_canonical_terminal(tmp_path):
+    _store, journal, _artifacts, sinks, service, plan = _bootstrap(tmp_path)
+    with pytest.raises(GraphCheckpointError, match="durable start"):
+        service.fail_step(plan, 0, status=GraphTerminalStatus.FAILED)
+
+    service.start_step(plan, 0)
+    with pytest.raises(GraphCheckpointError, match="canonical"):
+        service.fail_step(plan, 0, status=GraphTerminalStatus.FAILED)
+    _append(sinks[STEP_0], STEP_0, "run_started", 1, status="running")
+    with pytest.raises(GraphCheckpointError, match="canonical"):
+        service.fail_step(plan, 0, status=GraphTerminalStatus.FAILED)
+    assert _step_seals(journal) == []
+
+
+@pytest.mark.parametrize(
+    "status", [GraphTerminalStatus.COMPLETED, "failed", None]
+)
+def test_fail_step_only_takes_a_failed_or_cancelled_status(tmp_path, status):
+    _store, _journal, _artifacts, _sinks, service, plan = _bootstrap(tmp_path)
+    with pytest.raises((ValueError, TypeError)):
+        service.fail_step(plan, 0, status=status)
+
+
+@pytest.mark.parametrize("step_index", [-1, 2, True, "0"])
+def test_fail_step_rejects_a_step_outside_the_plan(tmp_path, step_index):
+    _store, _journal, _artifacts, _sinks, service, plan = _bootstrap(tmp_path)
+    with pytest.raises(ValueError, match="outside the graph plan"):
+        service.fail_step(plan, step_index, status=GraphTerminalStatus.FAILED)
+
+
+# --- #389 root terminal: every attempt, including the orchestration attempt,
+# ends with one canonical terminal. S1-S4 are the shapes from the plan. ---
+
+
+def _terminate_root(sinks, terminal_type: str, seq: int = 50):
+    from unchain.kernel.lifecycle_events import build_run_failure_payload
+
+    cancelled = terminal_type == "run_cancelled"
+    return _append(
+        sinks[ORCHESTRATION],
+        ORCHESTRATION,
+        terminal_type,
+        seq,
+        **build_run_failure_payload(
+            iteration=0,
+            error_code="execution_cancelled" if cancelled else "kernel_run_failed",
+            cancelled=cancelled,
+        ),
+    )
+
+
+def _complete_and_seal(sinks, service, plan, index, attempt, output):
+    service.start_step(plan, index)
+    _complete_runtime(sinks, attempt, output=output)
+    service.complete_step(plan, index, full_output=output)
+
+
+def _shape(tmp_path, shape: str, terminal_type: str = "run_cancelled"):
+    _store, journal, _artifacts, sinks, service, plan = _bootstrap(tmp_path)
+    if shape == "S1":
+        service.start_step(plan, 0)
+        _terminate_runtime(sinks, STEP_0, terminal_type)
+        service.fail_step(
+            plan,
+            0,
+            status=(
+                GraphTerminalStatus.CANCELLED
+                if terminal_type == "run_cancelled"
+                else GraphTerminalStatus.FAILED
+            ),
+        )
+    elif shape == "S3":
+        _complete_and_seal(sinks, service, plan, 0, STEP_0, "o0")
+    elif shape == "S4":
+        _complete_and_seal(sinks, service, plan, 0, STEP_0, "o0")
+        _complete_and_seal(sinks, service, plan, 1, STEP_1, "o1")
+    else:
+        assert shape == "S2"
+    _terminate_root(sinks, terminal_type)
+    return journal, sinks, service, plan
+
+
+ROOT_SHAPES = [
+    ("S1", "run_failed", GraphTerminalStatus.FAILED, 0),
+    ("S1", "run_cancelled", GraphTerminalStatus.CANCELLED, 0),
+    ("S2", "run_cancelled", GraphTerminalStatus.CANCELLED, 0),
+    ("S3", "run_cancelled", GraphTerminalStatus.CANCELLED, 1),
+    ("S4", "run_cancelled", GraphTerminalStatus.CANCELLED, None),
+]
+
+
+@pytest.mark.parametrize(("shape", "terminal_type", "status", "next_index"), ROOT_SHAPES)
+def test_a_root_terminal_ends_the_graph(tmp_path, shape, terminal_type, status, next_index):
+    """#389: a failed or cancelled root is terminal; nothing advances after it."""
+
+    journal, _sinks, service, plan = _shape(tmp_path, shape, terminal_type)
+
+    recovery = service.recover(plan)
+    assert recovery.terminal_status is status
+    assert recovery.next_step_index is None
+    assert recovery.uncertain_step_index is None
+    assert recovery.suspended_step_index is None
+
+    if next_index is not None:
+        with pytest.raises(GraphCheckpointError, match="cannot advance"):
+            service.start_step(plan, next_index)
+    with pytest.raises(GraphCheckpointError, match="cannot finalize"):
+        service.finalize(plan)
+    assert "graph.execution.completed" not in {
+        event.event_type for event in journal.capture_snapshot().events
+    }
+
+
+@pytest.mark.parametrize(("shape", "terminal_type", "status", "next_index"), ROOT_SHAPES)
+def test_a_root_terminal_survives_a_restart(tmp_path, shape, terminal_type, status, next_index):
+    _journal, _sinks, _service, plan = _shape(tmp_path, shape, terminal_type)
+
+    _store, reopened, _artifacts, _sinks, restarted = _open(tmp_path)
+    recovery = restarted.recover(plan)
+
+    assert recovery.terminal_status is status
+    with pytest.raises(GraphCheckpointError, match="cannot finalize"):
+        restarted.finalize(plan)
+    if next_index is not None:
+        with pytest.raises(GraphCheckpointError, match="cannot advance"):
+            restarted.start_step(plan, next_index)
+    assert "graph.execution.completed" not in {
+        event.event_type for event in reopened.capture_snapshot().events
+    }
+
+
+def test_a_cancelled_root_does_not_block_sealing_existing_step_evidence(tmp_path):
+    """Crash between a step's run_completed and its seal, then a cold cancel: the
+    completed step is still sealed (S4), and sealing is all that happens."""
+
+    _store, journal, _artifacts, sinks, service, plan = _bootstrap(tmp_path)
+    service.start_step(plan, 0)
+    _complete_runtime(sinks, STEP_0, output="o0")
+    _terminate_root(sinks, "run_cancelled")
+
+    recovery = service.recover(plan)
+
+    assert _step_seals(journal) == ["graph.step.completed"]
+    assert recovery.terminal_status is GraphTerminalStatus.CANCELLED
+    assert len(recovery.completed_steps) == 1
+    assert recovery.next_step_index is None
+    assert service.complete_step(plan, 0, full_output="o0").step == plan.steps[0]
+    with pytest.raises(GraphCheckpointError, match="cannot advance"):
+        service.start_step(plan, 1)
+
+
+def test_a_cancelled_root_does_not_block_fail_step_for_its_dead_step(tmp_path):
+    _store, journal, _artifacts, sinks, service, plan = _bootstrap(tmp_path)
+    service.start_step(plan, 0)
+    _terminate_runtime(sinks, STEP_0, "run_cancelled")
+    _terminate_root(sinks, "run_cancelled")
+
+    recovery = service.fail_step(plan, 0, status=GraphTerminalStatus.CANCELLED)
+
+    assert _step_seals(journal) == ["graph.step.cancelled"]
+    assert recovery.terminal_status is GraphTerminalStatus.CANCELLED
+
+
+def test_a_root_run_completed_alone_is_not_a_graph_terminal(tmp_path):
+    _store, _journal, _artifacts, sinks, service, plan = _bootstrap(tmp_path)
+    _append(sinks[ORCHESTRATION], ORCHESTRATION, "run_completed", 50, status="completed")
+
+    recovery = service.recover(plan)
+
+    assert recovery.terminal_status is None
+    assert recovery.next_step_index == 0
+
+
+def test_a_root_terminal_followed_by_an_execution_seal_is_ambiguous(tmp_path):
+    _store, _journal, _artifacts, sinks, service, plan = _bootstrap(tmp_path)
+    _complete_and_seal(sinks, service, plan, 0, STEP_0, "o0")
+    _complete_and_seal(sinks, service, plan, 1, STEP_1, "o1")
+    _terminate_root(sinks, "run_cancelled")
+    # Written behind the service's back (an old build, or a bug): the
+    # repository seal is taken from a scan made before the root terminal.
+    completion = service.repository.scan(plan).recovery.completed_steps[1]
+    service.repository.finalize(plan, completion)
+
+    with pytest.raises(GraphCheckpointError, match="ambiguous"):
+        service.recover(plan)
+
+
+def test_two_root_terminals_are_ambiguous(tmp_path):
+    _store, _journal, _artifacts, sinks, service, plan = _bootstrap(tmp_path)
+    _terminate_root(sinks, "run_cancelled", 50)
+    _terminate_root(sinks, "run_failed", 51)
+
+    with pytest.raises(GraphCheckpointError, match="ambiguous"):
+        service.recover(plan)

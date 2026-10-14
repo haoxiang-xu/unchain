@@ -26,6 +26,7 @@ from .durable import (
     INTERACTION_KIND_HUMAN_INPUT,
     INTERACTION_KIND_MAX_BUDGET,
     INTERACTION_KIND_TOOL_APPROVAL,
+    DurableInteractionSettlementPending,
     InteractionAlreadyAppliedError,
     InteractionError,
     InteractionIntegrityError,
@@ -73,6 +74,7 @@ def __getattr__(name: str):
 
 
 __all__ = [
+    "DurableInteractionSettlementPending",
     "ASK_USER_QUESTION_TOOL_NAME",
     "HUMAN_INPUT_KIND_SELECTOR",
     "HUMAN_INPUT_OTHER_VALUE",
