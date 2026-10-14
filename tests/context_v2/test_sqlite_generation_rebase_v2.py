@@ -2966,6 +2966,66 @@ def test_a_failed_or_cancelled_root_terminal_allows_rebase(
     assert service.rebase(request).head_revision == 2
 
 
+@pytest.mark.parametrize("terminal_type", ["run_failed", "run_cancelled"])
+@pytest.mark.parametrize("audit_type", [
+    "memory.curator.enqueued", "memory.curator.noop",
+    "memory.curator.isolated", "memory.curator.failed",
+])
+def test_dead_root_curator_audit_tail_allows_rebase(
+    tmp_path: Path, terminal_type: str, audit_type: str,
+) -> None:
+    """#389 dead graph terminals retain #401's post-terminal audit contract."""
+    _store_value, service, _graph, plan, sinks, request = _root_terminal_graph(
+        tmp_path, "S1", terminal_type,
+    )
+    root = plan.orchestration_attempt
+    _append_graph_runtime_event(sinks[root], root, audit_type, 41)
+
+    assert service.rebase(request).head_revision == 2
+
+
+@pytest.mark.parametrize("terminal_type", ["run_failed", "run_cancelled"])
+@pytest.mark.parametrize(("tail_type", "reason"), [
+    ("final_message", "attempt_continued_after_terminal"),
+    ("run_failed", "attempt_duplicate_terminal"),
+])
+def test_dead_root_curator_audit_does_not_hide_illegal_tail(
+    tmp_path: Path, terminal_type: str, tail_type: str, reason: str,
+) -> None:
+    store, service, _graph, plan, sinks, request = _root_terminal_graph(
+        tmp_path, "S1", terminal_type,
+    )
+    root = plan.orchestration_attempt
+    _append_graph_runtime_event(sinks[root], root, "memory.curator.noop", 41)
+    _append_graph_runtime_event(sinks[root], root, tail_type, 42)
+    before = _durable_counts(store)
+
+    with pytest.raises(GenerationRebaseJournalIncompatible) as incompatible:
+        service.rebase(request)
+    assert incompatible.value.reason == reason
+    assert _durable_counts(store) == before
+
+
+@pytest.mark.parametrize("terminal_type", ["run_failed", "run_cancelled"])
+def test_dead_root_curator_audit_before_terminal_is_not_a_tail(
+    tmp_path: Path, terminal_type: str,
+) -> None:
+    store = _store(tmp_path)
+    service = SQLiteGenerationRebaseV2Service(store)
+    initial = service.rebase(_request(_intent(), operation_id="rebase-operation-audit-prefix"))
+    _graph, plan, sinks = _graph_checkpoint_runtime(store, initial, step_count=2)
+    root = plan.orchestration_attempt
+    _append_graph_runtime_event(sinks[root], root, "memory.curator.noop", 40)
+    _append_graph_runtime_event(sinks[root], root, terminal_type, 41)
+    _next_intent, request = _next(initial, kind=GenerationRebaseKind.EDIT, ordinal=2)
+    before = _durable_counts(store)
+
+    with pytest.raises(GenerationRebaseJournalIncompatible) as incompatible:
+        service.rebase(request)
+    assert incompatible.value.reason == "graph_step_sequence_invalid"
+    assert _durable_counts(store) == before
+
+
 def test_a_root_terminal_does_not_hide_an_unsealed_step(tmp_path: Path) -> None:
     """A step with a terminal but no seal still asks for recovery first."""
 

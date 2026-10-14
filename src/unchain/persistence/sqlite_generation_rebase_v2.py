@@ -3670,7 +3670,10 @@ class SQLiteGenerationRebaseV2Service:
                 # Like any dead graph it must be exactly the admission
                 # followed by this one terminal; the step checks above and
                 # below still decide whether any step blocks the rebase.
-                if attempt_events[-2] != admission:
+                # Curator audit events may follow the terminal. Check the
+                # terminal's predecessor, not the end of the entire attempt.
+                terminal_index = attempt_events.index(terminal)
+                if terminal_index == 0 or attempt_events[terminal_index - 1] != admission:
                     raise _journal_incompatible(
                         "generation rebase graph root terminal does not follow its admission",
                         reason=(
