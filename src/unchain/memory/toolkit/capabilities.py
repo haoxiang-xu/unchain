@@ -3,7 +3,7 @@ from __future__ import annotations
 import inspect
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Protocol, Sequence, runtime_checkable
+from typing import Any, Callable, Protocol, Sequence, runtime_checkable
 
 from unchain.journal import ResourceRef
 from unchain.memory.curator.models import CuratorLeaseFence
@@ -189,10 +189,19 @@ class NormalMemoryToolkitCapabilities:
     context: BoundContextMemoryCapability
     chat: BoundMemoryReadCapability
     candidates: BoundCandidateProposalCapability
+    proposal_source_refs_resolver: Callable[[], Sequence[ResourceRef]] | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
     long_term: BoundMemoryReadCapability | None = None
     allowed_long_term_refs: tuple[ResourceRef, ...] = ()
 
     def __post_init__(self) -> None:
+        if self.proposal_source_refs_resolver is not None and not callable(
+            self.proposal_source_refs_resolver
+        ):
+            raise TypeError("proposal_source_refs_resolver must be callable")
         allowed_long_term_refs = _structured_refs(
             self.allowed_long_term_refs,
             field_name="allowed_long_term_refs",
@@ -211,6 +220,31 @@ class NormalMemoryToolkitCapabilities:
             raise MemoryToolkitError(
                 "recalled long-term references require a bound long-term capability"
             )
+
+    def resolve_proposal_source_refs(self) -> tuple[ResourceRef, ...]:
+        resolver = self.proposal_source_refs_resolver
+        if resolver is None:
+            raise MemoryToolkitError(
+                "memory proposal provenance is unavailable for this run"
+            )
+        refs = _structured_refs(
+            resolver(),
+            field_name="proposal_source_refs",
+            allowed_kinds=frozenset({"context_event"}),
+        )
+        if not refs:
+            raise MemoryToolkitError(
+                "memory proposal provenance must include current-run evidence"
+            )
+        if len(refs) > 128:
+            raise MemoryToolkitError(
+                "memory proposal provenance exceeds the run evidence limit"
+            )
+        if len(set(refs)) != len(refs):
+            raise MemoryToolkitError(
+                "memory proposal provenance must not contain duplicates"
+            )
+        return refs
 
 
 @dataclass(frozen=True)

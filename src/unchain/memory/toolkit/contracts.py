@@ -32,8 +32,11 @@ _DESCRIPTIONS = {
         "are allowed only below a hard context-safety limit."
     ),
     "memory_propose": (
-        "Create only a memory candidate for curator review. Use a meaningful path and "
-        "an indexed description; this cannot directly write chat or long-term memory."
+        "Create one markdown memory candidate for curator review. Supply a meaningful "
+        "path, indexed description, and standalone content. Current-run evidence is "
+        "bound by the runtime and cannot be supplied by the model. Success requires a "
+        "non-empty candidate_ref in the tool result; this cannot directly write chat "
+        "or long-term memory."
     ),
     "memory_source_read": (
         "Read a scoped memory, artifact, journal-event, or checkpoint source with "

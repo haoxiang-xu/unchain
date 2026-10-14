@@ -50,8 +50,11 @@ BASE_DESCRIPTIONS = {
 
 ROLE_DESCRIPTIONS = {
     "memory_propose": (
-        "Create only a memory candidate for curator review. Use a meaningful path and "
-        "an indexed description; this cannot directly write chat or long-term memory."
+        "Create one markdown memory candidate for curator review. Supply a meaningful "
+        "path, indexed description, and standalone content. Current-run evidence is "
+        "bound by the runtime and cannot be supplied by the model. Success requires a "
+        "non-empty candidate_ref in the tool result; this cannot directly write chat "
+        "or long-term memory."
     ),
     "memory_source_read": (
         "Read a scoped pupu://memory, pupu://artifact, pupu://context/event, or "
@@ -182,16 +185,11 @@ PARAMETERS = {
             "path": "string",
             "description": "string",
             "content": "string",
-            "kind": "string",
-            "content_base64": "string",
-            "mime_type": "string",
-            "url": "string",
-            "source_refs": "array",
             "rationale": "string",
             "confidence": "number",
             "sensitivity": "string",
         },
-        ["path", "description"],
+        ["path", "description", "content"],
     ),
     "memory_source_read": (
         {"ref": "string", "offset": "integer", "limit": "integer", "full": "boolean"},
@@ -298,12 +296,6 @@ DEFAULTS = {
     "memory_search": {"limit": 20},
     "memory_read": {"offset": 0, "limit": 32 * 1024, "full": False},
     "memory_propose": {
-        "content": "",
-        "kind": "markdown",
-        "content_base64": "",
-        "mime_type": "",
-        "url": "",
-        "source_refs": None,
         "rationale": "",
         "confidence": None,
         "sensitivity": "normal",
@@ -390,6 +382,9 @@ def _toolkits():
             context=common,
             chat=common,
             candidates=common,
+            proposal_source_refs_resolver=lambda: (
+                ResourceRef("context_event", "event-1", 1),
+            ),
         ),
         dialect=HOST_DIALECT,
     )
@@ -513,6 +508,8 @@ def test_memory_proposal_policy_is_bound_only_to_the_proposal_tool():
         "Secret Vault",
         "Pinned Task State",
         "say only that a memory candidate was proposed",
+        "non-empty candidate_ref",
+        "Any tool error means no candidate was proposed",
         "Claim formal memory was saved only when a curator or formal-write result",
         "If nothing passes this policy, do not call the tool",
     ):
@@ -523,13 +520,27 @@ def test_memory_proposal_policy_is_bound_only_to_the_proposal_tool():
             toolkits[profile]
         )
 
-    for provider in ("openai", "anthropic", "ollama"):
+    for provider in ("openai", "anthropic", "gemini", "ollama"):
         provider_schema = proposal_tool.to_provider_json(provider)
         assert MEMORY_PROPOSAL_POLICY_VERSION not in str(provider_schema)
         provider_description = provider_schema.get("description")
         if provider_description is None:
             provider_description = provider_schema["function"]["description"]
         assert provider_description == ROLE_DESCRIPTIONS["memory_propose"]
+        parameters = provider_schema.get("parameters")
+        if parameters is None:
+            parameters = provider_schema.get("input_schema")
+        if parameters is None:
+            parameters = provider_schema["function"]["parameters"]
+        assert set(parameters["properties"]) == {
+            "path",
+            "description",
+            "content",
+            "rationale",
+            "confidence",
+            "sensitivity",
+        }
+        assert parameters["required"] == ["path", "description", "content"]
 
 
 def test_tool_descriptions_schemas_flags_and_defaults_match_pupu_p0_contract():

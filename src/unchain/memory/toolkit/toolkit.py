@@ -787,12 +787,7 @@ def build_memory_toolkit(
         def memory_propose(
             path: str,
             description: str,
-            content: str = "",
-            kind: str = "markdown",
-            content_base64: str = "",
-            mime_type: str = "",
-            url: str = "",
-            source_refs: list[str] | None = None,
+            content: str,
             rationale: str = "",
             confidence: float | None = None,
             sensitivity: str = "normal",
@@ -800,18 +795,13 @@ def build_memory_toolkit(
             normalized_path = meaningful_path(path)
             normalized_description = meaningful_description(description)
             public_kind, raw, resolved_mime, resolved_url = decode_write_content(
-                kind=kind,
+                kind="markdown",
                 content=content,
-                content_base64=content_base64,
-                mime_type=mime_type,
-                url=url,
+                content_base64="",
+                mime_type="text/markdown",
+                url="",
             )
-            provenance = decode_source_event_refs(
-                references,
-                source_refs,
-                list_error=dialect.error("source_refs_list"),
-                item_error=dialect.error("source_refs"),
-            )
+            provenance = capabilities.resolve_proposal_source_refs()
             for source_ref in provenance:
                 authorize_context_ref(
                     source_ref,
@@ -855,9 +845,18 @@ def build_memory_toolkit(
                     payload=operation_payload,
                 ),
             )
-            return present(
+            proposed = present(
                 capabilities.candidates.propose(request=request),
             )
+            if (
+                not isinstance(proposed, dict)
+                or not isinstance(proposed.get("candidate_ref"), str)
+                or not proposed["candidate_ref"].strip()
+            ):
+                raise MemoryToolkitError(
+                    "memory proposal did not return a candidate reference"
+                )
+            return proposed
 
         callables.append(
             (

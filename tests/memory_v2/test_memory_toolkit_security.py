@@ -355,6 +355,7 @@ def normal_toolkit(*, chat=None, context=None, candidates=None, codec=None):
     context = context or FakeContext()
     candidates = candidates or FakeCandidates()
     codec = codec or FakeCodec()
+    context.source_refs.add(ResourceRef("context_event", "event-1", 1))
     toolkit = build_memory_toolkit(
         binding(),
         NormalMemoryToolkitCapabilities(
@@ -362,6 +363,7 @@ def normal_toolkit(*, chat=None, context=None, candidates=None, codec=None):
             context=context,
             chat=chat,
             candidates=candidates,
+            proposal_source_refs_resolver=lambda: tuple(context.source_refs),
         ),
         dialect=HOST_DIALECT,
     )
@@ -728,7 +730,6 @@ def test_normal_candidate_proposal_is_structured_idempotent_and_never_formal_wri
         "path": "/decisions/provider-selection.md",
         "description": "Chosen provider and the constraints that justify the choice",
         "content": "# Decision\nUse the selected provider.",
-        "source_refs": ["pupu://context/event/event-1"],
         "rationale": "Needed in later implementation turns",
         "confidence": 0.9,
     }
@@ -745,6 +746,35 @@ def test_normal_candidate_proposal_is_structured_idempotent_and_never_formal_wri
 
     invoke(toolkit, "memory_propose", **{**arguments, "content": "changed"})
     assert candidates.calls[2].operation_id != candidates.calls[0].operation_id
+
+
+def test_normal_candidate_proposal_fails_closed_without_runtime_owned_provenance():
+    context = FakeContext()
+    candidates = FakeCandidates()
+    toolkit = build_memory_toolkit(
+        binding(),
+        NormalMemoryToolkitCapabilities(
+            references=FakeCodec(),
+            context=context,
+            chat=FakeChat(),
+            candidates=candidates,
+        ),
+        dialect=HOST_DIALECT,
+    )
+
+    with pytest.raises(
+        MemoryToolkitError,
+        match="^memory proposal provenance is unavailable for this run$",
+    ):
+        invoke(
+            toolkit,
+            "memory_propose",
+            path="/decisions/provider-selection.md",
+            description="Chosen provider",
+            content="Use the selected provider.",
+        )
+
+    assert candidates.calls == []
 
 
 def test_consolidation_tools_accept_only_frozen_structured_candidate_and_source_refs():
@@ -1270,34 +1300,22 @@ def test_read_boundaries_reject_capability_pages_larger_than_the_requested_limit
         )
 
 
-@pytest.mark.parametrize(
-    "unsafe_url",
-    (
-        "https://user:password@example.test/docs",
-        "https://example.test/docs?token=plain-secret",
-        "https://example.test/docs#access_token=plain-secret",
-        "https://example.test/token/abcdefghijklmnop",
-        "https://example.test/%74%6f%6b%65%6e/abcdefghijklmnop",
-        "https://example.test/docs?%EF%BD%94%EF%BD%8F%EF%BD%8B%EF%BD%85%EF%BD%8E=value",
-    ),
-)
-def test_link_candidates_reuse_workspace_credential_url_guard_before_persistence(
-    unsafe_url,
-):
+def test_normal_candidate_contract_excludes_non_markdown_payload_shapes():
     candidates = FakeCandidates()
     toolkit, _, _, _, _ = normal_toolkit(candidates=candidates)
+    parameters = toolkit.tools["memory_propose"].to_json()["parameters"]
 
-    with pytest.raises(
-        MemoryToolkitError,
-        match="^link URLs cannot contain credentials$",
-    ):
+    assert "kind" not in parameters["properties"]
+    assert "url" not in parameters["properties"]
+    assert "content_base64" not in parameters["properties"]
+    with pytest.raises(TypeError, match="unexpected keyword argument 'kind'"):
         invoke(
             toolkit,
             "memory_propose",
             path="/references/provider-docs.link",
             description="Provider documentation used for the implementation",
+            content="https://example.test/docs",
             kind="link",
-            url=unsafe_url,
         )
     assert candidates.calls == []
 

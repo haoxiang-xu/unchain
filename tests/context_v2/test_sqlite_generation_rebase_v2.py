@@ -1343,6 +1343,43 @@ def test_completed_tool_and_terminal_attempt_allow_rebase(tmp_path: Path) -> Non
     assert edited.head_revision == 2
 
 
+def test_terminal_attempt_with_memory_curator_audit_allows_rebase(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    service = SQLiteGenerationRebaseV2Service(store)
+    initial = service.rebase(
+        _request(_intent(), operation_id="rebase-operation-1")
+    )
+    _append_event(
+        store,
+        initial,
+        event_id="run-completed-with-curator-audit",
+        event_type="run_completed",
+        attempt_id="attempt-complete",
+    )
+    _append_event(
+        store,
+        initial,
+        event_id="memory-curator-noop-after-completion",
+        event_type="memory.curator.noop",
+        attempt_id="attempt-complete",
+        payload={
+            "schema": "pupu.memory_curator_completion.v1",
+            "status": "NoOp",
+        },
+    )
+    _edit_intent, edit_request = _next(
+        initial,
+        kind=GenerationRebaseKind.EDIT,
+        ordinal=2,
+    )
+
+    edited = service.rebase(edit_request)
+
+    assert edited.head_revision == 2
+
+
 def test_duplicate_tool_lifecycle_fails_without_rebase_writes(
     tmp_path: Path,
 ) -> None:

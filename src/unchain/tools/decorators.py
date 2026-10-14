@@ -4,6 +4,7 @@ from typing import Any, Callable
 
 from .models import HistoryPayloadOptimizer, ToolConfirmationPolicy, ToolExecutionContext, ToolParameter, ToolPromptSpec
 from .tool import Tool
+from .timeline_policy import DEFAULT_TIMELINE_MERGE_POLICY
 
 
 def tool(
@@ -27,6 +28,7 @@ def tool(
     always_load: bool = False,
     defer_by_default: bool = False,
     search_hint: str = "",
+    timeline_merge_policy: str = DEFAULT_TIMELINE_MERGE_POLICY,
 ):
     target = func
     if callable(__func) and target is None:
@@ -49,6 +51,7 @@ def tool(
             always_load=always_load,
             defer_by_default=defer_by_default,
             search_hint=search_hint,
+            timeline_merge_policy=timeline_merge_policy,
         )
 
     def decorator(inner: Callable[..., Any]) -> Tool:
@@ -68,6 +71,7 @@ def tool(
             always_load=always_load,
             defer_by_default=defer_by_default,
             search_hint=search_hint,
+            timeline_merge_policy=timeline_merge_policy,
         )
 
     return decorator
