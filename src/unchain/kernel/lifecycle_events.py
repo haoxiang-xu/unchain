@@ -112,8 +112,31 @@ def build_provider_retry_payload(
     }
 
 
+def build_run_failure_payload(
+    *,
+    iteration: int,
+    error_code: str,
+    cancelled: bool,
+) -> dict[str, Any]:
+    """Payload of a non-success terminal.
+
+    Top-level ``code`` and ``message`` are what the V4 normalizer reads for
+    ``run_failed``. The text is fixed and local: the failing exception's own
+    message never enters a journaled event.
+    """
+
+    return {
+        "iteration": max(0, int(iteration)),
+        "status": "cancelled" if cancelled else "failed",
+        "code": error_code,
+        "message": "Run cancelled" if cancelled else "Run failed",
+        "recoverable": False,
+    }
+
+
 __all__ = [
     "build_provider_retry_payload",
+    "build_run_failure_payload",
     "build_final_message_payload",
     "build_iteration_completed_payload",
     "build_iteration_started_payload",

@@ -265,3 +265,20 @@ def test_unknown_canonical_protocols_and_features_round_trip() -> None:
     value = _resign(value)
 
     assert RuntimeProtocolManifest.from_dict(value).to_dict() == value
+
+
+def test_manifest_declares_failed_and_cancelled_graph_terminals() -> None:
+    from unchain.runtime.runtime_protocol import runtime_protocol_manifest
+
+    context = next(
+        item for item in runtime_protocol_manifest()["protocols"]
+        if item["id"] == "context_memory"
+    )
+    assert "graph_failure_terminals_v1" in context["features"]
+
+
+def test_manifest_declares_durable_interaction_settlement_fence():
+    from unchain.runtime.runtime_protocol import runtime_protocol_manifest
+
+    context = next(protocol for protocol in runtime_protocol_manifest()["protocols"] if protocol["id"] == "context_memory")
+    assert "durable_interaction_settlement_fence_v1" in context["features"]

@@ -6,6 +6,7 @@ from typing import Any
 from .lifecycle_events import (
     build_final_message_payload,
     build_run_completed_payload,
+    build_run_failure_payload,
     build_run_max_iterations_payload,
 )
 from .results import build_kernel_run_result
@@ -50,6 +51,46 @@ def finish_completed_run(
         **build_run_completed_payload(state, status="completed"),
     )
     return build_kernel_run_result(state, status="completed")
+
+
+# Events that end an attempt in the journal. A run that has attempted one of
+# these never gets a second, failure-shaped terminal.
+TERMINAL_EVENT_TYPES = frozenset(
+    {
+        "run_completed",
+        "run_failed",
+        "run_cancelled",
+        "run_max_iterations",
+    }
+)
+
+
+def emit_run_failure_terminal(
+    *,
+    callback: Any,
+    run_id: str,
+    iteration: int,
+    error_code: str,
+    cancelled: bool,
+    emit_event: EmitEvent,
+) -> None:
+    """Emit the one canonical terminal for a failed or cancelled run.
+
+    Journal consumers (rebase preflight, projector, graph recovery) already
+    treat ``run_failed`` and ``run_cancelled`` as terminals; nothing produced
+    them before, so the attempt stayed open forever.
+    """
+
+    emit_event(
+        callback,
+        "run_cancelled" if cancelled else "run_failed",
+        run_id,
+        **build_run_failure_payload(
+            iteration=iteration,
+            error_code=error_code,
+            cancelled=cancelled,
+        ),
+    )
 
 
 def finish_max_iterations_run(
