@@ -10,6 +10,67 @@ from unchain.skeleton import diagnose_skeleton_draft, validate_skeleton_for_exec
 FIXTURES = Path(__file__).parent / "fixtures" / "skeleton_legacy"
 def fixture(name): return json.loads((FIXTURES / name).read_text())
 
+
+@pytest.mark.parametrize("description", ["A useful description", "  Keep this spacing  ", "0"])
+def test_template_description_survives_metadata_and_agent_envelope(description):
+    source = {"name": "Template", "description": description, "instructions": "Do work"}
+    result = convert_legacy_definition("skeleton_template", source, resource_id="template")
+    assert result["description"] == description
+    assert result["nodes"][1]["config"]["legacy_template"]["description"] == description
+    assert source == {"name": "Template", "description": description, "instructions": "Do work"}
+
+
+@pytest.mark.parametrize("description", ["A useful description", "Summary: 中文", "0"])
+def test_soul_description_survives_metadata_and_agent_envelope(description):
+    source = f"---\nname: Soul\ndescription:  {description}  \n---\nDo work"
+    result = convert_legacy_definition("soul", source, resource_id="soul")
+    assert result["description"] == description
+    assert result["nodes"][1]["config"]["legacy_template"]["description"] == description
+    assert result["nodes"][0]["config"]["legacy_source"]["text"] == source
+
+
+@pytest.mark.parametrize("graph", [False, True])
+@pytest.mark.parametrize("description", [None, "", "  ", "An existing recipe description"])
+def test_recipe_description_presence_and_value_are_preserved(graph, description):
+    source = fixture("graph_recipe.json" if graph else "graphless_recipe.json")
+    if description is None:
+        source.pop("description", None)
+    else:
+        source["description"] = description
+    result = convert_legacy_definition("recipe", source, resource_id="recipe")
+    if description is None:
+        assert "description" not in result
+    else:
+        assert result["description"] == description
+
+
+@pytest.mark.parametrize("description", [None, {}, [], 0, False, "", " \t\n"])
+def test_invalid_template_description_keeps_canonical_refusal(description):
+    source = {"name": "Template", "description": description, "instructions": "Do work"}
+    with pytest.raises(SkeletonValidationError) as caught:
+        convert_legacy_definition("skeleton_template", source, resource_id="template")
+    assert caught.value.code == "invalid_value"
+    assert caught.value.path == ("source",)
+
+
+@pytest.mark.parametrize("header", ["", "description:\n", "description: []\n"])
+def test_missing_or_invalid_soul_description_keeps_canonical_refusal(header):
+    with pytest.raises(SkeletonValidationError) as caught:
+        convert_legacy_definition("soul", f"---\nname: Soul\n{header}---\nDo work", resource_id="soul")
+    assert caught.value.code == "invalid_value"
+    assert caught.value.path == ("source",)
+
+
+@pytest.mark.parametrize("description", [None, {}, [], 0, False])
+def test_invalid_recipe_description_keeps_canonical_refusal(description):
+    source = fixture("graphless_recipe.json")
+    source["description"] = description
+    with pytest.raises(SkeletonValidationError) as caught:
+        convert_legacy_definition("recipe", source, resource_id="recipe")
+    assert caught.value.code == "invalid_type"
+    assert caught.value.path == ("source", "description")
+
+
 def test_graphless_recipe_preserves_provenance_and_sentinel():
     source = fixture("graphless_recipe.json")
     result = convert_legacy_definition("recipe", source, resource_id="caller-id")
@@ -84,7 +145,7 @@ def test_declarative_graph_template_and_explicit_soul_fixtures():
     assert graph["name"] == "Graph"
     template = convert_legacy_definition("skeleton_template", fixture("full_template.json"), resource_id="template-id")
     metadata = template["nodes"][1]["config"]["legacy_template"]
-    assert metadata == {"allowed_modes":["delegate","worker"],"output_mode":"full_trace","memory_policy":"scoped_persistent","parallel_safe":False,"allowed_tools":["one","two"],"model":"model-y"}
+    assert metadata == {"description":"Full template","allowed_modes":["delegate","worker"],"output_mode":"full_trace","memory_policy":"scoped_persistent","parallel_safe":False,"allowed_tools":["one","two"],"model":"model-y"}
     soul = convert_legacy_definition("soul", fixture("soul_explicit.json"), resource_id="soul-id")
     assert soul["nodes"][1]["config"]["legacy_template"]["allowed_tools"] == ["one", "two"]
     assert soul["nodes"][1]["config"]["legacy_template"]["model"] == "model-z"

@@ -58,14 +58,14 @@ def _template_metadata(source: dict[str, Any], path: tuple[str | int, ...]) -> d
         _error("invalid_type", path + ("allowed_tools",), "allowed_tools must be null or a list of strings")
     if model is not None and type(model) is not str:
         _error("invalid_type", path + ("model",), "model must be null or a string")
-    return {"allowed_modes": modes, "output_mode": output, "memory_policy": memory, "parallel_safe": parallel, "allowed_tools": None if tools is None else [item.strip() for item in tools if item.strip()], "model": model.strip() or None if type(model) is str else None}
+    return {"description": source["description"], "allowed_modes": modes, "output_mode": output, "memory_policy": memory, "parallel_safe": parallel, "allowed_tools": None if tools is None else [item.strip() for item in tools if item.strip()], "model": model.strip() or None if type(model) is str else None}
 
 
 def _fixed(resource_id: str, name: str, provenance: dict[str, Any], prompt: dict[str, Any], template: dict[str, Any] | None = None) -> dict[str, Any]:
     agent_config: dict[str, Any] = {"prompt": prompt}
     if template is not None:
         agent_config["legacy_template"] = template
-    return {"schema_version": 1, "kind": "agent", "id": resource_id, "name": name, "nodes": [
+    result = {"schema_version": 1, "kind": "agent", "id": resource_id, "name": name, "nodes": [
         {"id": "start", "type": "start", "config": {"legacy_source": provenance}},
         {"id": "agent", "type": "agent", "config": agent_config},
         {"id": "end", "type": "end", "config": {}},
@@ -73,6 +73,9 @@ def _fixed(resource_id: str, name: str, provenance: dict[str, Any], prompt: dict
         {"id": "start-agent", "kind": "flow", "source_node_id": "start", "source_port_id": "out", "target_node_id": "agent", "target_port_id": "in"},
         {"id": "agent-end", "kind": "flow", "source_node_id": "agent", "source_port_id": "out", "target_node_id": "end", "target_port_id": "in"},
     ]}
+    if template is not None:
+        result["description"] = template["description"]
+    return result
 
 
 def _validate_inert_edges(edges: Any) -> None:
@@ -211,7 +214,7 @@ def _soul(source: str, resource_id: str) -> dict[str, Any]:
         _error("invalid_type", ("source", "tools"), "soul tools must be a list")
     if "model" in metadata and type(metadata["model"]) is not str:
         _error("invalid_type", ("source", "model"), "soul model must be a string")
-    template = {"allowed_modes": ["delegate", "worker"], "output_mode": "summary", "memory_policy": "ephemeral", "parallel_safe": True, "allowed_tools": metadata.get("tools"), "model": metadata.get("model", "").strip() or None}
+    template = {"description": metadata["description"], "allowed_modes": ["delegate", "worker"], "output_mode": "summary", "memory_policy": "ephemeral", "parallel_safe": True, "allowed_tools": metadata.get("tools"), "model": metadata.get("model", "").strip() or None}
     return _fixed(resource_id, metadata["name"].strip(), {"format": "soul", "text": source}, {"kind": "text", "text": body.strip()}, template)
 
 
@@ -232,6 +235,8 @@ def convert_legacy_definition(source_kind: Any, source: Any, *, resource_id: Any
             _error("invalid_value", ("source", "schema_version"), "new skeleton is not a legacy source")
         if source_kind == "recipe":
             result = _recipe(source, resource_id)
+            if "description" in source:
+                result["description"] = source["description"]
         else:
             if type(source.get("name")) is not str or type(source.get("instructions")) is not str:
                 _error("invalid_value", ("source",), "template requires name and instructions")
