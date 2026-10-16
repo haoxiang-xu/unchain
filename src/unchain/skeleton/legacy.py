@@ -243,6 +243,10 @@ def convert_legacy_definition(source_kind: Any, source: Any, *, resource_id: Any
 
 
 def _legacy_output_names(node: dict[str, Any]) -> list[str]:
+    execution = node.get("config", {}).get("execution")
+    outputs = execution.get("outputs") if type(execution) is dict else None
+    if type(outputs) is list and all(type(item) is dict and type(item.get("name")) is str for item in outputs):
+        return [item["name"] for item in outputs]
     if node["type"] == "start":
         fields = node["config"].get("legacy_fields", {})
         outputs = fields.get("outputs") if type(fields) is dict else None
@@ -299,14 +303,16 @@ def _legacy_prompt_bindings(text: str, nodes: dict[str, dict[str, Any]]) -> tupl
 def materialize_legacy_agent(document: Any, kernel: Any) -> dict[str, Any]:
     """Produce one strict, detached Agent execution snapshot from legacy data.
 
-    Model/provider resolution stays host-owned: ``kernel`` is the exact profile
-    selected for this run. Legacy prompt text is projected onto that fixed
-    profile without retaining compatibility-only config in executable nodes.
+    An explicit node Kernel is the authored configuration, including its
+    model, prompt and iteration limit. Only nodes without one project their
+    legacy settings onto the host-supplied fallback ``kernel``. The fallback
+    is not needed for an entirely configured graph. Explicit execution
+    bindings are retained for the normal strict execution validator.
     """
     checked = validate_skeleton_document(document)
     if checked["kind"] != "agent":
         _error("wrong_kind", ("document", "kind"), "legacy materialization requires an Agent")
-    fixed_kernel = validate_kernel_config(kernel, ("legacy_kernel",))
+    fixed_kernel = None
     flow = [edge for edge in checked["edges"] if edge["kind"] == "flow"]
     incoming: dict[str, str] = {}
     for edge in flow:
@@ -328,8 +334,11 @@ def materialize_legacy_agent(document: Any, kernel: Any) -> dict[str, Any]:
             continue
         if node_type == "start":
             names = _legacy_output_names(node)
-            node["config"] = {"execution": {"outputs": _execution_outputs(names, "result")}}
-            outputs_by_id[node["id"]] = names
+            execution = node["config"]["execution"] if "execution" in node["config"] else {
+                "outputs": _execution_outputs(names, "result"),
+            }
+            node["config"] = {"execution": execution}
+            outputs_by_id[node["id"]] = _legacy_output_names(node)
             continue
         source_id = incoming.get(node["id"])
         if source_id is None or source_id not in by_id:
@@ -337,39 +346,52 @@ def materialize_legacy_agent(document: Any, kernel: Any) -> dict[str, Any]:
         source_names = outputs_by_id.get(source_id) or _legacy_output_names(by_id[source_id])
         inputs = _execution_inputs(source_id, source_names)
         if node_type == "agent":
-            prompt = node["config"].get("prompt")
-            if type(prompt) is not dict or prompt.get("kind") not in {"text", "builtin_developer_prompt"}:
-                _error("invalid_shape", ("document", "nodes", index, "config", "prompt"), "legacy prompt is invalid")
-            selected = deepcopy(fixed_kernel)
-            if prompt["kind"] == "text":
-                text = _START_PREFIX.sub("", prompt["text"]).strip()
-                selected["prompt"], prompt_inputs = _legacy_prompt_bindings(text, by_id)
-                inputs.extend(prompt_inputs)
-            legacy = legacy_recipe or node["config"].get("legacy_template")
-            fields = node["config"].get("legacy_fields", {})
-            override = fields.get("override", {}) if type(fields) is dict else {}
-            override_model = override.get("model") if type(override) is dict else None
-            requested_model = (
-                override_model if type(override_model) is str and override_model.strip()
-                else legacy.get("model") if type(legacy) is dict else None
-            )
-            if (type(requested_model) is str and requested_model.strip()
-                    and not _model_matches(requested_model, selected["profile"])):
-                _error("identity_mismatch", ("document", "nodes", index, "config", "model"), "selected model differs from legacy Agent")
-            maximum = legacy.get("max_iterations") if type(legacy) is dict else None
-            if maximum is not None:
-                selected["max_iterations"] = maximum
+            if "kernel" in node["config"]:
+                # Presence is intentional, including an empty prompt or the
+                # default iteration limit. Invalid authored data must never
+                # silently fall back to a different model or configuration.
+                selected = validate_kernel_config(node["config"]["kernel"],
+                    ("document", "nodes", index, "config", "kernel"))
+            else:
+                if fixed_kernel is None:
+                    fixed_kernel = validate_kernel_config(kernel, ("legacy_kernel",))
+                selected = deepcopy(fixed_kernel)
+                prompt = node["config"].get("prompt")
+                if type(prompt) is not dict or prompt.get("kind") not in {"text", "builtin_developer_prompt"}:
+                    _error("invalid_shape", ("document", "nodes", index, "config", "prompt"), "legacy prompt is invalid")
+                if prompt["kind"] == "text":
+                    text = _START_PREFIX.sub("", prompt["text"]).strip()
+                    selected["prompt"], prompt_inputs = _legacy_prompt_bindings(text, by_id)
+                    inputs.extend(prompt_inputs)
+                legacy = legacy_recipe or node["config"].get("legacy_template")
+                fields = node["config"].get("legacy_fields", {})
+                override = fields.get("override", {}) if type(fields) is dict else {}
+                override_model = override.get("model") if type(override) is dict else None
+                requested_model = (
+                    override_model if type(override_model) is str and override_model.strip()
+                    else legacy.get("model") if type(legacy) is dict else None
+                )
+                if (type(requested_model) is str and requested_model.strip()
+                        and not _model_matches(requested_model, selected["profile"])):
+                    _error("identity_mismatch", ("document", "nodes", index, "config", "model"), "selected model differs from legacy Agent")
+                maximum = legacy.get("max_iterations") if type(legacy) is dict else None
+                if maximum is not None:
+                    selected["max_iterations"] = maximum
             names = ["message", "context"]
+            execution = node["config"]["execution"] if "execution" in node["config"] else {
+                "inputs": inputs, "outputs": _execution_outputs(names, "result"),
+            }
             node["config"] = {
-                "execution": {"inputs": inputs, "outputs": _execution_outputs(names, "result")},
+                "execution": execution,
                 "kernel": selected,
             }
-            outputs_by_id[node["id"]] = names
+            outputs_by_id[node["id"]] = _legacy_output_names(node)
         elif node_type == "end":
-            node["config"] = {
-                "execution": {"inputs": inputs, "outputs": _execution_outputs(source_names, "input")},
+            execution = node["config"]["execution"] if "execution" in node["config"] else {
+                "inputs": inputs, "outputs": _execution_outputs(source_names, "input"),
             }
-            outputs_by_id[node["id"]] = source_names
+            node["config"] = {"execution": execution}
+            outputs_by_id[node["id"]] = _legacy_output_names(node)
         else:
             _error("unknown_variant", ("document", "nodes", index, "type"), "legacy Agent contains an unsupported execution node")
     return validate_skeleton_document(result)

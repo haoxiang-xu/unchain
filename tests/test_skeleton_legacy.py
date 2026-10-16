@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 from unchain.skeleton import SkeletonValidationError, convert_legacy_definition, materialize_legacy_agent
 from unchain.skeleton.agent_preparation import prepare_agent_graph
+from unchain.skeleton.execution import _validate_all
 from unchain.skeleton import diagnose_skeleton_draft, validate_skeleton_for_execution
 
 FIXTURES = Path(__file__).parent / "fixtures" / "skeleton_legacy"
@@ -236,3 +237,146 @@ def test_legacy_multi_kernel_preserves_root_config_and_prompt_dependencies():
     assert prompt_binding["value"] == {
         "kind": "ref", "node_id": "first", "path": ["message"],
     }
+
+
+@pytest.mark.parametrize("prompt", ["Author edited prompt", "", "  Use {{#input.x#}}  "])
+def test_explicit_node_kernel_is_authoritative_over_legacy_values(prompt):
+    source = fixture("graphless_recipe.json")
+    source["model"] = "openai:old-model"
+    source["max_iterations"] = 3
+    source["agent"]["prompt"] = "Old legacy prompt"
+    converted = convert_legacy_definition("recipe", source, resource_id="edited")
+    chosen = _kernel("new-model")
+    chosen["profile"].update({
+        "id": "new-anthropic", "provider": "anthropic", "protocol": "anthropic",
+        "endpoint": "https://chosen.example.test", "credential_ref": "chosen.key",
+    })
+    chosen.update(prompt=prompt, max_iterations=12)
+    converted["nodes"][1]["config"]["kernel"] = chosen
+    converted["nodes"][1]["config"]["execution"] = {
+        "inputs": [{"name": "x", "value": {"kind": "ref", "node_id": "start", "path": ["text"]}, "missing": "error"}],
+        "outputs": [{"name": "message", "source": {"kind": "result", "path": ["message"]}}],
+    }
+    original = json.loads(json.dumps(converted))
+    fallback = _kernel("old-model")
+
+    materialized = materialize_legacy_agent(converted, fallback)
+    assert materialized["nodes"][1]["config"]["kernel"] == chosen
+    assert _validate_all(prepare_agent_graph(materialized).snapshot(), agent_graph=True)
+    assert converted == original
+    materialized["nodes"][1]["config"]["kernel"]["profile"]["credential_ref"] = "changed"
+    assert converted == original
+
+
+def test_all_explicit_nodes_need_no_fallback_and_preserve_execution_surfaces():
+    converted = convert_legacy_definition("recipe", fixture("graphless_recipe.json"), resource_id="explicit")
+    start, agent, end = converted["nodes"]
+    start["config"]["execution"] = {
+        "outputs": [{"name": "question", "source": {"kind": "result", "path": ["text"]}}],
+    }
+    agent["config"]["kernel"] = {**_kernel(), "prompt": "Use {{#input.x#}}"}
+    agent["config"]["execution"] = {
+        "inputs": [{"name": "x", "value": {"kind": "ref", "node_id": "start", "path": ["question"]}, "missing": "error"}],
+        "outputs": [{"name": "reply", "source": {"kind": "result", "path": ["message"]}}],
+    }
+    end["config"]["execution"] = {
+        "inputs": [{"name": "final", "value": {"kind": "ref", "node_id": "agent", "path": ["reply"]}, "missing": "error"}],
+        "outputs": [{"name": "answer", "source": {"kind": "input", "path": ["final"]}}],
+    }
+    # These compatibility-only values are no longer the author's Kernel.
+    agent["config"]["prompt"] = {"kind": "unreadable old prompt"}
+    agent["config"]["legacy_recipe"]["max_iterations"] = "old invalid value"
+
+    materialized = materialize_legacy_agent(converted, None)
+    for before, after in zip(converted["nodes"], materialized["nodes"]):
+        assert after["config"]["execution"] == before["config"]["execution"]
+    assert materialized["nodes"][1]["config"]["kernel"] == agent["config"]["kernel"]
+    assert _validate_all(prepare_agent_graph(materialized).snapshot(), agent_graph=True)
+
+
+def test_explicit_outputs_feed_generated_downstream_bindings():
+    converted = convert_legacy_definition("recipe", fixture("graphless_recipe.json"), resource_id="surface")
+    converted["nodes"][1]["config"]["kernel"] = _kernel()
+    converted["nodes"][1]["config"]["execution"] = {
+        "inputs": [],
+        "outputs": [{"name": "reply", "source": {"kind": "result", "path": ["message"]}}],
+    }
+    materialized = materialize_legacy_agent(converted, None)
+    end_execution = materialized["nodes"][-1]["config"]["execution"]
+    assert end_execution["inputs"] == [{
+        "name": "reply", "value": {"kind": "ref", "node_id": "agent", "path": ["reply"]}, "missing": "null",
+    }]
+    assert end_execution["outputs"] == [{"name": "reply", "source": {"kind": "input", "path": ["reply"]}}]
+    assert _validate_all(prepare_agent_graph(materialized).snapshot(), agent_graph=True)
+
+
+def test_mixed_explicit_and_fallback_nodes_keep_distinct_profiles_and_legacy_defaults():
+    source = {
+        "name": "Mixed", "model": "openai:old-model", "max_iterations": 3,
+        "nodes": [
+            {"id": "start", "type": "start"},
+            {"id": "first", "type": "agent", "override": {"prompt_format": "soul", "prompt": "Old first"}},
+            {"id": "second", "type": "agent", "override": {"prompt_format": "soul", "prompt": "Review {{#first.output#}}"}},
+            {"id": "end", "type": "end"},
+        ],
+        "edges": [
+            {"id": a + "-" + b, "kind": "flow", "source_node_id": a, "source_port_id": "out", "target_node_id": b, "target_port_id": "in"}
+            for a, b in (("start", "first"), ("first", "second"), ("second", "end"))
+        ],
+    }
+    converted = convert_legacy_definition("recipe", source, resource_id="mixed")
+    chosen = _kernel("new-model")
+    chosen["profile"].update({"id": "new", "provider": "anthropic", "protocol": "anthropic", "credential_ref": "new.key"})
+    chosen.update(prompt="New first", max_iterations=12)
+    converted["nodes"][1]["config"]["kernel"] = chosen
+    fallback = _kernel("old-model")
+    fallback["profile"].update(id="old", credential_ref="old.key")
+
+    materialized = materialize_legacy_agent(converted, fallback)
+    first, second = materialized["nodes"][1:3]
+    assert first["config"]["kernel"] == chosen
+    assert second["config"]["kernel"]["profile"] == fallback["profile"]
+    assert second["config"]["kernel"]["max_iterations"] == 3
+    assert second["config"]["kernel"]["prompt"] == "Review {{#input.__legacy_prompt_0#}}"
+    assert _validate_all(prepare_agent_graph(materialized).snapshot(), agent_graph=True)
+    with pytest.raises(SkeletonValidationError) as error:
+        materialize_legacy_agent(converted, None)
+    assert error.value.code == "invalid_type"
+    assert error.value.path == ("legacy_kernel",)
+
+
+@pytest.mark.parametrize("value,code,tail", [
+    (None, "invalid_type", ()),
+    ({**_kernel(), "temperature": 0.5}, "unknown_field", ("temperature",)),
+    ({**_kernel(), "schema_version": 2}, "unknown_variant", ("schema_version",)),
+])
+def test_invalid_explicit_kernel_never_falls_back(value, code, tail):
+    converted = convert_legacy_definition("recipe", fixture("graphless_recipe.json"), resource_id="invalid")
+    converted["nodes"][1]["config"]["kernel"] = value
+    with pytest.raises(SkeletonValidationError) as error:
+        materialize_legacy_agent(converted, _kernel())
+    assert error.value.code == code
+    assert error.value.path == ("document", "nodes", 1, "config", "kernel") + tail
+
+
+@pytest.mark.parametrize("execution", [None, 7, {"inputs": [], "outputs": [], "unknown": True}])
+def test_invalid_explicit_execution_is_preserved_until_strict_preparation(execution):
+    converted = convert_legacy_definition("recipe", fixture("graphless_recipe.json"), resource_id="invalid-io")
+    converted["nodes"][1]["config"]["kernel"] = _kernel()
+    converted["nodes"][1]["config"]["execution"] = execution
+    materialized = materialize_legacy_agent(converted, None)
+    assert materialized["nodes"][1]["config"]["execution"] == execution
+    with pytest.raises(SkeletonValidationError) as error:
+        _validate_all(prepare_agent_graph(materialized).snapshot(), agent_graph=True)
+    assert error.value.path[:5] == ("document", "nodes", 1, "config", "execution")
+
+
+def test_untouched_inline_child_keeps_own_prompt_and_fallback_iterations():
+    converted = convert_legacy_definition("skeleton_template", {
+        "name": "Child", "description": "Child", "instructions": "Child own prompt",
+    }, resource_id="child")
+    fallback = {**_kernel(), "prompt": "Parent edited prompt", "max_iterations": 12}
+    materialized = materialize_legacy_agent(converted, fallback)
+    assert materialized["nodes"][1]["config"]["kernel"]["prompt"] == "Child own prompt"
+    assert materialized["nodes"][1]["config"]["kernel"]["max_iterations"] == 12
+    assert prepare_agent_graph(materialized)
