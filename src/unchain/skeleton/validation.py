@@ -198,11 +198,52 @@ def _diagnose(document: Any) -> tuple[dict[str, Any], tuple[SkeletonDiagnostic, 
 
 
 def diagnose_skeleton_draft(document: Any) -> tuple[SkeletonDiagnostic, ...]:
-    """Return structural and declared IO diagnostics for a schema-valid draft."""
+    """Diagnose a draft and its embedded Agents without resolving resources.
+
+    Only the outer envelope is a hard admission gate. An invalid embedded
+    envelope belongs to a repairable parent draft and is reported at its own
+    occurrence, just like its structural and IO problems.
+    """
+    return _diagnose_draft_tree(document, depth=0)
+
+
+def _diagnose_draft_tree(document: Any, *, depth: int) -> tuple[SkeletonDiagnostic, ...]:
     from .draft_io import diagnose_execution_io
 
     skeleton, structural = _diagnose(document)
-    diagnostics = structural + diagnose_execution_io(skeleton)
+    diagnostics = list(structural + diagnose_execution_io(skeleton))
+    if depth and skeleton["kind"] != "agent":
+        _diagnostic(diagnostics, "wrong_kind", ("document", "kind"),
+                    "Agent preparation requires agent kind")
+
+    for node_index, node in enumerate(skeleton["nodes"]):
+        if node["type"] != "subagent_pool":
+            continue
+        entries = node["config"].get("subagents")
+        if type(entries) is not list:
+            continue
+        for entry_index, entry in enumerate(entries):
+            source = entry.get("source") if type(entry) is dict else None
+            if type(source) is not dict or source.get("kind") != "embedded":
+                continue
+            prefix = ("document", "nodes", node_index, "config", "subagents",
+                      entry_index, "source", "document")
+            if depth >= 6:
+                _diagnostic(diagnostics, "subagent_depth", prefix,
+                            "subagent graph depth exceeds 6")
+                continue
+            if "document" not in source:
+                _diagnostic(diagnostics, "missing_field", prefix,
+                            "required field is missing")
+                continue
+            try:
+                child_diagnostics = _diagnose_draft_tree(source["document"], depth=depth + 1)
+            except SkeletonValidationError as exc:
+                child_diagnostics = (SkeletonDiagnostic(exc.code, exc.path, str(exc)),)
+            # Each occurrence has its own scope, even when two entries share a
+            # document id or the caller supplied the same Python object twice.
+            diagnostics.extend(SkeletonDiagnostic(item.code, prefix + item.path[1:], item.message)
+                               for item in child_diagnostics)
 
     def position(item: SkeletonDiagnostic) -> tuple[int, int]:
         if len(item.path) > 2 and type(item.path[2]) is int:
