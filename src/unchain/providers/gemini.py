@@ -9,6 +9,7 @@ from typing import Any, Callable
 from .base import ModelTurnRequest
 from .native import _NativeModelIOBase
 from .gemini_schema import sanitize_gemini_schema
+from .gemini_config import ARGON_MODEL_ID, validate_gemini_model_config
 from .canonical_hash import canonical_json_sha256
 from .failure_diagnostic import GeminiResponseFailure
 from .uncertainty_diagnostic import ProviderUncertaintyDiagnostic, ProviderUncertaintyObservation
@@ -142,6 +143,9 @@ class GeminiModelIO(_NativeModelIOBase):
     def _fetch_prepared(
         self, request: ModelTurnRequest, wire: dict[str, Any]
     ) -> ModelTurnResult:
+        # The durable route and direct adapter share the same model limits.
+        # Validate before constructing a client; never rewrite signed wire data.
+        validate_gemini_model_config(wire["model"], wire["config"])
         phase = "request_preparation"
         try:
             from google.genai import types
@@ -170,7 +174,10 @@ class GeminiModelIO(_NativeModelIOBase):
             phase = "requesting"
             client = self._client_factory(
                 api_key=self.api_key,
-                http_options={"timeout": 120000, "retry_options": {"attempts": 1}},
+                http_options={
+                    "timeout": 900000 if wire["model"] == ARGON_MODEL_ID else 120000,
+                    "retry_options": {"attempts": 1},
+                },
             )
             stream = None
             try:

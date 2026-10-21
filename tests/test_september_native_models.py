@@ -217,7 +217,7 @@ def test_gemini_catalog_is_exactly_the_current_general_purpose_set():
     expected = {
         "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
         "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview",
-        "gemini-3-flash-preview",
+        "gemini-3-flash-preview", "gemini-4-argon",
     }
     capabilities = load_model_capabilities()
     assert _gemini_catalog(capabilities) == expected
