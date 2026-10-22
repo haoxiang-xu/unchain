@@ -27,9 +27,6 @@ from unchain.journal.tool_catalog import (
     ToolCatalogReceiptIntegrityError,
     recover_tool_catalog_authority,
 )
-from unchain.journal.tool_catalog_persistence import (
-    persist_tool_catalog_snapshot,
-)
 from unchain.providers.base import ModelTurnRequest
 from unchain.tools.handler_registry import DurableToolHandlerRegistry
 from unchain.tools.toolkit import Toolkit
@@ -269,6 +266,7 @@ class ProviderTurnAuthorityService:
         return catalog, authority
 
     def _persist_catalog(self, draft):
+        from unchain.journal.tool_catalog_persistence import persist_tool_catalog_snapshot
         from unchain.providers.prepared_turn import _issue_persisted_tool_catalog_authority
 
         detail = {"catalog_sha256": draft.catalog.catalog_sha256}
