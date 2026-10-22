@@ -295,7 +295,8 @@ class LSPRuntime:
             try:
                 pipe.close()
             except Exception:
-                return
+                # Closing must not suppress a read failure or interruption.
+                pass
 
     def _read_protocol_message(self, pipe: Any) -> dict[str, Any] | None:
         headers: dict[str, str] = {}
@@ -457,6 +458,7 @@ class LSPRuntime:
                         self._request_locked(session, method="shutdown", params={})
                         self._notify_locked(session, method="exit", params={})
                 except Exception:
+                    # A failed protocol shutdown must still proceed to operating-system process termination.
                     pass
             try:
                 session.process.terminate()
@@ -466,6 +468,7 @@ class LSPRuntime:
                     session.process.kill()
                     session.process.wait(timeout=1.0)
                 except Exception:
+                    # Process teardown is best effort; continue the bounded joins even if the process cannot be reaped.
                     pass
         if session.reader_thread is not None:
             session.reader_thread.join(timeout=0.2)

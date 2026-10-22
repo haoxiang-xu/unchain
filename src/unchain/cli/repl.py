@@ -224,6 +224,7 @@ def main() -> None:
                 try:
                     worker.join(timeout=5.0)
                 except KeyboardInterrupt:
+                    # A second interrupt ends the bounded grace wait; the liveness check below abandons the queued chain.
                     pass
                 if worker.is_alive():
                     print("[interrupted] run still in progress, abandoning the queued-turn chain\n")

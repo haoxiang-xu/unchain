@@ -3,7 +3,6 @@ from __future__ import annotations
 import copy
 import time
 from dataclasses import dataclass, field
-from typing import Any
 
 from ..kernel.delta import HarnessDelta, InsertMessagesOp
 from ..kernel.harness import BaseRuntimeHarness, HarnessContext

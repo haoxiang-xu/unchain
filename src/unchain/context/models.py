@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, ClassVar
 
@@ -13,7 +13,6 @@ from unchain.journal.models import (
     ResourceRef,
     _bounded_int,
     _freeze_json,
-    _optional_text,
     _record_data,
     _record_tuple,
     _required_text,

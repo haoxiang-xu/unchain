@@ -91,7 +91,7 @@ from unchain.run_bundle import (
     RunIdentity,
     deterministic_bundle_id,
 )
-from unchain.run_bundle_v2 import CompactRunBundle, CompactRunBundleProtocolError
+from unchain.run_bundle_v2 import CompactRunBundle
 from unchain.run_bundle_ledger import (
     RunBundleContinuationError,
     RunBundleLedgerConflictError,
@@ -183,9 +183,6 @@ def serialized_context_v2_database_access(
         if acquired:
             ctypes.windll.kernel32.ReleaseMutex(handle)
         ctypes.windll.kernel32.CloseHandle(handle)
-
-
-_serialized_context_v2_database_access = serialized_context_v2_database_access
 
 
 def _context_v2_wal_exists(database_path: Path) -> bool:
@@ -1027,12 +1024,14 @@ class SQLiteContextV2Store:
             try:
                 os.link(temporary, target)
             except FileExistsError:
+                # Another writer installed this content digest first; verify its bytes and digest below.
                 pass
             self._fsync_directory(self.object_directory)
         finally:
             try:
                 temporary.unlink()
             except FileNotFoundError:
+                # Cleanup is complete when the temporary object is already absent.
                 pass
         self._read_object(digest=digest, byte_length=len(content))
         return digest, len(content)
@@ -2137,11 +2136,9 @@ class _SQLiteBoundContextV2Repository(
                     if self._continuation_lineage_matches(candidate, successor):
                         candidates.append(candidate)
                 if not candidates:
-                    if requested is not None:
-                        raise RunBundleContinuationError(
-                            "continued_from_not_claimable"
-                        )
-                    return None
+                    raise RunBundleContinuationError(
+                        "continued_from_not_claimable"
+                    )
                 predecessor = max(candidates, key=self._continuation_order)
                 connection.execute(
                     """

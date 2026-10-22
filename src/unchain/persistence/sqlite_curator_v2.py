@@ -596,12 +596,14 @@ class SQLiteCuratorV2Store:
             try:
                 os.link(temporary, target)
             except FileExistsError:
+                # Another writer installed this content digest first; verify its bytes and digest below.
                 pass
             self._fsync_directory(self.object_directory)
         finally:
             try:
                 temporary.unlink()
             except FileNotFoundError:
+                # Cleanup is complete when the temporary object is already absent.
                 pass
         self._read_object(digest=digest, byte_length=len(content))
         return digest, len(content)

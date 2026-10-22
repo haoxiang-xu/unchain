@@ -1178,6 +1178,7 @@ class ToolExposureRuntime:
             try:
                 target_arguments = json.loads(target_arguments or "{}")
             except json.JSONDecodeError:
+                # Preserve non-JSON text for the runtime argument validator to reject with the normal tool error.
                 pass
         return {"tool_name": tool_name, "arguments": target_arguments}
 

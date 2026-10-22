@@ -352,6 +352,8 @@ class MemoryWorkspaceService(_BoundWorkspaceReads):
         if not isinstance(links, BoundWorkspaceLinkRepository):
             raise TypeError("links must be a BoundWorkspaceLinkRepository")
         self._require_same_space(links, "links")
+        # Extend the validated search service with link filtering; retain its
+        # existing repository, index providers, and search configuration.
         self._search = self._search.with_link_repository(links)
         self._mutations = mutations
         self._links = links
@@ -579,7 +581,7 @@ class MemoryWorkspaceService(_BoundWorkspaceReads):
         source_refs: Sequence[ResourceRef],
         operation_id: str,
     ) -> MemoryLink:
-        source = self._read_current_entry_ref(source_ref)
+        self._read_current_entry_ref(source_ref)
         self._read_current_entry_ref(target_ref)
         normalized_relation = _required_text(
             relation,

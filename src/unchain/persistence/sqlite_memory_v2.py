@@ -733,12 +733,14 @@ class SQLiteMemoryV2Store:
             try:
                 os.link(temporary, target)
             except FileExistsError:
+                # Another writer installed this content digest first; verify its bytes and digest below.
                 pass
             self._fsync_directory(self.object_directory)
         finally:
             try:
                 temporary.unlink()
             except FileNotFoundError:
+                # Cleanup is complete when the temporary object is already absent.
                 pass
         self._read_object(digest=digest, byte_length=len(content))
         return digest, len(content)
@@ -855,11 +857,8 @@ class _SQLiteBoundMemoryWorkspaceRepository(
         owner_chat_id: str,
     ) -> None:
         BoundMemoryWorkspaceRepository.__init__(self, space)
+        # All remaining workspace ports share this same capability initializer.
         BoundWorkspaceHierarchyRepository.__init__(self, space)
-        BoundWorkspaceMutationRepository.__init__(self, space)
-        BoundWorkspaceContentRepository.__init__(self, space)
-        BoundWorkspaceHistoryRepository.__init__(self, space)
-        BoundWorkspaceLinkRepository.__init__(self, space)
         self._store = store
         self._owner_chat_id = owner_chat_id
 
@@ -1622,6 +1621,7 @@ class _SQLiteBoundMemoryWorkspaceRepository(
                         """
                     )
             except sqlite3.Error:
+                # The unavailable index marker is best effort; the original search failure is still raised below.
                 pass
             raise RepositorySearchUnavailableError(
                 "workspace FTS is unavailable"

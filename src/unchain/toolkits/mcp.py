@@ -231,6 +231,7 @@ class MCPToolkit(Toolkit):
             try:
                 self._loop.run_until_complete(self._loop.shutdown_asyncgens())
             except Exception:
+                # Async-generator cleanup must not replace the recorded session failure; always close the loop.
                 pass
             self._loop.close()
 
@@ -269,6 +270,7 @@ class MCPToolkit(Toolkit):
             try:
                 handle.close()
             except Exception:
+                # Stderr is diagnostic only; a close failure must not discard text already read.
                 pass
         if len(text) > limit:
             text = f"…{text[-limit:]}"

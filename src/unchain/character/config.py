@@ -6,8 +6,6 @@ from datetime import datetime
 
 from .decision import (
     CharacterIdentitySpec,
-    CharacterEvaluation,
-    CharacterDecision,
     CharacterObligation,
     evaluate_character,
     decide_character_response,

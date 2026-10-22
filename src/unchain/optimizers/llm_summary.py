@@ -52,9 +52,7 @@ class LlmSummaryOptimizer(BaseContextOptimizer):
 
         messages = context.latest_messages()
         estimated_tokens = estimate_tokens(messages)
-        usage_pct = (
-            estimated_tokens / max_context_window_tokens if max_context_window_tokens > 0 else 0.0
-        )
+        usage_pct = estimated_tokens / max_context_window_tokens
         bucket["summary_usage_pct"] = round(usage_pct, 4)
 
         if usage_pct < float(self.config.summary_trigger_pct):

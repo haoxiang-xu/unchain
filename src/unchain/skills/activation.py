@@ -23,8 +23,6 @@ ACTIVE_SKILLS_SNAPSHOT_VERSION = 1
 # underscore spellings can still resolve through aliases.
 _USER_TOKEN_RE = re.compile(r"^/([A-Za-z0-9_-]+)$")
 
-_ACTIVATION_STATUSES = ("activated", "already_active", "superseded")
-
 
 class SkillActivationStateError(RuntimeError):
     """The persisted `<active_skills>` block cannot be trusted (unsupported version or corrupt)."""
