@@ -4,10 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-# Loading the context package first avoids an existing import cycle between
-# the durable runtime and the journal (same order as
-# test_durable_provider_turn_runtime.py).
-from unchain.context.tool_catalog import ToolCatalogEnvelope  # noqa: F401
 from unchain.kernel.loop import KernelLoop
 from unchain.providers.durable_turn_runtime import ProviderRetryWait
 from unchain.providers.failure_diagnostic import ProviderFailureDiagnostic

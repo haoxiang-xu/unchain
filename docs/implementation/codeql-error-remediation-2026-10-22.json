@@ -38,7 +38,7 @@
       "canonical_name": "OpenAIModelIO",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 184,
@@ -49,7 +49,7 @@
       "canonical_name": "OllamaModelIO",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 183,
@@ -60,7 +60,7 @@
       "canonical_name": "AnthropicModelIO",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 182,
@@ -71,7 +71,7 @@
       "canonical_name": "save_session_snapshot",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 181,
@@ -82,7 +82,7 @@
       "canonical_name": "memory_state_update",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 180,
@@ -93,7 +93,7 @@
       "canonical_name": "memory_prepare_update",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 179,
@@ -104,7 +104,7 @@
       "canonical_name": "memory_commit_update",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 178,
@@ -115,7 +115,7 @@
       "canonical_name": "load_session_snapshot",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 177,
@@ -126,7 +126,7 @@
       "canonical_name": "collect_complete_turns_for_vector_index",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 176,
@@ -137,7 +137,7 @@
       "canonical_name": "build_openai_embed_fn",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 175,
@@ -148,7 +148,7 @@
       "canonical_name": "build_memory_prepare_event",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 174,
@@ -159,7 +159,7 @@
       "canonical_name": "build_memory_delta",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 173,
@@ -170,7 +170,7 @@
       "canonical_name": "build_memory_commit_event",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 172,
@@ -181,7 +181,7 @@
       "canonical_name": "build_durability_memory_components",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 171,
@@ -192,7 +192,7 @@
       "canonical_name": "build_default_memory_components",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 170,
@@ -203,7 +203,7 @@
       "canonical_name": "VectorStoreAdapter",
       "runtime_type": "_ProtocolMeta",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 169,
@@ -214,18 +214,18 @@
       "canonical_name": "SummaryTokenStrategy",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 168,
       "module": "unchain.memory",
       "name": "SummaryGenerator",
       "path": "src/unchain/memory/__init__.py",
-      "canonical_module": "typing",
-      "canonical_name": "Callable",
+      "canonical_module": "unchain.memory.manager",
+      "canonical_name": "SummaryGenerator",
       "runtime_type": "_CallableGenericAlias",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 167,
@@ -236,7 +236,7 @@
       "canonical_name": "ShortTermRecallMemoryHarness",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 166,
@@ -247,7 +247,7 @@
       "canonical_name": "SessionStoreCorruptionError",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 165,
@@ -258,7 +258,7 @@
       "canonical_name": "SessionStore",
       "runtime_type": "_ProtocolMeta",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 164,
@@ -269,7 +269,7 @@
       "canonical_name": "SessionSnapshot",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 163,
@@ -280,7 +280,7 @@
       "canonical_name": "SessionRevisionConflictError",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 162,
@@ -291,18 +291,18 @@
       "canonical_name": "SessionHistoryOwnershipError",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 161,
       "module": "unchain.memory",
       "name": "SessionConsistency",
       "path": "src/unchain/memory/__init__.py",
-      "canonical_module": "typing",
-      "canonical_name": "Literal",
+      "canonical_module": "unchain.memory.stores",
+      "canonical_name": "SessionConsistency",
       "runtime_type": "_LiteralGenericAlias",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 160,
@@ -313,7 +313,7 @@
       "canonical_name": "RevisionedSessionStore",
       "runtime_type": "_ProtocolMeta",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 159,
@@ -324,7 +324,7 @@
       "canonical_name": "QdrantVectorAdapter",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 158,
@@ -335,84 +335,84 @@
       "canonical_name": "QdrantLongTermVectorAdapter",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 157,
       "module": "unchain.memory",
       "name": "MEMORY_WORKSPACE_READ",
       "path": "src/unchain/memory/__init__.py",
-      "canonical_module": null,
-      "canonical_name": null,
+      "canonical_module": "unchain.memory.module",
+      "canonical_name": "MEMORY_WORKSPACE_READ",
       "runtime_type": "str",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 156,
       "module": "unchain.memory",
       "name": "MEMORY_V2_MODULE_KEY",
       "path": "src/unchain/memory/__init__.py",
-      "canonical_module": null,
-      "canonical_name": null,
+      "canonical_module": "unchain.memory.module",
+      "canonical_name": "MEMORY_V2_MODULE_KEY",
       "runtime_type": "str",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 155,
       "module": "unchain.memory",
       "name": "MEMORY_V2_CAPABILITIES",
       "path": "src/unchain/memory/__init__.py",
-      "canonical_module": null,
-      "canonical_name": null,
+      "canonical_module": "unchain.memory.module",
+      "canonical_name": "MEMORY_V2_CAPABILITIES",
       "runtime_type": "frozenset",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 154,
       "module": "unchain.memory",
       "name": "MEMORY_EXECUTION_COMPLETE",
       "path": "src/unchain/memory/__init__.py",
-      "canonical_module": null,
-      "canonical_name": null,
+      "canonical_module": "unchain.memory.module",
+      "canonical_name": "MEMORY_EXECUTION_COMPLETE",
       "runtime_type": "str",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 153,
       "module": "unchain.memory",
       "name": "MEMORY_EFFECT_CREATED_BY_PREFIX",
       "path": "src/unchain/memory/__init__.py",
-      "canonical_module": null,
-      "canonical_name": null,
+      "canonical_module": "unchain.memory.effects",
+      "canonical_name": "MEMORY_EFFECT_CREATED_BY_PREFIX",
       "runtime_type": "str",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 152,
       "module": "unchain.memory",
       "name": "MEMORY_CONTEXT_READ",
       "path": "src/unchain/memory/__init__.py",
-      "canonical_module": null,
-      "canonical_name": null,
+      "canonical_module": "unchain.memory.module",
+      "canonical_name": "MEMORY_CONTEXT_READ",
       "runtime_type": "str",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 151,
       "module": "unchain.memory",
       "name": "MEMORY_CANDIDATE_PROPOSE",
       "path": "src/unchain/memory/__init__.py",
-      "canonical_module": null,
-      "canonical_name": null,
+      "canonical_module": "unchain.memory.module",
+      "canonical_name": "MEMORY_CANDIDATE_PROPOSE",
       "runtime_type": "str",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 150,
@@ -423,7 +423,7 @@
       "canonical_name": "MemoryV2ModuleError",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 149,
@@ -434,7 +434,7 @@
       "canonical_name": "MemoryV2Module",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 148,
@@ -445,7 +445,7 @@
       "canonical_name": "MemoryRuntimeComponentMode",
       "runtime_type": "EnumType",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 147,
@@ -456,7 +456,7 @@
       "canonical_name": "MemoryPrepareEventHarness",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 146,
@@ -467,7 +467,7 @@
       "canonical_name": "MemoryCompletionFactory",
       "runtime_type": "_ProtocolMeta",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 145,
@@ -478,7 +478,7 @@
       "canonical_name": "MemoryAttachmentRequest",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 144,
@@ -489,7 +489,7 @@
       "canonical_name": "MemoryAttachmentFactory",
       "runtime_type": "_ProtocolMeta",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 143,
@@ -500,7 +500,7 @@
       "canonical_name": "MemoryAttachment",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 142,
@@ -511,7 +511,7 @@
       "canonical_name": "MemoryManager",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 141,
@@ -522,7 +522,7 @@
       "canonical_name": "MemoryHarness",
       "runtime_type": "_ProtocolMeta",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 140,
@@ -533,7 +533,7 @@
       "canonical_name": "MemoryContext",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 139,
@@ -544,7 +544,7 @@
       "canonical_name": "MemoryConfig",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 138,
@@ -555,7 +555,7 @@
       "canonical_name": "MemoryCommitResult",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 137,
@@ -566,7 +566,7 @@
       "canonical_name": "MemoryCommitHarness",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 136,
@@ -577,7 +577,7 @@
       "canonical_name": "MemoryCommitEventHarness",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 135,
@@ -588,7 +588,7 @@
       "canonical_name": "MemoryBootstrapHarness",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 134,
@@ -599,7 +599,7 @@
       "canonical_name": "LongTermVectorAdapter",
       "runtime_type": "_ProtocolMeta",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 133,
@@ -610,7 +610,7 @@
       "canonical_name": "LongTermRecallMemoryHarness",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 132,
@@ -621,7 +621,7 @@
       "canonical_name": "LongTermProfileStore",
       "runtime_type": "_ProtocolMeta",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 131,
@@ -632,18 +632,18 @@
       "canonical_name": "LongTermMemoryConfig",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 130,
       "module": "unchain.memory",
       "name": "LongTermExtractor",
       "path": "src/unchain/memory/__init__.py",
-      "canonical_module": "typing",
-      "canonical_name": "Callable",
+      "canonical_module": "unchain.memory.long_term",
+      "canonical_name": "LongTermExtractor",
       "runtime_type": "_CallableGenericAlias",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 129,
@@ -654,7 +654,7 @@
       "canonical_name": "LastNTurnsStrategy",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 128,
@@ -665,7 +665,7 @@
       "canonical_name": "KernelMemoryRuntime",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 127,
@@ -676,7 +676,7 @@
       "canonical_name": "JsonFileSessionStore",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 126,
@@ -687,7 +687,7 @@
       "canonical_name": "JsonFileLongTermProfileStore",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 125,
@@ -698,7 +698,7 @@
       "canonical_name": "InMemorySessionStore",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 124,
@@ -709,7 +709,7 @@
       "canonical_name": "HybridContextStrategy",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 123,
@@ -720,7 +720,7 @@
       "canonical_name": "FencedRevisionedSessionStore",
       "runtime_type": "_ProtocolMeta",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 122,
@@ -731,7 +731,7 @@
       "canonical_name": "ExecutionCheckpointResumeRequiredError",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 121,
@@ -742,7 +742,7 @@
       "canonical_name": "ExecutionCheckpointReplayUnavailableError",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 120,
@@ -753,7 +753,7 @@
       "canonical_name": "ExecutionCheckpointPersistenceError",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 119,
@@ -764,7 +764,7 @@
       "canonical_name": "ExecutionCheckpointIntegrityError",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 118,
@@ -775,7 +775,7 @@
       "canonical_name": "ExecutionCheckpointHarness",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 117,
@@ -786,7 +786,7 @@
       "canonical_name": "ExecutionCheckpointError",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 116,
@@ -797,7 +797,7 @@
       "canonical_name": "ExecutionCheckpointCompatibilityError",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 115,
@@ -808,7 +808,7 @@
       "canonical_name": "DurabilityCheckpointHarness",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 114,
@@ -819,7 +819,7 @@
       "canonical_name": "ContextStrategy",
       "runtime_type": "_ProtocolMeta",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 113,
@@ -830,7 +830,7 @@
       "canonical_name": "BaseMemoryHarness",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 112,
@@ -841,7 +841,7 @@
       "canonical_name": "render_tool_prompt_entry",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 111,
@@ -852,7 +852,7 @@
       "canonical_name": "render_tool_prompt_block",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 110,
@@ -863,7 +863,7 @@
       "canonical_name": "list_toolkits",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 109,
@@ -874,7 +874,7 @@
       "canonical_name": "list_artifact_kinds",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 108,
@@ -885,7 +885,7 @@
       "canonical_name": "get_toolkit_metadata",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 107,
@@ -896,7 +896,7 @@
       "canonical_name": "get_provider_message_builder",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 106,
@@ -907,7 +907,7 @@
       "canonical_name": "extract_toolkit_catalog_token",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 105,
@@ -918,7 +918,7 @@
       "canonical_name": "build_visible_toolkits",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 104,
@@ -929,7 +929,7 @@
       "canonical_name": "ToolkitRegistry",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 103,
@@ -940,7 +940,7 @@
       "canonical_name": "ToolkitDescriptor",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 102,
@@ -951,7 +951,7 @@
       "canonical_name": "ToolkitCatalogRuntime",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 101,
@@ -962,7 +962,7 @@
       "canonical_name": "ToolkitCatalogConfig",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 100,
@@ -973,7 +973,7 @@
       "canonical_name": "Toolkit",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 99,
@@ -984,7 +984,7 @@
       "canonical_name": "ToolRuntimePlugin",
       "runtime_type": "_ProtocolMeta",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 98,
@@ -995,7 +995,7 @@
       "canonical_name": "ToolRuntimeOutcome",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 97,
@@ -1006,7 +1006,7 @@
       "canonical_name": "ToolResultBudgetStats",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 96,
@@ -1017,7 +1017,7 @@
       "canonical_name": "ToolResultBudgetOutcome",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 95,
@@ -1028,7 +1028,7 @@
       "canonical_name": "ToolResultBudgetController",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 94,
@@ -1039,7 +1039,7 @@
       "canonical_name": "ToolResultBudgetConfig",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 93,
@@ -1050,7 +1050,7 @@
       "canonical_name": "ToolRegistryConfig",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 92,
@@ -1061,7 +1061,7 @@
       "canonical_name": "ToolPromptSpec",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 91,
@@ -1072,7 +1072,7 @@
       "canonical_name": "ToolPromptHarness",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 90,
@@ -1083,7 +1083,7 @@
       "canonical_name": "ToolObservationRunner",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 89,
@@ -1094,7 +1094,7 @@
       "canonical_name": "ToolParameter",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 88,
@@ -1105,7 +1105,7 @@
       "canonical_name": "ToolOptimizerConfig",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 87,
@@ -1116,7 +1116,7 @@
       "canonical_name": "ToolHistoryOptimizationContext",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 86,
@@ -1127,7 +1127,7 @@
       "canonical_name": "ToolHarness",
       "runtime_type": "_ProtocolMeta",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 85,
@@ -1138,7 +1138,7 @@
       "canonical_name": "ToolExposureRuntime",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 84,
@@ -1149,7 +1149,7 @@
       "canonical_name": "ToolExposurePlan",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 83,
@@ -1160,7 +1160,7 @@
       "canonical_name": "ToolExecutionOutcome",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 82,
@@ -1171,7 +1171,7 @@
       "canonical_name": "ToolExecutionContext",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 81,
@@ -1182,7 +1182,7 @@
       "canonical_name": "ToolOutputReadRequest",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 80,
@@ -1193,7 +1193,7 @@
       "canonical_name": "ToolOutputReadError",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 79,
@@ -1204,7 +1204,7 @@
       "canonical_name": "ToolOutputProjection",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 78,
@@ -1215,7 +1215,7 @@
       "canonical_name": "ToolOutputPolicyVersionError",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 77,
@@ -1226,7 +1226,7 @@
       "canonical_name": "ToolOutputPolicy",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 76,
@@ -1237,7 +1237,7 @@
       "canonical_name": "ToolOutputManager",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 75,
@@ -1248,7 +1248,7 @@
       "canonical_name": "ToolOutputManagementError",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 74,
@@ -1259,7 +1259,7 @@
       "canonical_name": "ToolOutputBudget",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 73,
@@ -1270,7 +1270,7 @@
       "canonical_name": "ToolExecutionHarness",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 72,
@@ -1281,7 +1281,7 @@
       "canonical_name": "SkillDescriptor",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 71,
@@ -1292,7 +1292,7 @@
       "canonical_name": "ToolDescriptor",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 70,
@@ -1303,7 +1303,7 @@
       "canonical_name": "ToolDiscoveryRuntime",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 69,
@@ -1314,7 +1314,7 @@
       "canonical_name": "ToolDiscoveryConfig",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 68,
@@ -1325,7 +1325,7 @@
       "canonical_name": "ToolContext",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 67,
@@ -1336,7 +1336,7 @@
       "canonical_name": "ToolConfirmationPolicy",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 66,
@@ -1347,7 +1347,7 @@
       "canonical_name": "ToolConfirmationResponse",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 65,
@@ -1358,7 +1358,7 @@
       "canonical_name": "ToolConfirmationRequest",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 64,
@@ -1369,7 +1369,7 @@
       "canonical_name": "ToolBatchState",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 63,
@@ -1380,62 +1380,62 @@
       "canonical_name": "Tool",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 62,
       "module": "unchain.tools",
       "name": "TOOLKIT_LIST_TOOL_NAME",
       "path": "src/unchain/tools/__init__.py",
-      "canonical_module": null,
-      "canonical_name": null,
+      "canonical_module": "unchain.tools.catalog",
+      "canonical_name": "TOOLKIT_LIST_TOOL_NAME",
       "runtime_type": "str",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 61,
       "module": "unchain.tools",
       "name": "TOOLKIT_LIST_ACTIVE_TOOL_NAME",
       "path": "src/unchain/tools/__init__.py",
-      "canonical_module": null,
-      "canonical_name": null,
+      "canonical_module": "unchain.tools.catalog",
+      "canonical_name": "TOOLKIT_LIST_ACTIVE_TOOL_NAME",
       "runtime_type": "str",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 60,
       "module": "unchain.tools",
       "name": "TOOLKIT_DESCRIBE_TOOL_NAME",
       "path": "src/unchain/tools/__init__.py",
-      "canonical_module": null,
-      "canonical_name": null,
+      "canonical_module": "unchain.tools.catalog",
+      "canonical_name": "TOOLKIT_DESCRIBE_TOOL_NAME",
       "runtime_type": "str",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 59,
       "module": "unchain.tools",
       "name": "TOOLKIT_DEACTIVATE_TOOL_NAME",
       "path": "src/unchain/tools/__init__.py",
-      "canonical_module": null,
-      "canonical_name": null,
+      "canonical_module": "unchain.tools.catalog",
+      "canonical_name": "TOOLKIT_DEACTIVATE_TOOL_NAME",
       "runtime_type": "str",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 58,
       "module": "unchain.tools",
       "name": "TOOLKIT_ACTIVATE_TOOL_NAME",
       "path": "src/unchain/tools/__init__.py",
-      "canonical_module": null,
-      "canonical_name": null,
+      "canonical_module": "unchain.tools.catalog",
+      "canonical_name": "TOOLKIT_ACTIVATE_TOOL_NAME",
       "runtime_type": "str",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 57,
@@ -1446,7 +1446,7 @@
       "canonical_name": "ProviderMessageBuilder",
       "runtime_type": "_ProtocolMeta",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 56,
@@ -1457,7 +1457,7 @@
       "canonical_name": "OpenAIMessageBuilder",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 55,
@@ -1468,7 +1468,7 @@
       "canonical_name": "observation_token_state",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 54,
@@ -1479,40 +1479,40 @@
       "canonical_name": "OllamaMessageBuilder",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 53,
       "module": "unchain.tools",
       "name": "OBSERVATION_SYSTEM_PROMPT",
       "path": "src/unchain/tools/__init__.py",
-      "canonical_module": null,
-      "canonical_name": null,
+      "canonical_module": "unchain.tools.observation",
+      "canonical_name": "OBSERVATION_SYSTEM_PROMPT",
       "runtime_type": "str",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 52,
       "module": "unchain.tools",
       "name": "OBSERVATION_RECENT_MESSAGES",
       "path": "src/unchain/tools/__init__.py",
-      "canonical_module": null,
-      "canonical_name": null,
+      "canonical_module": "unchain.tools.observation",
+      "canonical_name": "OBSERVATION_RECENT_MESSAGES",
       "runtime_type": "int",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 51,
       "module": "unchain.tools",
       "name": "OBSERVATION_MAX_OUTPUT_TOKENS",
       "path": "src/unchain/tools/__init__.py",
-      "canonical_module": null,
-      "canonical_name": null,
+      "canonical_module": "unchain.tools.observation",
+      "canonical_name": "OBSERVATION_MAX_OUTPUT_TOKENS",
       "runtime_type": "int",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 50,
@@ -1523,7 +1523,7 @@
       "canonical_name": "NormalizedToolHistoryRecord",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 49,
@@ -1534,7 +1534,7 @@
       "canonical_name": "inject_observation",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 48,
@@ -1545,18 +1545,18 @@
       "canonical_name": "HumanInputResumeHarness",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 47,
       "module": "unchain.tools",
       "name": "HistoryPayloadOptimizer",
       "path": "src/unchain/tools/__init__.py",
-      "canonical_module": "typing",
-      "canonical_name": "Callable",
+      "canonical_module": "unchain.tools.models",
+      "canonical_name": "HistoryPayloadOptimizer",
       "runtime_type": "_CallableGenericAlias",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 46,
@@ -1567,7 +1567,7 @@
       "canonical_name": "GeminiMessageBuilder",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 45,
@@ -1578,7 +1578,7 @@
       "canonical_name": "execute_confirmable_tool_call",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 44,
@@ -1589,18 +1589,18 @@
       "canonical_name": "DeferredToolRecord",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 43,
       "module": "unchain.tools",
       "name": "CATALOG_TOOL_NAMES",
       "path": "src/unchain/tools/__init__.py",
-      "canonical_module": null,
-      "canonical_name": null,
+      "canonical_module": "unchain.tools.catalog",
+      "canonical_name": "CATALOG_TOOL_NAMES",
       "runtime_type": "tuple",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 42,
@@ -1611,7 +1611,7 @@
       "canonical_name": "BaseToolHarness",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 41,
@@ -1622,7 +1622,7 @@
       "canonical_name": "ArtifactKindDescriptor",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 40,
@@ -1633,7 +1633,7 @@
       "canonical_name": "AnthropicMessageBuilder",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 39,
@@ -1644,7 +1644,7 @@
       "canonical_name": "build_write_agent_board_tool",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 38,
@@ -1655,7 +1655,7 @@
       "canonical_name": "build_wait_agent_messages_tool",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 37,
@@ -1666,7 +1666,7 @@
       "canonical_name": "build_spawn_worker_batch_tool",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 36,
@@ -1677,7 +1677,7 @@
       "canonical_name": "build_spawn_agent_thread_tool",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 35,
@@ -1688,7 +1688,7 @@
       "canonical_name": "build_send_agent_message_tool",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 34,
@@ -1699,7 +1699,7 @@
       "canonical_name": "build_return_to_parent_tool",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 33,
@@ -1710,7 +1710,7 @@
       "canonical_name": "build_return_handoff_to_subagent_tool",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 32,
@@ -1721,7 +1721,7 @@
       "canonical_name": "build_read_agent_board_tool",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 31,
@@ -1732,7 +1732,7 @@
       "canonical_name": "build_handoff_to_subagent_tool",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 30,
@@ -1743,7 +1743,7 @@
       "canonical_name": "build_delegate_to_subagent_tool",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 29,
@@ -1754,7 +1754,7 @@
       "canonical_name": "build_close_agent_thread_tool",
       "runtime_type": "function",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 28,
@@ -1765,7 +1765,7 @@
       "canonical_name": "SubagentTemplate",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 27,
@@ -1776,7 +1776,7 @@
       "canonical_name": "SubagentState",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 26,
@@ -1787,7 +1787,7 @@
       "canonical_name": "SubagentResult",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 25,
@@ -1798,40 +1798,40 @@
       "canonical_name": "SubagentPolicy",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 24,
       "module": "unchain.subagents",
       "name": "SubagentOutputMode",
       "path": "src/unchain/subagents/__init__.py",
-      "canonical_module": "typing",
-      "canonical_name": "Literal",
+      "canonical_module": "unchain.subagents.types",
+      "canonical_name": "SubagentOutputMode",
       "runtime_type": "_LiteralGenericAlias",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 23,
       "module": "unchain.subagents",
       "name": "SubagentMode",
       "path": "src/unchain/subagents/__init__.py",
-      "canonical_module": "typing",
-      "canonical_name": "Literal",
+      "canonical_module": "unchain.subagents.types",
+      "canonical_name": "SubagentMode",
       "runtime_type": "_LiteralGenericAlias",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 22,
       "module": "unchain.subagents",
       "name": "SubagentMemoryPolicy",
       "path": "src/unchain/subagents/__init__.py",
-      "canonical_module": "typing",
-      "canonical_name": "Literal",
+      "canonical_module": "unchain.subagents.types",
+      "canonical_name": "SubagentMemoryPolicy",
       "runtime_type": "_LiteralGenericAlias",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 21,
@@ -1842,7 +1842,7 @@
       "canonical_name": "SubagentExecutor",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 20,
@@ -1853,7 +1853,7 @@
       "canonical_name": "BlackboardItem",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 19,
@@ -1864,7 +1864,7 @@
       "canonical_name": "AgentThreadRecord",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 18,
@@ -1875,7 +1875,7 @@
       "canonical_name": "AgentMessage",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 17,
@@ -1886,7 +1886,7 @@
       "canonical_name": "AgentCommunicationRuntime",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 16,
@@ -1897,7 +1897,7 @@
       "canonical_name": "Agent",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 15,
@@ -1908,7 +1908,7 @@
       "canonical_name": "ModelTurnRequest",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 14,
@@ -1919,7 +1919,7 @@
       "canonical_name": "ModelIO",
       "runtime_type": "_ProtocolMeta",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 13,
@@ -1930,7 +1930,7 @@
       "canonical_name": "ModelIO",
       "runtime_type": "_ProtocolMeta",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 12,
@@ -1941,7 +1941,7 @@
       "canonical_name": "KernelLoop",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 11,
@@ -1952,7 +1952,7 @@
       "canonical_name": "CharacterModule",
       "runtime_type": "type",
       "disposition": "false_positive",
-      "reason": "PEP 562 module __getattr__ resolves the declared export; fresh-process export, star-import, canonical-identity and lazy-loading tests pass."
+      "reason": "PEP 562 module __getattr__ resolves this declared export. A fresh-process check verified getattr, named import, star import, and identity with the recorded canonical definition."
     },
     {
       "alert": 285,
@@ -1969,5 +1969,25 @@
       "disposition": "false_positive",
       "reason": "The repository explicitly runs BoundExecutionJournal.__init__, validating and setting the same _execution_id field required by the other execution-bound bases. Real SQLite scope, persistence, reopening and invalid-scope tests pass."
     }
-  ]
+  ],
+  "acceptance_correction": {
+    "date": "2026-10-22",
+    "base_commit": "b5776cfe33aa9bad717eda5a1d3c0e63a7dce8bc",
+    "canonical_locations_corrected": {
+      "parameterized_type_aliases": 7,
+      "constants": 16
+    },
+    "verification": {
+      "exports": 175,
+      "fresh_processes": 175,
+      "passed": 175,
+      "checks": [
+        "getattr",
+        "named import",
+        "star import",
+        "identity with recorded canonical definition"
+      ]
+    },
+    "note": "Canonical locations follow the actual facade export routes. Entry reasons describe only checks performed for each export; the original baseline and historical verification records are unchanged."
+  }
 }

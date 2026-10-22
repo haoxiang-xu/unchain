@@ -30,7 +30,6 @@ from unchain.journal.provider_result import (
     ProviderTurnResultReceiptLookup,
     recover_provider_turn_result,
 )
-from unchain.journal.provider_wire import RecoveredProviderWireAuthority
 from unchain.kernel.types import ModelTurnResult
 from unchain.run_bundle import ProviderCallReceipt
 from unchain.retry import RetryConfig, RetriesExhaustedError
@@ -51,7 +50,6 @@ from .physical_send import (
     ProviderPhysicalSendContext,
     provider_physical_ordinal,
 )
-from .wire_envelope import ProviderWireEnvelope, ProviderWireRoute
 from .failure_diagnostic import ProviderFailureDiagnostic
 from .uncertainty_diagnostic import ProviderUncertaintyDiagnostic
 
@@ -1070,3 +1068,10 @@ __all__ = [
     "ExactProviderRouteFailureKind",
     "ExactProviderRouteTransport",
 ]
+
+
+# These dependencies initialize the context facade, whose execution service
+# imports this runtime. Define the runtime first while retaining real module
+# globals for its runtime checks and annotation introspection.
+from unchain.journal.provider_wire import RecoveredProviderWireAuthority
+from .wire_envelope import ProviderWireEnvelope, ProviderWireRoute

@@ -14,12 +14,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-from unchain.context.tool_catalog import ToolCatalogEnvelope
-from unchain.providers.wire_envelope import (
-    MAX_PROVIDER_WIRE_BYTES,
-    ProviderWireEnvelope,
-)
-
 from .models import (
     ArtifactRef,
     AttemptRef,
@@ -667,3 +661,13 @@ __all__ = [
     "persist_provider_wire_snapshot",
     "recover_provider_wire_authority",
 ]
+
+
+# Loading either dependency can initialize the context facade, which imports
+# these receipt contracts. Bind them after the contracts are fully defined;
+# they remain module globals for runtime validation and annotation introspection.
+from unchain.context.tool_catalog import ToolCatalogEnvelope
+from unchain.providers.wire_envelope import (
+    MAX_PROVIDER_WIRE_BYTES,
+    ProviderWireEnvelope,
+)
