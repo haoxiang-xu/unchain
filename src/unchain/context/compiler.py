@@ -3108,6 +3108,7 @@ def _neutral_context(
             try:
                 validated_context_page = validate_context_content_page(model_result)
             except ContextContentProtocolError:
+                # Ordinary tool results need not follow the context-page protocol; retain the normal projection below.
                 pass
         is_context_page = (
             validated_context_page is not None

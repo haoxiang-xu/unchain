@@ -63,6 +63,7 @@ def mark_durable_persistence_failure(
         if bool(getattr(error, _DURABLE_FAILURE_MARKER, False)):
             return error
     except Exception:
+        # Immutable exception objects use the boundary wrapper below instead of an attached marker.
         pass
     return DurablePersistenceBoundaryError(error)
 
@@ -180,6 +181,8 @@ def _safe_exception_attribute(error: BaseException, name: str) -> object:
     try:
         return getattr(error, name, None)
     except BaseException:
+        # Exception accessors can themselves raise; incomplete evidence must
+        # fail closed rather than make a durable failure appear retryable.
         return _UNREADABLE_EXCEPTION_ATTRIBUTE
 
 
@@ -188,6 +191,8 @@ def _safe_tuple_prefix(value: tuple, limit: int) -> tuple[tuple, bool]:
         length = tuple.__len__(value)
         prefix = tuple.__getitem__(value, slice(0, max(0, limit)))
     except BaseException:
+        # An interrupted inspection leaves the original exception group
+        # unclassified, so preserve the fail-closed traversal result.
         return (), True
     return prefix, length > max(0, limit)
 

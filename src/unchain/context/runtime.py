@@ -21,7 +21,7 @@ from ..tool_outcomes import (
     DURABLE_TOOL_RESULT_OUTCOMES,
     classify_durable_tool_result,
 )
-from .compiler import ContextCompileResult, ContextCompiler
+from .compiler import ContextCompileResult
 from .coordinator import ContextCompileCoordinator
 from .factory import (
     ContextExecutionBundle,
@@ -69,7 +69,7 @@ def _canonical_sha256(value: object) -> str:
 
 class ContextRequestFactory(Protocol):
     def __call__(self, context: HarnessContext) -> ContextCompileRequest:
-        ...
+        """Build the compile request for one harness context."""
 
 
 class ContextCheckpointPersistenceRequiredError(RuntimeError):
@@ -1347,6 +1347,7 @@ class ContextRuntime:
                     boundary_error,
                 )
             except Exception:
+                # Keep the durable input failure as the primary exception if its diagnostic sink also fails.
                 pass
             if boundary_error is error:
                 raise
@@ -1543,6 +1544,7 @@ class ContextRuntime:
                     boundary_error,
                 )
             except Exception:
+                # Keep the durable handoff failure as the primary exception if its diagnostic sink also fails.
                 pass
             if boundary_error is error:
                 raise
@@ -2077,6 +2079,7 @@ class ContextRuntime:
                     error,
                 )
             except Exception:
+                # Failure diagnostics must not replace the tool execution error that is re-raised below.
                 pass
             raise
 
@@ -2264,6 +2267,7 @@ class ContextRuntime:
                     error,
                 )
             except Exception:
+                # Failure diagnostics must not replace the transition error that is re-raised below.
                 pass
             raise
 
@@ -2960,6 +2964,7 @@ class ContextRuntime:
         return ContextCompilerHarness(runtime=self)
 
     def build_harnesses(self):
+        """Return an ordered collection sized by the enabled runtime capabilities."""
         compiler = self.build_harness()
         from .tool_harness import ContextToolAuthorityHarness
 

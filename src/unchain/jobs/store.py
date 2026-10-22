@@ -1305,6 +1305,7 @@ class JsonFileJobStore:
             try:
                 temp_path.unlink()
             except FileNotFoundError:
+                # A successful atomic replace already consumed the temporary path.
                 pass
 
     @staticmethod

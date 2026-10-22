@@ -483,7 +483,7 @@ class PricingCatalogResolver:
             and entry.snapshot.inference_geo == inference_geo
             for entry in self._entries
         )
-        _fail(
+        raise PricingCatalogError(
             "pricing_catalog_not_effective"
             if identity_exists
             else "pricing_identity_unknown",

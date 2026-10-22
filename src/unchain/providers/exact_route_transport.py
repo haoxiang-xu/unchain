@@ -438,6 +438,8 @@ class OllamaExactRouteTransport(_BufferedExactRouteTransport):
                                 iteration=self._provisional_iteration,
                             )
                         except BaseException as error:
+                            # Discard every preview before re-raising the first
+                            # failure, including cancellation, unchanged below.
                             if first_error is None:
                                 first_error = error
                     if first_error is not None:

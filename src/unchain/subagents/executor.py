@@ -61,6 +61,8 @@ class SubagentExecutor:
                             continue
                         raise
                     except BaseException as error:  # noqa: BLE001 - Future boundary
+                        # Join running workers before propagating the original
+                        # failure; a durable failure takes precedence below.
                         if is_durable_persistence_failure(error):
                             batch_failure.set()
                             for pending in futures:

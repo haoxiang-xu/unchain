@@ -19,4 +19,4 @@ class BaseAgentModule:
     name: str
 
     def configure(self, builder: "AgentBuilder") -> None:
-        del builder
+        """Leave the builder unchanged unless a module overrides this hook."""

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
@@ -292,7 +293,7 @@ def _validate_json(value: object, *, path: str, check_sensitive_keys: bool) -> N
         if item_type is float:
             if check_sensitive_keys:
                 raise TypeError(f"{item_path} extension numbers must be exact integers")
-            if item != item or item in {float("inf"), float("-inf")}:
+            if not math.isfinite(item):
                 raise RunBundleProtocolError(f"{item_path} must be finite")
             continue
         if item_type is list:

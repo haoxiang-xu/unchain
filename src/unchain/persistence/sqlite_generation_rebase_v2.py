@@ -65,7 +65,6 @@ from unchain.journal.graph_attempt_quiescence import (
     GRAPH_STEP_COMPLETED,
     GRAPH_STEP_SEALS,
     GRAPH_STEP_SEAL_TERMINALS,
-    MAX_ITERATIONS_TERMINALS,
     select_attempt_terminal,
 )
 from unchain.journal.interaction_cycles import (
@@ -2469,12 +2468,14 @@ class SQLiteGenerationRebaseV2Service:
             try:
                 connection.rollback()
             except sqlite3.Error:
+                # Preserve the original generation-rebase failure if rollback also fails; the connection closes below.
                 pass
             raise
         except sqlite3.Error as error:
             try:
                 connection.rollback()
             except sqlite3.Error:
+                # Preserve the initialization failure for the unavailable error below, then close the connection.
                 pass
             raise GenerationRebaseUnavailable(
                 "generation rebase SQLite schema initialization failed",

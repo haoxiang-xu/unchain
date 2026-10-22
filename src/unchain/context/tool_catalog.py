@@ -876,9 +876,7 @@ class ToolCatalogEnvelope:
                 )
 
         supplied_manifest = self.tool_schema_manifest
-        if supplied_manifest is None:
-            canonical_manifest = expected_manifest
-        else:
+        if supplied_manifest is not None:
             if type(supplied_manifest) is not dict:
                 raise TypeError("tool_schema_manifest must be an exact dict")
             enforce_item_limit(

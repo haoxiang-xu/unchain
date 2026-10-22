@@ -607,7 +607,8 @@ class ShellRuntime:
                 try:
                     pipe.close()
                 except Exception:
-                    return
+                    # Closing must not suppress a read failure or interruption.
+                    pass
 
         reader = threading.Thread(target=_reader, name=f"shell-{stream_name}-{task.task_id}", daemon=True)
         task.reader_threads.append(reader)
@@ -627,10 +628,12 @@ class ShellRuntime:
             try:
                 task.process.kill()
             except Exception:
+                # The process may exit during signaling; still attempt the bounded wait below.
                 pass
         try:
             task.process.wait(timeout=2.0)
         except Exception:
+            # Cancellation/timeout cleanup remains bounded even if the OS cannot reap the process promptly.
             pass
         if timed_out:
             task.timed_out = True
