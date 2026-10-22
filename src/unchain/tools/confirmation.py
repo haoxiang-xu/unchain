@@ -240,6 +240,7 @@ def execute_confirmable_tool_call(
     )
     denied = False
     deny_reason = ""
+    capability_outcome = None
     confirmation_policy = preparation.confirmation_policy
 
     raw_response = _CONFIRMATION_RESPONSE_UNSET
@@ -326,5 +327,5 @@ def execute_confirmable_tool_call(
         deny_reason=deny_reason,
         effective_arguments=effective_arguments,
         confirmation_policy=confirmation_policy,
-        capability_outcome=capability_outcome if not denied and tool_obj is not None else None,
+        capability_outcome=capability_outcome,
     )

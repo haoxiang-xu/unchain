@@ -12,10 +12,6 @@ from dataclasses import dataclass, replace
 from typing import Any, Protocol, runtime_checkable
 
 from ..context.provider_execution import ContextProviderTurnExecutionService
-from ..kernel.run_ledger import (
-    build_model_attempt_receipt,
-    provider_call_route,
-)
 from ..kernel.types import ModelTurnResult
 from ..run_bundle import RunIdentity, canonical_sha256
 from ..run_bundle_ledger import RunBundleLedger
@@ -142,6 +138,13 @@ class ProviderTurnOwnership:
         provider: str | None = None,
         model: str | None = None,
     ) -> ModelTurnResult:
+        # The ledger refers to ownership types. Resolve its receipt builders
+        # at the send boundary rather than creating a module import cycle.
+        from ..kernel.run_ledger import (
+            build_model_attempt_receipt,
+            provider_call_route,
+        )
+
         run_ledger = getattr(state, "run_ledger", None)
         if run_ledger is None or run_ledger.identity != self.identity:
             raise ProviderTurnOwnershipError(
