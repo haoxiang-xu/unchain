@@ -645,7 +645,6 @@ class ContextRuntime:
                 )
             from .tool_executor import (
                 _resolve_official_execution_guard,
-                _same_execution_guard_chain,
             )
 
             lease, root_guard, guard_chain = _resolve_official_execution_guard(
@@ -702,6 +701,8 @@ class ContextRuntime:
                     )
             self._attempt_interaction_authorities[binding_key] = interaction_binding
             if guard_binding is not None:
+                from .tool_executor import _same_execution_guard_chain
+
                 previous_guard = self._attempt_execution_guards.get(binding_key)
                 if previous_guard is not None:
                     same_token = (

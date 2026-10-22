@@ -13,7 +13,6 @@ from unchain.durability import mark_durable_persistence_failure
 from unchain.journal.provider_wire import BoundProviderWireStore
 from unchain.kernel.types import ModelTurnResult
 from unchain.run_bundle import ProviderCallReceipt
-from unchain.providers.anthropic import AnthropicModelIO
 from unchain.providers.base import ModelTurnRequest
 from unchain.providers.durable_turn_runtime import (
     DurableProviderTurnMode,
@@ -22,15 +21,6 @@ from unchain.providers.durable_turn_runtime import (
     ExactProviderRouteTransport,
     RetryWaitHook,
 )
-from unchain.providers.exact_route_transport import (
-    GeminiExactRouteTransport,
-    AnthropicExactRouteTransport,
-    HyperspaceExactRouteTransport,
-    OllamaExactRouteTransport,
-    OpenAIExactRouteTransport,
-)
-from unchain.providers.ollama import OllamaModelIO
-from unchain.providers.openai import OpenAIModelIO
 from unchain.providers.physical_send import ProviderPhysicalSendContext
 from unchain.retry import RetryConfig
 
@@ -61,6 +51,20 @@ def _exact_transport(
     catalog,
     request: ModelTurnRequest,
 ) -> ExactProviderRouteTransport:
+    # Provider adapters depend on context contracts. Resolve their concrete
+    # transports only after package initialization has finished.
+    from unchain.providers.anthropic import AnthropicModelIO
+    from unchain.providers.exact_route_transport import (
+        GeminiExactRouteTransport,
+        AnthropicExactRouteTransport,
+        HyperspaceExactRouteTransport,
+        OllamaExactRouteTransport,
+        OpenAIExactRouteTransport,
+    )
+    from unchain.providers.gemini import GeminiModelIO
+    from unchain.providers.ollama import OllamaModelIO
+    from unchain.providers.openai import OpenAIModelIO
+
     provider = getattr(model_io, "provider", None)
     common = {
         "model_io": model_io,
@@ -69,8 +73,6 @@ def _exact_transport(
         "run_id": request.run_id,
         "emit_stream": request.emit_stream,
     }
-    from unchain.providers.gemini import GeminiModelIO
-
     if provider == "gemini" and type(model_io) is GeminiModelIO:
         return GeminiExactRouteTransport(**common)
     if provider == "openai" and type(model_io) is OpenAIModelIO:
