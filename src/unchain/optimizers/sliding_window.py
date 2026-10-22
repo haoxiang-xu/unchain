@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
-from typing import Any
 
 from .base import BaseContextOptimizer, OptimizerContext
 from .common import estimate_tokens, replace_non_system_span, split_system_and_non_system, split_turns

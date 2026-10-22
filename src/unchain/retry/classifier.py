@@ -43,6 +43,7 @@ def is_retryable(error: BaseException) -> bool:
             status = getattr(error, "status_code", None)
             return status in RETRYABLE_STATUS_CODES
     except ImportError:
+        # Anthropic is optional; continue with the remaining provider and generic classifications.
         pass
 
     try:
@@ -54,6 +55,7 @@ def is_retryable(error: BaseException) -> bool:
             status = getattr(error, "status_code", None)
             return status in RETRYABLE_STATUS_CODES
     except ImportError:
+        # OpenAI is optional; an unrecognized exception remains non-retryable below.
         pass
 
     return False

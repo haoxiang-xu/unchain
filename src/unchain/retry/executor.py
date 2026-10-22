@@ -64,6 +64,8 @@ def execute_with_retry(
         try:
             result = operation()
         except BaseException as exc:  # noqa: BLE001
+            # Account for every started attempt, including interruption;
+            # terminal exceptions are re-raised unchanged below.
             retryable = is_retryable(exc)
             if after_attempt is not None:
                 after_attempt(

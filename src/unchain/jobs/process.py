@@ -475,7 +475,6 @@ class ProcessJobSupervisor:
                     "queued durable job environment profile does not match "
                     "the current supervisor"
                 )
-                return
             existing = self._worker_wrappers.get(snapshot.job_id)
             if existing is not None and existing.poll() is None:
                 return

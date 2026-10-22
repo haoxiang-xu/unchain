@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import inspect
-import json
 import re
 import types
 from dataclasses import KW_ONLY, dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Union, get_args, get_origin, get_type_hints
+from typing import Any, Callable, Union, get_args, get_origin
 
 _UNION_TYPE = getattr(types, "UnionType", None)
 

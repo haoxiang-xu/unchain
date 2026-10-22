@@ -55,7 +55,6 @@ from unchain.memory.workspace.paths import canonical_entry_path, virtual_name
 from unchain.memory.workspace.ports import (
     RepositoryConflictError,
     RepositoryNotFoundError,
-    WorkspaceRepositoryError,
 )
 from unchain.memory.workspace.service import MemoryWorkspaceService
 

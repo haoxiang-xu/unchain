@@ -506,7 +506,6 @@ def _file_diff_snapshot_files(
             continue
 
         full_parts.append(full_diff)
-        displayed_diff = full_diff
         if remaining_lines == 0 or remaining_bytes == 0:
             displayed_diff = ""
         else:

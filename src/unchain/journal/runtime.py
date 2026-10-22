@@ -34,7 +34,6 @@ _MAX_REPLAY_PAGE_SIZE = 1_000
 _MAX_REPLAY_PAGES = 100_000
 _TOOL_STARTED_TYPES = frozenset({"tool.started"})
 _TOOL_SEALED_TYPES = frozenset({"tool.subagent_completion.sealed"})
-_TOOL_RESULT_TYPES = frozenset({"tool.result", "tool_result"})
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 SEMANTIC_EVENT_PROJECTION_LIMITS = JsonResourceLimits(
     max_items=10_000,

@@ -5,7 +5,6 @@ import codecs
 import os
 import signal
 import subprocess
-import sys
 import threading
 import time
 from pathlib import Path
@@ -71,7 +70,7 @@ class _HeartbeatLease:
                 ):
                     return
                 self.last_error = ""
-            except BaseException as exc:
+            except Exception as exc:
                 # A transient filesystem error must not permanently disable
                 # the lease.  The main worker still owns the command and will
                 # either commit a receipt or stop this thread on exit.
@@ -115,6 +114,7 @@ class _LogPump:
             try:
                 self.pipe.close()
             except Exception:
+                # The pipe may already be closed; preserve the recorded truncation and finish the bounded join.
                 pass
             self._thread.join(timeout=0.25)
 
@@ -181,11 +181,13 @@ class _LogPump:
             try:
                 self.pipe.close()
             except Exception:
+                # Closing the pipe is best effort; any read or durable-log failure is already recorded above.
                 pass
             if descriptor is not None:
                 try:
                     os.close(descriptor)
                 except OSError:
+                    # The descriptor may already be closed; retain the primary log persistence result.
                     pass
 
     @staticmethod
@@ -241,11 +243,13 @@ def _terminate_child(
         else:
             os.killpg(process.pid, signal.SIGTERM)
     except ProcessLookupError:
+        # The child exited between poll and signal; the wait below still reaps it.
         pass
     except Exception:
         try:
             process.terminate()
         except Exception:
+            # The process may exit during fallback termination; wait and escalate after the grace period.
             pass
     try:
         process.wait(timeout=grace_s)
@@ -258,15 +262,18 @@ def _terminate_child(
         else:
             os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
+        # The child exited between the grace wait and kill; continue to reap it below.
         pass
     except Exception:
         try:
             process.kill()
         except Exception:
+            # Killing is best effort after timeout; the final bounded wait still attempts to reap the child.
             pass
     try:
         process.wait(timeout=grace_s)
     except Exception:
+        # Cleanup must not replace the worker outcome when the OS cannot reap the child within the grace period.
         pass
 
 
@@ -486,6 +493,8 @@ def run_worker(
         )
         return 0
     except BaseException as exc:
+        # This is the worker process boundary: stop the owned child, record
+        # failure where possible, and return a nonzero process exit status.
         if snapshot is not None:
             _record_orchestration_failure(
                 store,

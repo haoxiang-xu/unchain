@@ -33,7 +33,6 @@ from ..run_bundle import (
     RunMetricError,
     RunMetricEvent,
     RunMetricEvidenceRef,
-    deterministic_provider_call_id,
 )
 from ..run_bundle_v2 import CompactRunBundle, run_bundle_from_dict
 if TYPE_CHECKING:
@@ -70,9 +69,6 @@ _RUN_BUNDLE_CAPACITY_ERRORS = frozenset(
 )
 _COMPACT_PROJECTION_UNSUPPORTED_ERROR = (
     "compact projection requires durable projection detail persistence"
-)
-_COMPACT_PROJECTION_STILL_TOO_LARGE_ERROR = (
-    "compact projection still exceeds the run bundle v1 canonical limit"
 )
 _COMPACT_PROJECTION_DETAIL_TYPE_ERROR = (
     "compact projection details did not return a metric-event tuple"

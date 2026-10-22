@@ -2173,7 +2173,7 @@ class LastNTurnsStrategy:
         state: dict[str, Any],
         full_conversation: list[dict[str, Any]],
     ) -> None:
-        del state, full_conversation
+        """Keep no persistent state for the last-N-turns projection."""
 
 
 class SummaryTokenStrategy:
@@ -2205,7 +2205,7 @@ class SummaryTokenStrategy:
             return output
 
         estimated_tokens = _estimate_tokens_from_messages(output)
-        usage_pct = (estimated_tokens / max_context_window_tokens) if max_context_window_tokens > 0 else 0.0
+        usage_pct = estimated_tokens / max_context_window_tokens
         memory_meta["summary_usage_pct"] = round(usage_pct, 4)
 
         if usage_pct < self.summary_trigger_pct:
@@ -2279,7 +2279,7 @@ class SummaryTokenStrategy:
         state: dict[str, Any],
         full_conversation: list[dict[str, Any]],
     ) -> None:
-        del state, full_conversation
+        """Summary state is updated during preparation; commit has no work."""
 
 
 class HybridContextStrategy:

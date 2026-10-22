@@ -8,7 +8,6 @@ from types import MappingProxyType
 from typing import Any, Callable
 
 from unchain.journal import (
-    ArtifactRef,
     BoundExecutionJournal,
     EventCursor,
     JournalEvent,
@@ -51,7 +50,6 @@ from .compiler import (
     _current_completed_tool_batch,
     _interaction_is_child,
     _pending_inputs,
-    _tool_call_ids,
     _validated_projection_events,
     project_canonical_journal_messages,
 )
@@ -1826,6 +1824,7 @@ class ContextCompileCoordinator:
         try:
             self._partial_attempt_sink(request, error)
         except Exception:
+            # Partial-attempt diagnostics are best effort and must not replace the original compile failure.
             pass
 
 

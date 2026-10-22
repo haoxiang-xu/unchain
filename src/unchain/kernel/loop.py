@@ -44,7 +44,6 @@ from ..tools.toolkit import Toolkit
 from ..tools.models import ToolConfirmationRequest
 from ..tools.runtime import snapshot_durable_tool_exposure_plan
 from ..tools.types import ToolBatchState
-from .delta import HarnessDelta
 from .harness import HarnessContext, RuntimeHarness, RuntimePhase
 from .failure import attach_kernel_run_failure
 from .lifecycle_events import (

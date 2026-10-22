@@ -311,7 +311,8 @@ class DurableProviderTurnRuntime:
         try:
             return self._coordinator.recover(subject)
         except BaseException as exc:
-            self._raise_durable(exc)
+            # Persistence interruption must stay terminal and preserve its identity.
+            raise mark_durable_persistence_failure(exc) from None
 
     def _lookup_result(
         self,
@@ -338,7 +339,8 @@ class DurableProviderTurnRuntime:
                 expected_route_sha256=route_sha256,
             )
         except BaseException as exc:
-            self._raise_durable(exc)
+            # Persistence interruption must stay terminal and preserve its identity.
+            raise mark_durable_persistence_failure(exc) from None
 
     def _inspect_subject(
         self,
@@ -444,7 +446,8 @@ class DurableProviderTurnRuntime:
                 )
             return lease, False
         except BaseException as exc:
-            self._raise_durable(exc)
+            # Persistence interruption must stay terminal and preserve its identity.
+            raise mark_durable_persistence_failure(exc) from None
 
     def _record_failure(
         self,
@@ -477,7 +480,8 @@ class DurableProviderTurnRuntime:
                 failure_diagnostic=diagnostic,
             )
         except BaseException as exc:
-            self._raise_durable(exc)
+            # Persistence interruption must stay terminal and preserve its identity.
+            raise mark_durable_persistence_failure(exc) from None
 
     def _uncertain_error(
         self,
@@ -543,7 +547,8 @@ class DurableProviderTurnRuntime:
                 operation=operation,
             )
         except BaseException as exc:
-            self._raise_durable(exc)
+            # Persistence interruption must stay terminal and preserve its identity.
+            raise mark_durable_persistence_failure(exc) from None
 
     def _recover_or_complete(
         self,
@@ -612,7 +617,8 @@ class DurableProviderTurnRuntime:
                 provider_call_receipt=run_receipt,
             )
         except BaseException as exc:
-            self._raise_durable(exc)
+            # Persistence interruption must stay terminal and preserve its identity.
+            raise mark_durable_persistence_failure(exc) from None
         self._complete(lease, receipt)
         return DurableProviderTurnOutcome(
             status=DurableProviderTurnStatus.COMPLETED,

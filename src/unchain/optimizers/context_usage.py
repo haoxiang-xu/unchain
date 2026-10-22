@@ -42,7 +42,7 @@ class ContextUsageOptimizer(BaseContextOptimizer):
 
         messages = context.latest_messages()
         current_tokens = estimate_tokens(messages)
-        usage_pct = current_tokens / max_tokens if max_tokens > 0 else 0.0
+        usage_pct = current_tokens / max_tokens
         remaining_tokens = max(0, max_tokens - current_tokens)
 
         # Do not edit semantic history: a dynamic system message invalidates

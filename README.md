@@ -26,6 +26,17 @@ pip install -e ".[dev]"
 
 **Prerequisites**: Python 3.12+
 
+`uv sync --locked --all-extras` installs the reviewed dependency versions. The
+legacy `requirements.txt` retains the notebook environment and can be installed
+alongside `-e ".[dev]"`.
+
+To retain Intel macOS and 32-bit Windows support, `cryptography` is temporarily
+held at `>=48.0.1,<49`. Three advisories remain open pending a compatible upstream
+fix or a separate platform-support decision:
+[GHSA-g6cj-pr64-35w5](https://github.com/advisories/GHSA-g6cj-pr64-35w5),
+[GHSA-jwv3-5hgf-82ww](https://github.com/advisories/GHSA-jwv3-5hgf-82ww), and
+[GHSA-m2h6-j472-rp4c](https://github.com/advisories/GHSA-m2h6-j472-rp4c).
+
 ## Quick Start
 
 ```python
