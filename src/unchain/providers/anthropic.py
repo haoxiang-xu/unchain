@@ -50,6 +50,14 @@ class AnthropicModelIO(_NativeModelIOBase):
             except ImportError:
                 raise ImportError("anthropic package is required for anthropic provider — pip install anthropic")
         self._client_factory = client_factory
+        try:
+            from anthropic import Timeout as AnthropicTimeout
+        except ImportError:
+            # Injected clients can operate without the optional SDK installed.
+            pass
+        else:
+            # Match the SDK's HTTP library while retaining subclass timeouts.
+            self._ANTHROPIC_TIMEOUT = AnthropicTimeout(**self._ANTHROPIC_TIMEOUT.as_dict())
 
     _ANTHROPIC_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0)
 
@@ -390,12 +398,22 @@ class AnthropicModelIO(_NativeModelIOBase):
                 [blocks_by_index[index] for index in sorted(blocks_by_index)]
             )
 
+        for block in raw_blocks:
+            # ParsedTextBlock exposes parsed_output as SDK-only response state.
+            # Normalize it before semantic/replay fan-out: it is never an
+            # Anthropic Messages input field, whether null or populated.
+            if block.get("type") == "text":
+                block.pop("parsed_output", None)
+            # SDK versions materialize absent tool metadata as None. Normalize
+            # only these known defaults before semantic/replay fan-out; real
+            # metadata must still pass the closed Messages input contract.
+            if block.get("type") == "tool_use":
+                for field in ("caller", "toolset_name"):
+                    if field in block and block[field] is None:
+                        block.pop(field)
+
         if replay_profile is not None:
             for block in raw_blocks:
-                # The SDK materializes an omitted caller as None. Keep capture
-                # aligned with canonical tool calls without discarding metadata.
-                if block.get("type") == "tool_use" and block.get("caller") is None:
-                    block.pop("caller", None)
                 if block.get("type") != "thinking":
                     continue
                 if not isinstance(block.get("thinking"), str):
@@ -426,7 +444,7 @@ class AnthropicModelIO(_NativeModelIOBase):
                 text = str(block.get("text") or "")
                 if text:
                     text_parts.append(text)
-                    semantic_blocks.append({"type": "text", "text": text})
+                semantic_blocks.append(copy.deepcopy(block))
                 continue
             if block_type == "tool_use":
                 call_id = block.get("id")
@@ -451,7 +469,14 @@ class AnthropicModelIO(_NativeModelIOBase):
                         arguments=copy.deepcopy(arguments),
                     )
                 )
-                semantic_blocks.append(copy.deepcopy(block))
+                semantic_block = copy.deepcopy(block)
+                # The SDK's direct-caller marker is transport metadata. It is
+                # required in the provider-native replay frame but has no
+                # counterpart in a durable ToolCall, whose canonical compiler
+                # reconstructs only id/name/input.
+                if semantic_block.get("caller") == {"type": "direct"}:
+                    semantic_block.pop("caller")
+                semantic_blocks.append(semantic_block)
 
         if tool_calls and replay_profile is None:
             for block in raw_blocks:

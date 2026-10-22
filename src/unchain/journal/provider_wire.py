@@ -148,7 +148,7 @@ def _validate_artifact(
 
 
 @dataclass(frozen=True)
-class _ReceiptFields:
+class ProviderWireSnapshotEventFields:
     iteration: int
     provider: str
     adapter_revision: str
@@ -157,7 +157,9 @@ class _ReceiptFields:
     artifact: ArtifactRef
 
 
-def _receipt_fields(event: object) -> _ReceiptFields:
+def provider_wire_snapshot_event_fields(
+    event: object,
+) -> ProviderWireSnapshotEventFields:
     if type(event) is not JournalEvent:
         raise TypeError("provider wire receipts require exact JournalEvent records")
     _require_attempt(event.attempt, "provider wire receipt attempt")
@@ -206,7 +208,7 @@ def _receipt_fields(event: object) -> _ReceiptFields:
         raise ProviderWireReceiptIntegrityError(
             "provider wire receipt resource refs must contain exactly its artifact"
         )
-    return _ReceiptFields(
+    return ProviderWireSnapshotEventFields(
         iteration=iteration,
         provider=provider,
         adapter_revision=adapter_revision,
@@ -243,7 +245,7 @@ class ProviderWireReceiptLookup:
         event_ids: set[str] = set()
         operation_ids: set[str] = set()
         for event in self.events:
-            fields = _receipt_fields(event)
+            fields = provider_wire_snapshot_event_fields(event)
             if event.attempt != self.attempt:
                 raise ModelValidationError(
                     "provider wire receipt belongs to a foreign attempt"
@@ -345,7 +347,7 @@ class ProviderWireSnapshotReceipt:
         if type(self.envelope) is not ProviderWireEnvelope:
             raise TypeError("envelope must be an exact ProviderWireEnvelope")
         _validate_artifact(self.artifact, content=self.envelope.canonical_bytes())
-        fields = _receipt_fields(self.event)
+        fields = provider_wire_snapshot_event_fields(self.event)
         if type(self.cursor) is not EventCursor:
             raise TypeError("cursor must be an exact EventCursor")
         if (
@@ -598,7 +600,7 @@ def recover_provider_wire_authority(
         )
 
     event = lookup.events[0]
-    fields = _receipt_fields(event)
+    fields = provider_wire_snapshot_event_fields(event)
     cursor = EventCursor(event.store_seq, event.event_id)
     if cursor != expected_cursor:
         raise ProviderWireReceiptIntegrityError(
@@ -655,10 +657,12 @@ __all__ = [
     "MAX_PROVIDER_WIRE_RECEIPTS",
     "PROVIDER_WIRE_RECEIPT_LOOKUP_LIMITS",
     "PROVIDER_WIRE_SNAPSHOT_EVENT_TYPE",
+    "ProviderWireSnapshotEventFields",
     "ProviderWireReceiptIntegrityError",
     "ProviderWireReceiptLookup",
     "ProviderWireReceiptNotFound",
     "ProviderWireSnapshotReceipt",
+    "provider_wire_snapshot_event_fields",
     "RecoveredProviderWireAuthority",
     "persist_provider_wire_snapshot",
     "recover_provider_wire_authority",

@@ -318,6 +318,10 @@ class SQLiteMemoryAttachmentFactory:
         context: BoundContextMemoryCapability,
         completion_factory_resolver: MemoryCompletionFactoryResolver
         | None = None,
+        proposal_source_refs_resolver: Callable[
+            [MemoryAttachmentRequest], Sequence[ResourceRef]
+        ]
+        | None = None,
         long_term: BoundMemoryReadCapability | None = None,
         allowed_long_term_refs: Sequence[ResourceRef] = (),
     ) -> None:
@@ -346,6 +350,10 @@ class SQLiteMemoryAttachmentFactory:
             getattr(completion_factory_resolver, "resolve", None)
         ):
             raise TypeError("completion_factory_resolver must provide resolve(request)")
+        if proposal_source_refs_resolver is not None and not callable(
+            proposal_source_refs_resolver
+        ):
+            raise TypeError("proposal_source_refs_resolver must be callable")
 
         if isinstance(allowed_long_term_refs, (str, bytes, bytearray)):
             raise TypeError("allowed_long_term_refs must be a sequence")
@@ -376,6 +384,7 @@ class SQLiteMemoryAttachmentFactory:
         self.references = references
         self.context = context
         self.completion_factory_resolver = completion_factory_resolver
+        self.proposal_source_refs_resolver = proposal_source_refs_resolver
         self.long_term = long_term
         self.allowed_long_term_refs = allowed
 
@@ -415,6 +424,11 @@ class SQLiteMemoryAttachmentFactory:
             context=self.context,
             chat=chat,
             candidates=candidates,
+            proposal_source_refs_resolver=(
+                None
+                if self.proposal_source_refs_resolver is None
+                else lambda: self.proposal_source_refs_resolver(request)
+            ),
             long_term=self.long_term,
             allowed_long_term_refs=self.allowed_long_term_refs,
         )

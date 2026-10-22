@@ -59,7 +59,9 @@ from unchain.journal.interaction_resolution_compat import (
 )
 from unchain.journal.graph_attempt_quiescence import (
     ATTEMPT_TERMINAL_EQUIVALENTS,
+    CANCELLED_ATTEMPT_TERMINALS,
     CANONICAL_ATTEMPT_TERMINALS,
+    FAILED_ATTEMPT_TERMINALS,
     GRAPH_STEP_COMPLETED,
     GRAPH_STEP_SEALS,
     GRAPH_STEP_SEAL_TERMINALS,
@@ -98,6 +100,14 @@ _TOOL_LIFECYCLE_EVENT_TYPES = (
     | _TOOL_STARTED_EVENT_TYPES
     | _TOOL_SEALED_EVENT_TYPES
     | _TOOL_RESULT_EVENT_TYPES
+)
+_POST_TERMINAL_AUDIT_EVENT_TYPES = frozenset(
+    {
+        "memory.curator.enqueued",
+        "memory.curator.noop",
+        "memory.curator.isolated",
+        "memory.curator.failed",
+    }
 )
 
 
@@ -3498,7 +3508,10 @@ class SQLiteGenerationRebaseV2Service:
                     event=graph_events[0],
                 )
 
-            selection = select_attempt_terminal(attempt_events)
+            selection = select_attempt_terminal(
+                attempt_events,
+                allowed_following_event_types=_POST_TERMINAL_AUDIT_EVENT_TYPES,
+            )
             if selection.ambiguous:
                 raise _journal_incompatible(
                     "generation rebase attempt has duplicate terminal events",
@@ -3581,7 +3594,19 @@ class SQLiteGenerationRebaseV2Service:
                     plan=plan,
                 )
             terminal = canonical_terminals[0] if canonical_terminals else None
-            if terminal is not None and terminal != attempt_events[-1]:
+            following_terminal = (
+                ()
+                if terminal is None
+                else tuple(
+                    event
+                    for event in attempt_events
+                    if event.store_seq > terminal.store_seq
+                )
+            )
+            if terminal is not None and any(
+                event.event_type not in _POST_TERMINAL_AUDIT_EVENT_TYPES
+                for event in following_terminal
+            ):
                 raise _journal_incompatible(
                     "generation rebase orchestration continued after its terminal",
                     reason=(
@@ -3632,6 +3657,32 @@ class SQLiteGenerationRebaseV2Service:
                     final_step=states[-1],
                     artifact_repository=artifact_repository,
                 )
+
+            if (
+                terminal is not None
+                and not execution_seals
+                and terminal.event_type
+                in FAILED_ATTEMPT_TERMINALS | CANCELLED_ATTEMPT_TERMINALS
+            ):
+                # The orchestration attempt itself ended failed or cancelled
+                # without a completed graph (a dead step, or a Stop before
+                # the first step, between steps, or after the last step).
+                # Like any dead graph it must be exactly the admission
+                # followed by this one terminal; the step checks above and
+                # below still decide whether any step blocks the rebase.
+                # Curator audit events may follow the terminal. Check the
+                # terminal's predecessor, not the end of the entire attempt.
+                terminal_index = attempt_events.index(terminal)
+                if terminal_index == 0 or attempt_events[terminal_index - 1] != admission:
+                    raise _journal_incompatible(
+                        "generation rebase graph root terminal does not follow its admission",
+                        reason=(
+                            GenerationRebaseFailureReason.GRAPH_STEP_SEQUENCE_INVALID
+                        ),
+                        event=terminal,
+                        plan=plan,
+                    )
+                continue
 
             if terminal is not None:
                 if (

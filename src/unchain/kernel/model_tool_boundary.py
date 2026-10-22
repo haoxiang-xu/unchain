@@ -555,7 +555,11 @@ class _FinalModelToolBoundaryIssuer:
                 "after_attempt",
                 after_attempt,
             )
-            for attribute in ("run_receipt_factory", "run_receipt_observed"):
+            for attribute in (
+                "run_receipt_factory",
+                "run_receipt_observed",
+                "retry_wait",
+            ):
                 value = getattr(before_attempt, attribute, None)
                 if value is not None:
                     setattr(observed_before_attempt, attribute, value)

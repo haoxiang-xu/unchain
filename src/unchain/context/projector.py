@@ -17,6 +17,7 @@ from unchain.journal import (
 )
 from unchain.journal.models import _required_text, _sha256
 from unchain.tools.output_management import ToolOutputManager
+from unchain.tools.timeline_policy import TIMELINE_MERGE_POLICIES
 
 from .artifacts import ArtifactService, ArtifactServiceError, ToolResultArtifactization
 from .attachments import HostResolvedAttachment, normalize_host_resolved_attachments
@@ -32,6 +33,9 @@ _EPHEMERAL_EVENT_TYPES = frozenset(
         "content_delta",
         "message_delta",
         "response_delta",
+        # Retry waits are presentation; the provider request leases are the
+        # durable record of every try (BC-386-5).
+        "provider_retry",
     }
 )
 _LIFECYCLE_EVENT_TYPES = frozenset(
@@ -49,6 +53,15 @@ _LIFECYCLE_EVENT_TYPES = frozenset(
         "run_max_iterations",
     }
 )
+
+
+def _timeline_merge_policy_payload(event: Mapping[str, Any]) -> dict[str, str]:
+    if "timeline_merge_policy" not in event:
+        return {}
+    value = event.get("timeline_merge_policy")
+    if isinstance(value, str) and value in TIMELINE_MERGE_POLICIES:
+        return {"timeline_merge_policy": value}
+    return {"timeline_merge_policy": "never"}
 _INTERACTION_EVENT_TYPES = frozenset(
     {
         "interaction_requested",
@@ -318,6 +331,7 @@ class ShadowObservedToolEventAdapter:
             **protected,
             "iteration": iteration,
             "arguments": copy.deepcopy(event.get("arguments") or {}),
+            **_timeline_merge_policy_payload(event),
         }
         return self._draft(
             event_type="tool_call",
@@ -908,6 +922,7 @@ class CanonicalSemanticEventProjector:
             "tool_name": tool_name,
             "call_id": call_id,
             "arguments": copy.deepcopy(event.get("arguments") or {}),
+            **_timeline_merge_policy_payload(event),
             **(
                 {"source_provider": source_provider}
                 if source_provider is not None

@@ -398,6 +398,7 @@ def build_ask_user_question_tool() -> Tool:
         description=ASK_USER_QUESTION_TOOL_DESCRIPTION,
         func=lambda **_: {"error": "ask_user_question is a reserved runtime tool and cannot be executed directly"},
         prompt_spec=ASK_USER_QUESTION_TOOL_PROMPT_SPEC,
+        timeline_merge_policy="never",
         parameters=[
             ToolParameter(
                 name="title",

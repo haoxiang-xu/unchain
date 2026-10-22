@@ -40,8 +40,10 @@ class RetriesExhaustedError(Exception):
 
     code = "retries_exhausted"
 
-    def __init__(self, last_error: BaseException, attempts: int) -> None:
+    def __init__(
+        self, last_error: BaseException, attempts: int, detail: str = ""
+    ) -> None:
         self.last_error = last_error
         self.attempts = attempts
         self.__suppress_context__ = True
-        super().__init__(self.code)
+        super().__init__(f"{self.code}; {detail}" if detail else self.code)

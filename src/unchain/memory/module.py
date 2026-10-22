@@ -22,6 +22,7 @@ from .toolkit import (
     MemoryToolkitRunBinding,
     NormalMemoryToolkitCapabilities,
 )
+from .toolkit.policy import MemoryLearningPromptHarness
 
 
 MEMORY_V2_MODULE_KEY = "memory_v2"
@@ -270,11 +271,23 @@ class MemoryV2Module(BaseAgentModule):
                 raise MemoryV2ModuleError(
                     "root completion changed the attached run identity"
                 )
-            host.enqueue_root_completion(completion)
+            receipt = host.enqueue_root_completion(completion)
+            recorder = getattr(
+                completion_factory,
+                "record_enqueue_result",
+                None,
+            )
+            if callable(recorder):
+                recorder(completion=completion, receipt=receipt)
             return None
 
         if toolkit.tools:
             builder.add_tool(toolkit)
+        if (
+            completion_granted
+            and grant.allows(MEMORY_CANDIDATE_PROPOSE)
+        ):
+            builder.add_harness(MemoryLearningPromptHarness())
         if completion_granted and completion_factory is not None:
             builder.add_run_hook(enqueue_terminal)
 

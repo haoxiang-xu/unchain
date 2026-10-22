@@ -151,6 +151,13 @@ def decode_external_ref(
     return ref
 
 
+def encode_context_content_locator(ref: ResourceRef) -> str:
+    """Compatibility facade for the shared context-content protocol."""
+    from unchain.context_content import encode_context_content_locator as encode
+
+    return encode(ref)
+
+
 def decode_memory_ref(
     codec: Any,
     value: Any,
@@ -192,13 +199,25 @@ def decode_context_content_ref(
     error_message: str,
 ) -> ResourceRef:
     error = error_message
-    ref = decode_external_ref(
-        codec,
-        value,
-        purpose=ReferencePurpose.CONTEXT_CONTENT,
-        allowed_kinds=frozenset({"artifact", "checkpoint", "context_event"}),
-        error_message=error,
+    from unchain.context_content import (
+        ContextContentProtocolError,
+        decode_context_content_locator,
     )
+
+    try:
+        ref = decode_context_content_locator(value, error_message=error)
+    except ContextContentProtocolError as exc:
+        raise MemoryToolkitError(str(exc)) from exc
+    if ref is None:
+        ref = decode_external_ref(
+            codec,
+            value,
+            purpose=ReferencePurpose.CONTEXT_CONTENT,
+            allowed_kinds=frozenset({"artifact", "checkpoint", "context_event"}),
+            error_message=error,
+        )
+    elif ref.kind not in {"artifact", "checkpoint", "context_event"}:
+        raise MemoryToolkitError(error)
     valid = (
         (ref.kind == "artifact" and not ref.fragment)
         or (

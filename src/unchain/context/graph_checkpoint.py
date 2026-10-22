@@ -65,6 +65,8 @@ _INTERACTION_RESOLUTIONS = INTERACTION_RESOLUTIONS
 # prompt was answered through the in-run callback and its receipt lives in
 # the session-state interaction journal rather than this events journal.
 _LIVENESS_EXEMPT_EVENT_TYPES = INTERACTION_LIVENESS_EXEMPT_EVENT_TYPES
+# Orchestration-attempt terminals that end a graph that did not complete.
+_ROOT_DEAD_TERMINALS = FAILED_ATTEMPT_TERMINALS | CANCELLED_ATTEMPT_TERMINALS
 
 
 class GraphCheckpointError(RuntimeError):
@@ -1047,6 +1049,25 @@ class JournalGraphCheckpointRepository:
         resume_events: list[tuple[GraphStepBinding, JournalEvent]] = []
         graph_terminal: GraphTerminalStatus | None = None
         for event in events:
+            if (
+                event.attempt == plan.orchestration_attempt
+                and event.event_type in _ROOT_DEAD_TERMINALS
+            ):
+                # The orchestration attempt ended failed or cancelled. Its
+                # events carry no graph scope, so they are matched here by
+                # attempt. After a completed graph this is the root's own
+                # later outcome and changes nothing; before it, the graph is
+                # terminal and a later completion would contradict it.
+                if graph_terminal is GraphTerminalStatus.COMPLETED:
+                    continue
+                if graph_terminal is not None:
+                    raise GraphCheckpointError("graph terminal is ambiguous")
+                graph_terminal = (
+                    GraphTerminalStatus.FAILED
+                    if event.event_type in FAILED_ATTEMPT_TERMINALS
+                    else GraphTerminalStatus.CANCELLED
+                )
+                continue
             if event.payload.get("graph_scope_id") != plan.scope_id:
                 continue
             if event.payload.get("graph_plan_id") != plan.plan_id:
@@ -1311,9 +1332,12 @@ class JournalGraphCheckpointRepository:
                 "graph resume admission has no durable step start"
             )
 
+        # A root failure or cancellation ends the graph, but a started step
+        # that has no seal yet must still be reported so that recovery can
+        # seal the evidence it already has.
         next_index = (
             None
-            if graph_terminal is not None
+            if graph_terminal is GraphTerminalStatus.COMPLETED
             or len(completed_prefix) == len(plan.steps)
             or step_terminals
             else len(completed_prefix)
@@ -1332,6 +1356,8 @@ class JournalGraphCheckpointRepository:
                 resume_ready = next_index
             else:
                 resuming = next_index
+            next_index = None
+        if graph_terminal is not None:
             next_index = None
 
         terminal_status = graph_terminal
@@ -1937,10 +1963,82 @@ class GraphCheckpointService:
             expected_output,
         )
 
+    def fail_step(
+        self,
+        plan: GraphExecutionPlan,
+        step_index: int,
+        *,
+        status: GraphTerminalStatus,
+    ) -> GraphRecovery:
+        """Seal a step whose run ended with a failed or cancelled terminal.
+
+        The run-time counterpart of the seal ``recover`` writes later: it
+        requires the canonical terminal to be in the journal already, and the
+        requested status to agree with it. Calling it again for an already
+        sealed step changes nothing. The orchestration attempt is left as it
+        is: rebase accepts a sealed dead step under an admitted-only root.
+        """
+
+        if (
+            isinstance(step_index, bool)
+            or not isinstance(step_index, int)
+            or not 0 <= step_index < len(plan.steps)
+        ):
+            raise ValueError("step_index is outside the graph plan")
+        if type(status) is not GraphTerminalStatus:
+            raise TypeError("status must be a GraphTerminalStatus")
+        if status is GraphTerminalStatus.COMPLETED:
+            raise ValueError("a completed graph step is sealed by complete_step")
+        scan = self.repository.scan(plan)
+        step = plan.steps[step_index]
+        if step_index not in scan.started_events:
+            raise GraphCheckpointError("graph step failure has no durable start")
+        seals = {
+            event.event_type
+            for event in scan.snapshot_events
+            if event.attempt == step.attempt
+            and event.event_type
+            in {"graph.step.completed", "graph.step.failed", "graph.step.cancelled"}
+        }
+        if "graph.step.completed" in seals:
+            raise GraphCheckpointConflict("graph step already completed")
+        if f"graph.step.{status.value}" in seals:
+            return scan.recovery
+        if seals:
+            raise GraphCheckpointConflict(
+                "graph step was already sealed with a different terminal"
+            )
+        terminal = self._terminal_after_start(scan, step_index)
+        if terminal is None or terminal.event_type in _COMPLETED_TERMINALS:
+            raise GraphCheckpointError(
+                "graph step failure requires a canonical failed or cancelled terminal"
+            )
+        expected = (
+            _FAILED_TERMINALS
+            if status is GraphTerminalStatus.FAILED
+            else _CANCELLED_TERMINALS
+        )
+        if terminal.event_type not in expected:
+            raise GraphCheckpointConflict(
+                "graph step terminal disagrees with the requested status"
+            )
+        self.repository.terminal(
+            plan,
+            step,
+            status=status,
+            terminal_cursor=_cursor(terminal),
+        )
+        return self.repository.scan(plan).recovery
+
     def finalize(self, plan: GraphExecutionPlan) -> GraphRecovery:
         recovery = self.recover(plan)
         if recovery.is_complete:
             return recovery
+        if recovery.terminal_status in {
+            GraphTerminalStatus.FAILED,
+            GraphTerminalStatus.CANCELLED,
+        }:
+            raise GraphCheckpointError("terminal graph execution cannot finalize")
         if len(recovery.completed_steps) != len(plan.steps):
             raise GraphCheckpointError("graph cannot finalize before every step completes")
         self.repository.finalize(plan, recovery.completed_steps[-1])

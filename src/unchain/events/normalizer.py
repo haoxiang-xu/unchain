@@ -4,6 +4,11 @@ import copy
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..tool_outcomes import (
+    DURABLE_TOOL_RESULT_OUTCOMES,
+    classify_durable_tool_result,
+)
+from ..tools.timeline_policy import TIMELINE_MERGE_POLICIES
 from .types import RuntimeEventLinks, RuntimeEventSurface, Visibility
 
 
@@ -31,6 +36,13 @@ def _str_value(value: Any, fallback: str = "") -> str:
     if isinstance(value, str) and value:
         return value
     return fallback
+
+
+def _timeline_merge_policy(raw: dict[str, Any]) -> str | None:
+    if "timeline_merge_policy" not in raw:
+        return None
+    value = raw.get("timeline_merge_policy")
+    return value if isinstance(value, str) and value in TIMELINE_MERGE_POLICIES else "never"
 
 
 def _int_value(value: Any) -> int | None:
@@ -63,13 +75,68 @@ def _base_metadata(raw: dict[str, Any]) -> dict[str, Any]:
     return metadata
 
 
-def _status_from_tool_result(result: Any) -> str:
-    if isinstance(result, dict):
-        if result.get("denied") is True:
-            return "denied"
-        if result.get("error") is not None:
-            return "error"
-    return "success"
+def _status_from_tool_result(
+    result: Any,
+    *,
+    durable_result_outcome: Any = None,
+) -> str:
+    if durable_result_outcome in DURABLE_TOOL_RESULT_OUTCOMES:
+        return durable_result_outcome
+    return classify_durable_tool_result(result)
+
+
+def _exact_int(value: Any, *, minimum: int) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        return None
+    return value
+
+
+def _provider_retry_payload(raw_event: dict[str, Any]) -> dict[str, Any] | None:
+    """Closed projection of a ``provider_retry`` event (BC-386-4/6).
+
+    Only the known fields are copied; anything else on the raw event is
+    ignored, so provider text can never reach the stream.
+    """
+
+    attempt_failed = _exact_int(raw_event.get("attempt_failed"), minimum=1)
+    next_attempt = _exact_int(raw_event.get("next_attempt"), minimum=2)
+    max_attempts = _exact_int(raw_event.get("max_attempts"), minimum=2)
+    delay_ms = _exact_int(raw_event.get("delay_ms"), minimum=0)
+    remaining_ms = _exact_int(raw_event.get("remaining_ms"), minimum=0)
+    http_status = raw_event.get("http_status")
+    provider_status = raw_event.get("provider_status")
+    provider = raw_event.get("provider")
+    if (
+        attempt_failed is None
+        or next_attempt is None
+        or max_attempts is None
+        or delay_ms is None
+        or remaining_ms is None
+        or next_attempt != attempt_failed + 1
+        or next_attempt > max_attempts
+        or remaining_ms > delay_ms
+        or not (
+            http_status is None
+            or (
+                not isinstance(http_status, bool)
+                and isinstance(http_status, int)
+                and 400 <= http_status <= 599
+            )
+        )
+        or not isinstance(provider_status, str)
+        or not isinstance(provider, str)
+    ):
+        return None
+    return {
+        "provider": provider,
+        "attempt_failed": attempt_failed,
+        "next_attempt": next_attempt,
+        "max_attempts": max_attempts,
+        "delay_ms": delay_ms,
+        "remaining_ms": remaining_ms,
+        "http_status": http_status,
+        "provider_status": provider_status,
+    }
 
 
 def _trace_surface(group: str = "trace", *, default_state: str = "collapsed") -> RuntimeEventSurface:
@@ -210,6 +277,9 @@ def _interaction_payload(raw: dict[str, Any], *, raw_type: str) -> tuple[str, di
     if selection_mode:
         payload["selection_mode"] = selection_mode
         payload["config"].setdefault("selection_mode", selection_mode)
+    policy = _timeline_merge_policy(raw)
+    if policy is not None:
+        payload["timeline_merge_policy"] = policy
     for key in ("allow_other", "other_label", "other_placeholder", "min_selected", "max_selected"):
         if key in raw:
             payload[key] = copy.deepcopy(raw[key])
@@ -422,6 +492,51 @@ def normalize_raw_event(
             )
         ]
 
+    if raw_type == "provider_retry" and (
+        "retry_ordinal" in raw_event or "max_retries" in raw_event
+    ):
+        allowed = {
+            "type", "run_id", "iteration", "timestamp", "provider",
+            "http_status", "retry_ordinal", "max_retries", "delay_ms",
+            "workflow_node_id", "workflow_step_index", "workflow_step_count",
+        }
+        ordinal = _int_value(raw_event.get("retry_ordinal"))
+        max_retries = _int_value(raw_event.get("max_retries"))
+        delay_ms = _int_value(raw_event.get("delay_ms"))
+        if (
+            set(raw_event) - allowed
+            or turn_id is None
+            or raw_event.get("provider") != "gemini"
+            or _int_value(raw_event.get("http_status")) != 503
+            or ordinal is None or max_retries is None or delay_ms is None
+            or not 1 <= max_retries <= 2
+            or not 1 <= ordinal <= max_retries
+            or not 0 <= delay_ms <= 3_600_000
+        ):
+            return []
+        step_id = f"model:{turn_id}:response"
+        return [
+            RuntimeEventDraft(
+                type="step.delta",
+                run_id=run_id,
+                agent_id=agent_id,
+                turn_id=turn_id,
+                links=RuntimeEventLinks(step_id=step_id),
+                surface=_trace_surface("model"),
+                payload={
+                    "step_id": step_id,
+                    "step_type": "model_response",
+                    "kind": "provider_retry",
+                    "provider": "gemini",
+                    "http_status": 503,
+                    "retry_ordinal": ordinal,
+                    "max_retries": max_retries,
+                    "delay_ms": delay_ms,
+                },
+                metadata=metadata,
+            )
+        ]
+
     if raw_type == "reasoning_preview_discarded":
         if (
             set(raw_event)
@@ -443,6 +558,29 @@ def normalize_raw_event(
                     "step_type": "model_response",
                     "kind": "reasoning_reset",
                     "preview_id": preview_id,
+                },
+                metadata=metadata,
+            )
+        ]
+
+    if raw_type == "provider_retry":
+        retry = _provider_retry_payload(raw_event)
+        if retry is None:
+            return []
+        step_id = f"model:{turn_id or run_id}:response"
+        return [
+            RuntimeEventDraft(
+                type="step.delta",
+                run_id=run_id,
+                agent_id=agent_id,
+                turn_id=turn_id,
+                links=RuntimeEventLinks(step_id=step_id),
+                surface=_trace_surface("model", default_state="expanded"),
+                payload={
+                    "step_id": step_id,
+                    "step_type": "model_response",
+                    "kind": "provider_retry",
+                    **retry,
                 },
                 metadata=metadata,
             )
@@ -523,6 +661,9 @@ def normalize_raw_event(
         ):
             if key in raw_event:
                 payload[key] = copy.deepcopy(raw_event[key])
+        policy = _timeline_merge_policy(raw_event)
+        if policy is not None:
+            payload["timeline_merge_policy"] = policy
         return [
             RuntimeEventDraft(
                 type="step.started",
@@ -545,7 +686,10 @@ def normalize_raw_event(
             "step_type": "tool",
             "tool_name": _str_value(raw_event.get("tool_name"), "tool"),
             "call_id": call_id,
-            "status": _status_from_tool_result(result),
+            "status": _status_from_tool_result(
+                result,
+                durable_result_outcome=raw_event.get("durable_result_outcome"),
+            ),
             "result": result,
         }
         display_name = _str_value(raw_event.get("tool_display_name"))
@@ -576,6 +720,10 @@ def normalize_raw_event(
             if durable_payload is None:
                 return []
             interaction_id, payload, call_id = durable_payload
+            policy = _timeline_merge_policy(raw_event)
+            if policy is not None:
+                # Presentation metadata stays beside, never inside, the hashed request.
+                payload["timeline_merge_policy"] = policy
         else:
             interaction_id, payload = _interaction_payload(
                 raw_event,

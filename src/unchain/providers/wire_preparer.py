@@ -682,12 +682,14 @@ __all__ = [
 
 def _gemini_route(preparation, *, merged_payload):
     from .gemini import translate_gemini_messages
+    from .gemini_config import validate_gemini_model_config
 
     contents, system = translate_gemini_messages(preparation.messages)
     config = _json_copy(merged_payload)
     config["automatic_function_calling"] = {"disable": True}
     if system:
         config["system_instruction"] = system
+    validate_gemini_model_config(preparation.configured_model, config)
     request = {
         "model": preparation.configured_model,
         "contents": contents,

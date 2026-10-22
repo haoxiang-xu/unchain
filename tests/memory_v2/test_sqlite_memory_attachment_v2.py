@@ -15,12 +15,14 @@ from unchain.memory import (
     MemoryV2Module,
 )
 from unchain.journal import ResourceRef
+from unchain.kernel import ModelTurnResult
+from unchain.kernel.types import ToolCall
 from unchain.memory.curator.host import MemoryAgentHostAdapter, MemoryAgentHostConfig
 from unchain.memory.toolkit import (
     CandidateProposalRequest,
     MemoryToolkitRunBinding,
-    ReferencePurpose,
 )
+from unchain.memory.toolkit.policy import MEMORY_LEARNING_POLICY_VERSION
 from unchain.persistence.sqlite_memory_host_v2 import (
     SQLiteMemoryAttachmentFactory,
     SQLiteMemoryHostV2Error,
@@ -109,6 +111,9 @@ def _attachment_factory(
         references=consolidation_factory.references,
         context=consolidation_factory.context,
         completion_factory_resolver=resolver,
+        proposal_source_refs_resolver=(
+            lambda _request: tuple(consolidation_factory.context.source_refs)
+        ),
         long_term=long_term,
         allowed_long_term_refs=allowed_long_term_refs,
     )
@@ -180,6 +185,62 @@ def test_root_attachment_exposes_exact_normal_tools_and_persists_current_run_can
     )
     host = _enabled_host(repository, consolidation_factory, clock)
     builder = _builder()
+    class _LearningModelIO:
+        provider = "openai"
+        model = "gpt-test"
+
+        def __init__(self) -> None:
+            self.requests = []
+
+        def fetch_turn(self, request):
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                assert any(
+                    MEMORY_LEARNING_POLICY_VERSION
+                    in str(message.get("content") or "")
+                    for message in request.messages
+                )
+                call = ToolCall(
+                    call_id="memory-proposal-a",
+                    name="memory_propose",
+                    arguments={
+                        "path": "/decisions/context-policy.md",
+                        "description": (
+                            "Confirmed context policy for long-running agent tasks"
+                        ),
+                        "content": "Keep the canonical execution journal.",
+                    },
+                )
+                return ModelTurnResult(
+                    assistant_messages=[
+                        {
+                            "type": "function_call",
+                            "call_id": call.call_id,
+                            "name": call.name,
+                            "arguments": call.arguments,
+                        }
+                    ],
+                    tool_calls=[call],
+                    response_id="memory-proposal-turn",
+                )
+            if len(self.requests) == 2:
+                return ModelTurnResult(
+                    assistant_messages=[{"role": "assistant", "content": "done"}],
+                    tool_calls=[],
+                    final_text="done",
+                    response_id="memory-final-turn",
+                )
+            raise AssertionError("unexpected model turn")
+
+    model_io = _LearningModelIO()
+    builder.call_context.input_messages = [
+        {
+            "role": "user",
+            "content": "I prefer that long-running tasks keep a canonical journal.",
+        }
+    ]
+    builder.call_context.max_iterations = 2
+    builder.set_model_io(model_io)
 
     MemoryV2Module(host=host, attachment_factory=factory).configure(builder)
 
@@ -189,6 +250,13 @@ def test_root_attachment_exposes_exact_normal_tools_and_persists_current_run_can
     assert "memory_upsert" not in builder.toolkit.tools
     assert "memory_promote" not in builder.toolkit.tools
     assert "memory_update_task_state" not in builder.toolkit.tools
+    for provider in ("openai", "anthropic", "gemini", "ollama"):
+        schema = builder.toolkit.tools["memory_propose"].to_provider_json(provider)
+        parameters = schema.get("parameters") or schema.get("input_schema")
+        if parameters is None:
+            parameters = schema["function"]["parameters"]
+        assert "source_refs" not in parameters["properties"]
+        assert "kind" not in parameters["properties"]
     assert len(builder.run_hooks) == 1
     assert resolver.requests == [
         _request(
@@ -199,21 +267,14 @@ def test_root_attachment_exposes_exact_normal_tools_and_persists_current_run_can
         )
     ]
 
-    proposed = builder.toolkit.tools["memory_propose"].func(
-        path="/decisions/context-policy.md",
-        description="Confirmed context policy for long-running agent tasks",
-        content="Keep the canonical execution journal.",
-        source_refs=[consolidation_factory.references.encode(source_ref)],
+    result = builder.build().run()
+    assert result.status == "completed"
+    assert len(model_io.requests) == 2
+    job = repository.find_job_by_trigger(
+        trigger_key=_completion(binding).trigger_key
     )
-    candidate_ref = consolidation_factory.references.decode(
-        proposed["candidate_ref"],
-        purpose=ReferencePurpose.CANDIDATE,
-    )
-    pending = repository.list_pending_candidates(
-        completion=_completion(binding),
-        limit=20,
-    )
-    assert pending[0].candidate_ref == candidate_ref
+    assert job is not None
+    candidate_ref = job.candidates[0].candidate_ref
     assert (
         repository.read_candidate_content(
             ref=candidate_ref,
@@ -223,12 +284,8 @@ def test_root_attachment_exposes_exact_normal_tools_and_persists_current_run_can
         == b"Keep the canonical execution journal."
     )
 
-    builder.run_hooks[0](_result())
-    assert completion_factory.results == [_result()]
-    assert (
-        repository.find_job_by_trigger(trigger_key=_completion(binding).trigger_key)
-        is not None
-    )
+    assert completion_factory.results == [result]
+    assert job.trigger == _completion(binding)
 
 
 def test_non_root_resolver_none_adds_tools_without_a_terminal_hook(

@@ -30,7 +30,7 @@ def make_io(chunks, captured=None):
         )
 
     return GeminiModelIO(
-        model="gemini-2.5-flash", api_key="test-key", client_factory=factory
+        model="gemini-3.6-flash", api_key="test-key", client_factory=factory
     )
 
 
@@ -205,7 +205,7 @@ def test_both_registries_and_provider_key_fallback(monkeypatch):
     assert get_model_adapter_class("gemini") is GeminiModelIO
     assert isinstance(
         ModelIOFactoryRegistry().create(
-            provider="gemini", model="gemini-2.5-flash", api_key=None
+            provider="gemini", model="gemini-3.6-flash", api_key=None
         ),
         GeminiModelIO,
     )
@@ -312,7 +312,7 @@ def test_kernel_tool_roundtrip_uses_real_core_read(tmp_path):
 
         return SimpleNamespace(models=SimpleNamespace(generate_content_stream=send))
 
-    io = GeminiModelIO(model="gemini-2.5-flash", api_key="test", client_factory=factory)
+    io = GeminiModelIO(model="gemini-3.6-flash", api_key="test", client_factory=factory)
     from unchain.tools.execution import ToolExecutionHarness
 
     loop = KernelLoop(model_io=io, harnesses=[ToolExecutionHarness()])

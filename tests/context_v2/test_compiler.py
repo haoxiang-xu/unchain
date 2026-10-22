@@ -13,14 +13,18 @@ from unchain.context import (
     ContextCompileRequest,
     ContextCompiler,
     ContextCompilerError,
+    PinnedTaskStateBudgetError,
     SourceMessageCursor,
     resolve_context_budget,
 )
+from unchain.context_content import render_context_content_page
 from unchain.context.compiler import (
     JournalMessageProjectionError,
     _CheckpointBinding,
+    _historical_context_content_page_marker,
 )
 from unchain.journal import ResourceRef
+from unchain.memory.toolkit.models import MemoryToolContentPage
 
 
 def _request(
@@ -66,6 +70,598 @@ def _request(
         checkpoint_ref=checkpoint_ref,
         checkpoint_request_id=preflight.checkpoint_requests[0].request_id,
     )
+
+
+def test_current_context_page_is_not_compacted_under_budget_pressure() -> None:
+    source = b"x" * 8_192
+    page = render_context_content_page(
+        MemoryToolContentPage(
+            ref=ResourceRef("artifact", "ticket-382-current-page", 1),
+            media_type="text/plain",
+            data=source,
+            offset=0,
+            total_bytes=len(source),
+            sha256=hashlib.sha256(source).hexdigest(),
+        )
+    )
+    request = _request(
+        [
+            {
+                "type": "function_call",
+                "call_id": "current-page-call",
+                "name": "context_content_read",
+                "arguments": "{}",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "current-page-call",
+                "output": json.dumps(page, ensure_ascii=False),
+            },
+        ],
+        provider="openai",
+        window=4_096,
+    )
+
+    with pytest.raises(PinnedTaskStateBudgetError, match="current context page"):
+        ContextCompiler().compile(request)
+
+
+@pytest.mark.parametrize("provider", ("openai", "anthropic", "gemini", "ollama"))
+def test_current_native_context_page_is_not_compacted_under_budget_pressure(
+    provider: str,
+) -> None:
+    request = _pending_native_tool_request(provider=provider, window=4_096)
+    source = b"x" * 8_192
+    page = render_context_content_page(
+        MemoryToolContentPage(
+            ref=ResourceRef("artifact", "ticket-382-native-current-page", 1),
+            media_type="text/plain",
+            data=source,
+            offset=0,
+            total_bytes=len(source),
+            sha256=hashlib.sha256(source).hexdigest(),
+        )
+    )
+    raw = json.dumps(page, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    events = [dict(event) for event in request.semantic_events or ()]
+    for event in events:
+        event["tool_name"] = "context_content_read"
+        if event.get("type") == "tool_result":
+            event.update(
+                result=page,
+                result_bytes=len(raw),
+                result_sha256=hashlib.sha256(raw).hexdigest(),
+                model_projection={
+                    "result": page,
+                    "metadata": {"projection_policy": "context_page"},
+                },
+            )
+    pending = [dict(item) for item in request.pending_task_inputs]
+    result_event = next(event for event in events if event["type"] == "tool_result")
+    pending[0].update(
+        content_bytes=result_event["result_bytes"],
+        content_sha256=result_event["result_sha256"],
+    )
+    request = replace(
+        request,
+        semantic_events=tuple(events),
+        pending_task_inputs=tuple(pending),
+    )
+
+    with pytest.raises(PinnedTaskStateBudgetError, match="current context page"):
+        ContextCompiler().compile(request)
+
+
+def test_historical_context_pages_compact_while_the_verified_pending_page_stays_inline() -> None:
+    source_ref = ResourceRef("artifact", "ticket-382-history-source", 1)
+    source = b"x" * 8_192
+    pages = [
+        render_context_content_page(
+            MemoryToolContentPage(
+                ref=source_ref,
+                media_type="text/plain",
+                data=source,
+                offset=index * len(source),
+                total_bytes=3 * len(source),
+                sha256=hashlib.sha256(source * 3).hexdigest(),
+            )
+        )
+        for index in range(3)
+    ]
+    events: list[dict] = []
+    for index, page in enumerate(pages, start=1):
+        call_id = f"page-{index}"
+        raw = json.dumps(page, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        events.extend(
+            [
+                {
+                    "type": "tool_call",
+                    "event_id": f"call-{index}",
+                    "store_seq": (index * 2) - 1,
+                    "call_id": call_id,
+                    "tool_name": "context_content_read",
+                    "arguments": {"ref": page["ref"], "offset": page["offset"], "limit": 8192},
+                },
+                {
+                    "type": "tool_result",
+                    "event_id": f"result-{index}",
+                    "store_seq": index * 2,
+                    "call_id": call_id,
+                    "tool_name": "context_content_read",
+                    "result": page,
+                    "full_output_ref": ResourceRef(
+                        "artifact", f"ticket-382-page-{index}", 1
+                    ).to_dict(),
+                    "result_bytes": len(raw),
+                    "result_sha256": hashlib.sha256(raw).hexdigest(),
+                },
+            ]
+        )
+    current = events[-1]
+    result = ContextCompiler().compile(
+        _request(
+            [{"role": "user", "content": "continue reading"}],
+            events=events,
+            pending_inputs=[
+                {
+                    "event_id": events[1]["event_id"],
+                    "store_seq": events[1]["store_seq"],
+                    "type": "tool_result",
+                    "preview": "older reader page",
+                    "preview_truncated": True,
+                    "content_ref": events[1]["full_output_ref"],
+                    "content_bytes": events[1]["result_bytes"],
+                    "content_sha256": events[1]["result_sha256"],
+                },
+                {
+                    "event_id": current["event_id"],
+                    "store_seq": current["store_seq"],
+                    "type": "tool_result",
+                    "preview": "current reader page",
+                    "preview_truncated": True,
+                    "content_ref": current["full_output_ref"],
+                    "content_bytes": current["result_bytes"],
+                    "content_sha256": current["result_sha256"],
+                }
+            ],
+            window=10_000,
+        )
+    )
+
+    history = _marker_payload(result.messages, "MEMORY_V2_UNTRUSTED_HISTORY")
+    exchanges = {exchange["call_id"]: exchange for exchange in history["tool_exchanges"]}
+    assert "page-1" not in exchanges
+    assert exchanges["page-2"]["result"] == {
+        "memory_v2_compacted": True,
+        "context_content": [
+            {
+                "ref": pages[1]["ref"],
+                "offset": pages[1]["offset"],
+                "page_bytes": pages[1]["page_bytes"],
+                "next_offset": pages[1]["next_offset"],
+                "eof": pages[1]["eof"],
+                "read_request": {
+                    "tool": "context_content_read",
+                    "arguments": {
+                        "ref": pages[1]["ref"],
+                        "offset": pages[1]["offset"],
+                        "limit": 8192,
+                    },
+                },
+                "next_read": pages[1]["next_read"],
+            }
+        ],
+    }
+    assert exchanges["page-3"]["result"] == pages[2]
+
+
+def test_historical_context_pages_stay_bounded_for_a_long_single_source() -> None:
+    source_ref = ResourceRef("artifact", "ticket-382-long-history-source", 1)
+    page_data = b"x" * 8_192
+    page_count = 40
+    full_source = page_data * page_count
+    events: list[dict] = []
+    pages = []
+    for index in range(page_count):
+        page = render_context_content_page(
+            MemoryToolContentPage(
+                ref=source_ref,
+                media_type="text/plain",
+                data=page_data,
+                offset=index * len(page_data),
+                total_bytes=len(full_source),
+                sha256=hashlib.sha256(full_source).hexdigest(),
+            )
+        )
+        pages.append(page)
+        call_id = f"long-page-{index}"
+        raw = json.dumps(page, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        events.extend(
+            [
+                {
+                    "type": "tool_call",
+                    "event_id": f"long-call-{index}",
+                    "store_seq": (index * 2) + 1,
+                    "call_id": call_id,
+                    "tool_name": "context_content_read",
+                    "arguments": {"ref": page["ref"], "offset": page["offset"], "limit": 8192},
+                },
+                {
+                    "type": "tool_result",
+                    "event_id": f"long-result-{index}",
+                    "store_seq": (index * 2) + 2,
+                    "call_id": call_id,
+                    "tool_name": "context_content_read",
+                    "result": page,
+                    "full_output_ref": ResourceRef("artifact", f"ticket-382-long-page-{index}", 1).to_dict(),
+                    "result_bytes": len(raw),
+                    "result_sha256": hashlib.sha256(raw).hexdigest(),
+                },
+            ]
+        )
+    current = events[-1]
+    compiled = ContextCompiler().compile(
+        _request(
+            [{"role": "user", "content": "continue reading"}],
+            events=events,
+            pending_inputs=[
+                {
+                    "event_id": current["event_id"],
+                    "store_seq": current["store_seq"],
+                    "type": "tool_result",
+                    "preview": "current reader page",
+                    "preview_truncated": True,
+                    "content_ref": current["full_output_ref"],
+                    "content_bytes": current["result_bytes"],
+                    "content_sha256": current["result_sha256"],
+                }
+            ],
+            window=16_384,
+        )
+    )
+
+    history = _marker_payload(compiled.messages, "MEMORY_V2_UNTRUSTED_HISTORY")
+    exchanges = {exchange["call_id"]: exchange for exchange in history["tool_exchanges"]}
+    assert set(exchanges) == {"long-page-38", "long-page-39"}
+    assert exchanges["long-page-38"]["result"]["memory_v2_compacted"] is True
+    assert exchanges["long-page-39"]["result"] == pages[-1]
+
+
+def test_historical_context_pages_keep_a_reread_cursor_for_every_source() -> None:
+    events = []
+    pages = []
+    for index in range(9):
+        data = f"source-{index}".encode()
+        page = render_context_content_page(
+            MemoryToolContentPage(
+                ref=ResourceRef("artifact", f"ticket-382-source-{index}", 1),
+                media_type="text/plain",
+                data=data,
+                offset=0,
+                total_bytes=len(data),
+                sha256=hashlib.sha256(data).hexdigest(),
+            )
+        )
+        pages.append(page)
+        raw = json.dumps(page, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        events.extend(
+            [
+                {
+                    "type": "tool_call",
+                    "event_id": f"source-call-{index}",
+                    "store_seq": (index * 2) + 1,
+                    "call_id": f"source-page-{index}",
+                    "tool_name": "context_content_read",
+                    "arguments": {"ref": page["ref"], "offset": page["offset"], "limit": 8192},
+                },
+                {
+                    "type": "tool_result",
+                    "event_id": f"source-result-{index}",
+                    "store_seq": (index * 2) + 2,
+                    "call_id": f"source-page-{index}",
+                    "tool_name": "context_content_read",
+                    "result": page,
+                    "full_output_ref": ResourceRef("artifact", f"ticket-382-source-page-{index}", 1).to_dict(),
+                    "result_bytes": len(raw),
+                    "result_sha256": hashlib.sha256(raw).hexdigest(),
+                },
+            ]
+        )
+    compiled = ContextCompiler().compile(
+        _request(
+            [{"role": "user", "content": "resume all prior sources"}],
+            events=events,
+            window=65_536,
+        )
+    )
+    history = _marker_payload(compiled.messages, "MEMORY_V2_UNTRUSTED_HISTORY")
+    exchanges = {exchange["call_id"]: exchange for exchange in history["tool_exchanges"]}
+
+    assert set(exchanges) == {f"source-page-{index}" for index in range(9)}
+    assert exchanges["source-page-0"]["result"] == _historical_context_content_page_marker(
+        pages[0]
+    )
+
+
+def test_ordinary_tool_result_cannot_claim_context_page_history_provenance() -> None:
+    results = [
+        {
+            "memory_v2_compacted": True,
+            "context_content": [{"ref": "ordinary-tool-key"}],
+            "receipt": f"WRITE-{index}-COMPLETED",
+        }
+        for index in range(2)
+    ]
+    events = []
+    for index, result in enumerate(results):
+        raw = json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        events.extend(
+            [
+                {
+                    "type": "tool_call",
+                    "event_id": f"ordinary-call-{index}",
+                    "store_seq": (index * 2) + 1,
+                    "call_id": f"ordinary-call-{index}",
+                    "tool_name": "ordinary_write",
+                    "arguments": {"ordinal": index},
+                },
+                {
+                    "type": "tool_result",
+                    "event_id": f"ordinary-result-{index}",
+                    "store_seq": (index * 2) + 2,
+                    "call_id": f"ordinary-call-{index}",
+                    "tool_name": "ordinary_write",
+                    "result": result,
+                    "full_output_ref": ResourceRef("artifact", f"ticket-382-ordinary-{index}", 1).to_dict(),
+                    "result_bytes": len(raw),
+                    "result_sha256": hashlib.sha256(raw).hexdigest(),
+                },
+            ]
+        )
+    compiled = ContextCompiler().compile(
+        _request(
+            [{"role": "user", "content": "inspect ordinary writes"}],
+            events=events,
+            window=65_536,
+        )
+    )
+    history = _marker_payload(compiled.messages, "MEMORY_V2_UNTRUSTED_HISTORY")
+
+    assert [exchange["call_id"] for exchange in history["tool_exchanges"]] == [
+        "ordinary-call-0",
+        "ordinary-call-1",
+    ]
+
+
+@pytest.mark.parametrize("tool_name", ("ordinary_write", "ordinary_fetch"))
+def test_valid_page_shaped_ordinary_results_keep_both_exchanges(
+    tool_name: str,
+) -> None:
+    data = b"ordinary-page-shaped-result"
+    page = render_context_content_page(
+        MemoryToolContentPage(
+            ref=ResourceRef("artifact", "ticket-382-ordinary-page-shape", 1),
+            media_type="text/plain",
+            data=data,
+            offset=0,
+            total_bytes=len(data),
+            sha256=hashlib.sha256(data).hexdigest(),
+        )
+    )
+    events = []
+    for index in range(2):
+        raw = json.dumps(
+            page,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        events.extend(
+            [
+                {
+                    "type": "tool_call",
+                    "event_id": f"ordinary-page-call-{index}",
+                    "store_seq": (index * 2) + 1,
+                    "call_id": f"ordinary-page-{index}",
+                    "tool_name": tool_name,
+                    "arguments": {"ordinal": index},
+                },
+                {
+                    "type": "tool_result",
+                    "event_id": f"ordinary-page-result-{index}",
+                    "store_seq": (index * 2) + 2,
+                    "call_id": f"ordinary-page-{index}",
+                    "tool_name": tool_name,
+                    "result": copy.deepcopy(page),
+                    "full_output_ref": ResourceRef(
+                        "artifact", f"ticket-382-ordinary-page-{index}", 1
+                    ).to_dict(),
+                    "result_bytes": len(raw),
+                    "result_sha256": hashlib.sha256(raw).hexdigest(),
+                },
+            ]
+        )
+    original = copy.deepcopy(events)
+
+    compiled = ContextCompiler().compile(
+        _request(
+            [{"role": "user", "content": "inspect ordinary page-shaped results"}],
+            events=events,
+            window=65_536,
+        )
+    )
+
+    assert events == original
+    history = _marker_payload(compiled.messages, "MEMORY_V2_UNTRUSTED_HISTORY")
+    assert [exchange["call_id"] for exchange in history["tool_exchanges"]] == [
+        "ordinary-page-0",
+        "ordinary-page-1",
+    ]
+    portable = next(iter(compiled.projections.values()))
+    assert [
+        exchange["call_id"] for exchange in portable["closed_tool_exchanges"]
+    ] == ["ordinary-page-0", "ordinary-page-1"]
+
+
+@pytest.mark.parametrize(
+    ("call_tool_name", "result_tool_name"),
+    (
+        ("context_content_read", "ordinary_fetch"),
+        ("ordinary_fetch", "context_content_read"),
+    ),
+)
+def test_page_history_requires_matching_official_tool_identity(
+    call_tool_name: str,
+    result_tool_name: str,
+) -> None:
+    data = b"mismatched-page-producer"
+    page = render_context_content_page(
+        MemoryToolContentPage(
+            ref=ResourceRef("artifact", "ticket-382-mismatched-page", 1),
+            media_type="text/plain",
+            data=data,
+            offset=0,
+            total_bytes=len(data),
+            sha256=hashlib.sha256(data).hexdigest(),
+        )
+    )
+    raw = json.dumps(
+        page,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    events = []
+    for index in range(2):
+        events.extend(
+            [
+                {
+                    "type": "tool_call",
+                    "event_id": f"mismatched-call-{index}",
+                    "store_seq": (index * 2) + 1,
+                    "call_id": f"mismatched-page-{index}",
+                    "tool_name": call_tool_name,
+                    "arguments": {"ordinal": index},
+                },
+                {
+                    "type": "tool_result",
+                    "event_id": f"mismatched-result-{index}",
+                    "store_seq": (index * 2) + 2,
+                    "call_id": f"mismatched-page-{index}",
+                    "tool_name": result_tool_name,
+                    "result": copy.deepcopy(page),
+                    "full_output_ref": ResourceRef(
+                        "artifact", f"ticket-382-mismatched-page-{index}", 1
+                    ).to_dict(),
+                    "result_bytes": len(raw),
+                    "result_sha256": hashlib.sha256(raw).hexdigest(),
+                },
+            ]
+        )
+
+    compiled = ContextCompiler().compile(
+        _request(
+            [{"role": "user", "content": "inspect mismatched page producers"}],
+            events=events,
+            window=65_536,
+        )
+    )
+    history = _marker_payload(compiled.messages, "MEMORY_V2_UNTRUSTED_HISTORY")
+
+    assert [exchange["call_id"] for exchange in history["tool_exchanges"]] == [
+        "mismatched-page-0",
+        "mismatched-page-1",
+    ]
+
+
+def test_managed_page_history_requires_context_page_policy() -> None:
+    data = b"wrong-managed-page-policy"
+    page = render_context_content_page(
+        MemoryToolContentPage(
+            ref=ResourceRef("artifact", "ticket-382-wrong-page-policy", 1),
+            media_type="text/plain",
+            data=data,
+            offset=0,
+            total_bytes=len(data),
+            sha256=hashlib.sha256(data).hexdigest(),
+        )
+    )
+    raw = json.dumps(
+        page,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    events = []
+    for index in range(2):
+        call_id = f"wrong-policy-page-{index}"
+        events.extend(
+            [
+                {
+                    "type": "tool_call",
+                    "event_id": f"wrong-policy-call-{index}",
+                    "store_seq": (index * 2) + 1,
+                    "call_id": call_id,
+                    "tool_name": "context_content_read",
+                    "arguments": {"ref": page["ref"], "offset": 0, "limit": 8192},
+                },
+                {
+                    "type": "tool_result",
+                    "event_id": f"wrong-policy-result-{index}",
+                    "store_seq": (index * 2) + 2,
+                    "call_id": call_id,
+                    "tool_name": "context_content_read",
+                    "result": copy.deepcopy(page),
+                    "model_projection": {
+                        "result": copy.deepcopy(page),
+                        "metadata": {"projection_policy": "default"},
+                    },
+                    "full_output_ref": ResourceRef(
+                        "artifact", f"ticket-382-wrong-policy-page-{index}", 1
+                    ).to_dict(),
+                    "result_bytes": len(raw),
+                    "result_sha256": hashlib.sha256(raw).hexdigest(),
+                },
+            ]
+        )
+
+    compiled = ContextCompiler().compile(
+        _request(
+            [{"role": "user", "content": "inspect managed page policies"}],
+            events=events,
+            window=65_536,
+        )
+    )
+    history = _marker_payload(compiled.messages, "MEMORY_V2_UNTRUSTED_HISTORY")
+
+    assert [exchange["call_id"] for exchange in history["tool_exchanges"]] == [
+        "wrong-policy-page-0",
+        "wrong-policy-page-1",
+    ]
+
+
+def test_compact_ref_preserves_a_valid_fragment() -> None:
+    request = _request(
+        [{"role": "user", "content": "continue"}],
+        events=[],
+        pending_inputs=[
+            {
+                "event_id": "fragment-event",
+                "store_seq": 1,
+                "type": "tool_result",
+                "content_ref": ResourceRef(
+                    "checkpoint", "ticket-382-checkpoint", 1, "event/7"
+                ).to_dict(),
+                "preview": "checkpoint event contents",
+                "preview_truncated": True,
+            }
+        ],
+    )
+
+    compiled = ContextCompiler().compile(request)
+
+    pinned = _marker_payload(compiled.messages, "MEMORY_V2_UNTRUSTED_PINNED_CONTEXT")
+    assert pinned["pending_task_inputs"][0]["content_ref"]["fragment"] == "event/7"
 
 
 def _marker_payload(messages: tuple[dict, ...], marker: str) -> dict:
@@ -757,6 +1353,83 @@ def test_cross_provider_pending_tool_result_remains_neutral() -> None:
     pending = pinned["pending_task_inputs"][0]
     assert pending["preview"] == "result preview that must not be duplicated"
     assert "delivered_as_native_current_tool_result" not in pending
+
+
+@pytest.mark.parametrize(
+    ("provider", "source_provider"),
+    (("openai", "anthropic"), ("anthropic", "openai")),
+)
+def test_cross_provider_current_context_page_batch_stays_inline(
+    provider: str,
+    source_provider: str,
+) -> None:
+    request = _pending_native_tool_request(
+        provider=provider,
+        source_provider=source_provider,
+        call_ids=("read-one", "read-two"),
+        window=20_000,
+        build_identity=True,
+    )
+    pages: dict[str, dict] = {}
+    for index, call_id in enumerate(("read-one", "read-two"), start=1):
+        data = f"ticket-382-current-page-{index}".encode()
+        pages[call_id] = render_context_content_page(
+            MemoryToolContentPage(
+                ref=ResourceRef("artifact", f"ticket-382-current-source-{index}", 1),
+                media_type="text/plain",
+                data=data,
+                offset=0,
+                total_bytes=len(data),
+                sha256=hashlib.sha256(data).hexdigest(),
+            )
+        )
+    events = [dict(event) for event in request.semantic_events or ()]
+    for event in events:
+        call_id = event["call_id"]
+        event["tool_name"] = "context_content_read"
+        if event["type"] == "tool_call":
+            event["arguments"] = {
+                "ref": pages[call_id]["ref"],
+                "offset": 0,
+                "limit": 8192,
+            }
+            continue
+        page = pages[call_id]
+        raw = json.dumps(
+            page, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode()
+        event.update(
+            result=page,
+            result_bytes=len(raw),
+            result_sha256=hashlib.sha256(raw).hexdigest(),
+            model_projection={
+                "result": page,
+                "metadata": {"projection_policy": "context_page"},
+            },
+        )
+    pending = [dict(item) for item in request.pending_task_inputs]
+    current = next(
+        event
+        for event in events
+        if event["type"] == "tool_result" and event["call_id"] == "read-two"
+    )
+    pending[0].update(
+        content_bytes=current["result_bytes"],
+        content_sha256=current["result_sha256"],
+    )
+
+    compiled = ContextCompiler().compile(
+        replace(
+            request,
+            semantic_events=tuple(events),
+            pending_task_inputs=tuple(pending),
+        )
+    )
+
+    history = _marker_payload(compiled.messages, "MEMORY_V2_UNTRUSTED_HISTORY")
+    exchanges = {exchange["call_id"]: exchange for exchange in history["tool_exchanges"]}
+    assert exchanges["read-one"]["result"] == pages["read-one"]
+    assert exchanges["read-two"]["result"] == pages["read-two"]
 
 
 def test_incomplete_parallel_iteration_never_partially_injects_native_history() -> None:

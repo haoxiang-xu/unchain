@@ -87,7 +87,56 @@ def build_run_completed_payload(state: RunState, *, status: str) -> dict[str, An
     }
 
 
+def build_provider_retry_payload(
+    wait: Any,
+    *,
+    provider: str,
+    remaining_ms: int,
+) -> dict[str, Any]:
+    """Closed payload of a ``provider_retry`` event (BC-386-4).
+
+    Status fields come only from the closed failure diagnostic, never from
+    provider text.
+    """
+
+    diagnostic = getattr(wait, "diagnostic", None)
+    return {
+        "provider": str(provider or ""),
+        "attempt_failed": int(wait.attempt_failed),
+        "next_attempt": int(wait.next_attempt),
+        "max_attempts": int(wait.max_attempts),
+        "delay_ms": int(wait.delay_ms),
+        "remaining_ms": max(0, int(remaining_ms)),
+        "http_status": diagnostic.http_status if diagnostic is not None else None,
+        "provider_status": diagnostic.provider_status if diagnostic is not None else "",
+    }
+
+
+def build_run_failure_payload(
+    *,
+    iteration: int,
+    error_code: str,
+    cancelled: bool,
+) -> dict[str, Any]:
+    """Payload of a non-success terminal.
+
+    Top-level ``code`` and ``message`` are what the V4 normalizer reads for
+    ``run_failed``. The text is fixed and local: the failing exception's own
+    message never enters a journaled event.
+    """
+
+    return {
+        "iteration": max(0, int(iteration)),
+        "status": "cancelled" if cancelled else "failed",
+        "code": error_code,
+        "message": "Run cancelled" if cancelled else "Run failed",
+        "recoverable": False,
+    }
+
+
 __all__ = [
+    "build_provider_retry_payload",
+    "build_run_failure_payload",
     "build_final_message_payload",
     "build_iteration_completed_payload",
     "build_iteration_started_payload",

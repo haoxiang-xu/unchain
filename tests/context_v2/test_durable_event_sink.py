@@ -224,6 +224,7 @@ def test_operation_hash_is_deterministic_for_equivalent_normalized_payloads() ->
         "analysis_delta",
         "hidden_chain_of_thought",
         "content_delta",
+        "provider_retry",
     ),
 )
 def test_sink_ignores_streaming_and_hidden_reasoning_before_projection(

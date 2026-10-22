@@ -544,6 +544,74 @@ def test_anthropic_prepares_system_cache_control_tools_and_beta_header() -> None
     assert envelope.verify_against_catalog(catalog) is envelope
 
 
+def test_anthropic_wire_projects_legacy_sdk_text_helper_from_a_copy() -> None:
+    toolkit, catalog = _toolkit_and_catalog("anthropic")
+    messages = [
+        {"role": "user", "content": "Find the result."},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "plan", "signature": "signed"},
+                {
+                    "type": "text",
+                    "text": "I will check the result.",
+                    "citations": None,
+                    "parsed_output": {"internal": "sdk-only"},
+                },
+                {
+                    "type": "tool_use",
+                    "id": "toolu_legacy_sdk",
+                    "name": "search",
+                    "input": {"query": "result"},
+                },
+            ],
+        },
+        {
+            "role": "user",
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": "toolu_legacy_sdk",
+                "content": "ready",
+            }],
+        },
+        {"role": "user", "content": "Continue."},
+    ]
+    original = copy.deepcopy(messages)
+
+    envelope = prepare_provider_wire(
+        ProviderWirePreparationInput(
+            attempt=ATTEMPT,
+            iteration=7,
+            catalog=catalog,
+            provider="anthropic",
+            configured_model="frontier-model",
+            transport_target_sha256="f" * 64,
+            messages=messages,
+            payload={},
+            toolkit=toolkit,
+            default_payloads={"frontier-model": {"max_tokens": 1024}},
+            model_capabilities={"frontier-model": {"supports_tools": True}},
+        )
+    )
+
+    assert messages == original
+    replayed = envelope.request_copy()["messages"][1]["content"]
+    assert replayed == [
+        {"type": "thinking", "thinking": "plan", "signature": "signed"},
+        {
+            "type": "text",
+            "text": "I will check the result.",
+            "citations": None,
+        },
+        {
+            "type": "tool_use",
+            "id": "toolu_legacy_sdk",
+            "name": "search",
+            "input": {"query": "result"},
+        },
+    ]
+
+
 def test_hyperspace_uses_anthropic_body_with_provider_model_alias() -> None:
     toolkit, catalog = _toolkit_and_catalog("hyperspace")
 

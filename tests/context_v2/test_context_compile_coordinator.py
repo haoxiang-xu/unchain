@@ -706,12 +706,14 @@ def test_checkpoint_reuse_does_not_first_compile_the_unbound_history() -> None:
         *,
         checkpoint_binding=None,
         journal_projection=None,
+        current_provider_turn=None,
     ):
         checkpoint_bindings.append(checkpoint_binding)
         return original_compile_pass(
             request,
             checkpoint_binding=checkpoint_binding,
             journal_projection=journal_projection,
+            current_provider_turn=current_provider_turn,
         )
 
     coordinator._compile_pass = record_compile_pass

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextvars
 import copy
 import uuid
 from contextlib import nullcontext
@@ -9,7 +10,9 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, Callable
 
 from ..execution import (
+    ExecutionCancelledError,
     ExecutionGuard,
+    ExecutionLeaseError,
     ExecutionLeaseNotOwnedError,
     ExecutionRuntime,
 )
@@ -45,6 +48,7 @@ from .delta import HarnessDelta
 from .harness import HarnessContext, RuntimeHarness, RuntimePhase
 from .failure import attach_kernel_run_failure
 from .lifecycle_events import (
+    build_provider_retry_payload,
     build_iteration_completed_payload,
     build_iteration_started_payload,
     build_response_received_payload,
@@ -71,6 +75,8 @@ from .run_ledger import (
 )
 from .run_limits import resolve_max_iterations_boundary
 from .run_outcomes import (
+    TERMINAL_EVENT_TYPES,
+    emit_run_failure_terminal,
     finish_awaiting_interaction_run,
     finish_awaiting_human_input_run,
     finish_completed_run,
@@ -92,6 +98,12 @@ if TYPE_CHECKING:
 
 
 _DURABLE_BARRIER_PHASES = frozenset({"suspend_persist", "finalize_persist"})
+
+
+# Per-run observation for _run_state_with_failure_bundle; see there.
+_RUN_OBSERVER: "contextvars.ContextVar[dict[str, Any] | None]" = contextvars.ContextVar(
+    "unchain_kernel_run_observer", default=None
+)
 
 
 class KernelLoop:
@@ -616,6 +628,13 @@ class KernelLoop:
                     provider_attempt_started(attempt)
 
                 bind_atomic_run_receipt(before_attempt)
+                before_attempt.retry_wait = self._provider_retry_wait(
+                    callback=callback,
+                    run_id=run_id,
+                    iteration=request.iteration,
+                    provider=str(state.provider_state.provider or ""),
+                    execution_guard=execution_guard,
+                )
 
                 turn = final_boundary.fetch_prepared(
                     prepare_context,
@@ -1005,6 +1024,12 @@ class KernelLoop:
         iteration: int,
         **extra: Any,
     ) -> None:
+        observer = _RUN_OBSERVER.get()
+        if observer is not None:
+            if event_type == "run_started" and not observer["run_id"]:
+                observer["run_id"] = str(run_id or "")
+            elif event_type in TERMINAL_EVENT_TYPES and run_id == observer["run_id"]:
+                observer["terminal"] = True
         if callback is None:
             return
         event = {
@@ -1041,6 +1066,49 @@ class KernelLoop:
             return response
 
         return guarded_callback
+
+    def _provider_retry_wait(
+        self,
+        *,
+        callback: Any,
+        run_id: str,
+        iteration: int,
+        provider: str,
+        execution_guard: ExecutionGuard | None,
+    ) -> Callable[[Any, Callable[[float], None]], None]:
+        """Report a retry wait and keep it interruptible.
+
+        One ``provider_retry`` event starts the wait and one follows every
+        second with the time left. The host callback raises once the turn was
+        stopped, which ends the wait before the next try is sent.
+        """
+
+        def retry_wait(wait: Any, sleep: Callable[[float], None]) -> None:
+            remaining_ms = max(0, int(wait.delay_ms))
+
+            def report() -> None:
+                self.emit_event(
+                    callback,
+                    "provider_retry",
+                    run_id,
+                    iteration=iteration,
+                    **build_provider_retry_payload(
+                        wait,
+                        provider=provider,
+                        remaining_ms=remaining_ms,
+                    ),
+                )
+
+            report()
+            while remaining_ms > 0:
+                step_ms = min(1000, remaining_ms)
+                sleep(step_ms / 1000.0)
+                remaining_ms -= step_ms
+                if execution_guard is not None:
+                    execution_guard.assert_active()
+                report()
+
+        return retry_wait
 
     @staticmethod
     def _guard_terminal_emitter(
@@ -1763,6 +1831,11 @@ class KernelLoop:
         state: RunState,
         **kwargs: Any,
     ) -> KernelRunResult:
+        # Remember what this run emitted: its attempt id, and whether it already
+        # attempted a terminal (then a failure must not add a second one). The
+        # callback itself is never wrapped: the context runtime identifies it.
+        observed: dict[str, Any] = {"run_id": "", "terminal": False}
+        observer_token = _RUN_OBSERVER.set(observed)
         try:
             return self._run_state(state, **kwargs)
         except Exception as exc:
@@ -1848,7 +1921,48 @@ class KernelLoop:
                     error_code=error_code,
                     run_bundle=failed_bundle,
                 )
+                terminal_run_id = observed["run_id"] or str(
+                    ledger.identity.run_id or ""
+                )
+                # Losing the lease means another owner may be running this
+                # attempt; a terminal written here would become a second one
+                # and quarantine the chat. Only a cancellation is terminal.
+                lost_ownership = isinstance(
+                    exc, ExecutionLeaseError
+                ) and not isinstance(exc, ExecutionCancelledError)
+                from ..interaction import DurableInteractionSettlementPending
+
+                settlement_pending = (
+                    isinstance(exc, DurableInteractionSettlementPending)
+                    and exc.execution_id == ledger.identity.execution_id
+                    and exc.attempt_id == terminal_run_id
+                )
+                if (
+                    kwargs.get("callback") is not None
+                    and terminal_run_id
+                    and not observed["terminal"]
+                    and not lost_ownership
+                    and not settlement_pending
+                ):
+                    try:
+                        emit_run_failure_terminal(
+                            callback=kwargs["callback"],
+                            run_id=terminal_run_id,
+                            iteration=failed_iteration,
+                            error_code=error_code,
+                            # The host cancels with a plain error that carries
+                            # the same code rather than ExecutionCancelledError.
+                            cancelled=isinstance(exc, ExecutionCancelledError)
+                            or error_code == "execution_cancelled",
+                            emit_event=self.emit_event,
+                        )
+                    except Exception:
+                        # The terminal is best effort here: the run's own error
+                        # is the one that must reach the caller.
+                        pass
             raise
+        finally:
+            _RUN_OBSERVER.reset(observer_token)
 
     def run(
         self,

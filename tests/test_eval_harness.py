@@ -66,7 +66,7 @@ def test_filter_model_specs_uses_current_provider_and_auth_policy():
         [
             {"provider": "ollama", "model": "qwen3", "label": "local"},
             {"provider": "unsupported-provider", "model": "unknown", "label": "unsupported"},
-            {"provider": "gemini", "model": "gemini-2.5-flash", "label": "gemini"},
+            {"provider": "gemini", "model": "gemini-3.6-flash", "label": "gemini"},
             {"provider": "hyperspace", "model": "hyperspace--claude", "label": "hyperspace"},
         ],
         env={},

@@ -39,6 +39,22 @@ class InteractionError(RuntimeError):
     code = "interaction_error"
 
 
+class DurableInteractionSettlementPending(InteractionError):
+    """An exact interaction must finish durable settlement before its terminal.
+
+    Hosts raise this only when an interrupted callback cannot yet project its
+    canonical resolution. This is not an ownership-loss signal.
+    """
+
+    code = "durable_interaction_settlement_pending"
+
+    def __init__(self, *, execution_id: str, attempt_id: str, interaction_id: str):
+        self.execution_id = _required_text(execution_id, field_name="execution_id")
+        self.attempt_id = _required_text(attempt_id, field_name="attempt_id")
+        self.interaction_id = _required_text(interaction_id, field_name="interaction_id")
+        super().__init__("Durable interaction settlement is pending")
+
+
 class InteractionIntegrityError(InteractionError):
     """Raised when persisted interaction data is malformed or tampered with."""
 
@@ -868,6 +884,7 @@ def mark_interaction_applied(
 
 
 __all__ = [
+    "DurableInteractionSettlementPending",
     "DurableInteractionError",
     "INTERACTION_JOURNAL_KEY",
     "INTERACTION_JOURNAL_SCHEMA_VERSION",
