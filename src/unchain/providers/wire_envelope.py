@@ -17,7 +17,6 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, ClassVar
 
-from unchain.context.tool_catalog import ToolCatalogEnvelope
 from unchain.journal.models import (
     AttemptRef,
     ModelValidationError,
@@ -1030,3 +1029,9 @@ __all__ = [
     "ProviderWireEnvelope",
     "ProviderWireRoute",
 ]
+
+
+# The context facade imports these wire contracts while it initializes.
+# Define them first, then bind the catalog type for runtime validation and
+# annotation introspection without exposing partially defined contracts.
+from unchain.context.tool_catalog import ToolCatalogEnvelope

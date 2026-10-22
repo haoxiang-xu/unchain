@@ -128,3 +128,45 @@ def test_provider_and_context_imports_work_in_either_order(first, second, revers
             module = importlib.import_module(module_name)
             assert module.__spec__ is not None
     """)
+
+
+@pytest.mark.parametrize("module_name,export_name", [
+    ("unchain.providers.durable_turn_runtime", "DurableProviderTurnMode"),
+    ("unchain.providers.wire_envelope", "ProviderWireEnvelope"),
+    ("unchain.journal.provider_wire", "RecoveredProviderWireAuthority"),
+    ("unchain.journal.tool_catalog_persistence", "persist_tool_catalog_snapshot"),
+])
+def test_provider_wire_public_types_import_without_context_warmup(module_name, export_name):
+    _run_in_fresh_python(f"""
+        import sys
+
+        assert "unchain.context" not in sys.modules
+        from {module_name} import {export_name}
+
+        assert {export_name}.__module__ == {module_name!r}
+    """)
+
+
+def test_provider_wire_runtime_annotations_resolve_to_public_contracts():
+    _run_in_fresh_python("""
+        from typing import get_type_hints
+
+        from unchain.context.tool_catalog import ToolCatalogEnvelope
+        from unchain.journal.provider_wire import (
+            RecoveredProviderWireAuthority,
+            persist_provider_wire_snapshot,
+            recover_provider_wire_authority,
+        )
+        from unchain.providers.durable_turn_runtime import DurableProviderTurnRuntime
+        from unchain.providers.wire_envelope import ProviderWireEnvelope
+
+        for target in (
+            ProviderWireEnvelope.verify_against_catalog,
+            persist_provider_wire_snapshot,
+            recover_provider_wire_authority,
+            RecoveredProviderWireAuthority,
+        ):
+            assert get_type_hints(target)["catalog"] is ToolCatalogEnvelope
+        assert get_type_hints(RecoveredProviderWireAuthority)["envelope"] is ProviderWireEnvelope
+        assert get_type_hints(DurableProviderTurnRuntime.execute)["authority"] is RecoveredProviderWireAuthority
+    """)
