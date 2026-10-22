@@ -31,15 +31,6 @@ from unchain.journal.tool_catalog_persistence import (
     persist_tool_catalog_snapshot,
 )
 from unchain.providers.base import ModelTurnRequest
-from unchain.providers.prepared_request_factory import (
-    resolve_prepared_provider_request_payload,
-)
-from unchain.providers.prepared_turn import (
-    _build_provider_turn_draft,
-    _issue_persisted_tool_catalog_authority,
-    _issue_prepared_provider_turn,
-)
-from unchain.providers.wire_preparer import prepare_provider_wire
 from unchain.tools.handler_registry import DurableToolHandlerRegistry
 from unchain.tools.toolkit import Toolkit
 
@@ -188,6 +179,13 @@ class ProviderTurnAuthorityService:
         model_io: object,
         request: ModelTurnRequest,
     ):
+        # These builders import context contracts themselves. Keep that
+        # dependency out of context package initialization.
+        from unchain.providers.prepared_request_factory import (
+            resolve_prepared_provider_request_payload,
+        )
+        from unchain.providers.prepared_turn import _build_provider_turn_draft
+
         request_payload = resolve_prepared_provider_request_payload(
             model_io=model_io,
             request=request,
@@ -271,6 +269,8 @@ class ProviderTurnAuthorityService:
         return catalog, authority
 
     def _persist_catalog(self, draft):
+        from unchain.providers.prepared_turn import _issue_persisted_tool_catalog_authority
+
         detail = {"catalog_sha256": draft.catalog.catalog_sha256}
         snapshot = persist_tool_catalog_snapshot(
             journal=self._store,
@@ -371,6 +371,9 @@ class ProviderTurnAuthorityService:
         return existing
 
     def _prepare_envelope(self, *, model_io: object, request: ModelTurnRequest):
+        from unchain.providers.prepared_turn import _issue_prepared_provider_turn
+        from unchain.providers.wire_preparer import prepare_provider_wire
+
         self._validate_request(model_io=model_io, request=request)
         draft = self._build_draft(model_io=model_io, request=request)
         catalog_authority = self._load_catalog(iteration=draft.iteration)
@@ -420,6 +423,9 @@ class ProviderTurnAuthorityService:
         model_io: object,
         request: ModelTurnRequest,
     ) -> RecoveredProviderWireAuthority:
+        from unchain.providers.prepared_turn import _issue_prepared_provider_turn
+        from unchain.providers.wire_preparer import prepare_provider_wire
+
         self._validate_request(model_io=model_io, request=request)
         draft = self._build_draft(model_io=model_io, request=request)
         catalog, catalog_authority = self._catalog_authority(draft)
