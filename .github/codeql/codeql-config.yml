@@ -1,0 +1,23 @@
+name: Unchain CodeQL configuration
+
+# Match PuPu's security and code-quality query suite.
+queries:
+  - uses: security-and-quality
+
+# Exclude documentation, tests, fixtures, and generated outputs so the alerts
+# focus on maintained product code rather than intentional test examples.
+paths-ignore:
+  - docs/**
+  - public/**
+  - e2e/**
+  - "**/*.test.js"
+  - "**/*.test.cjs"
+  - "**/*.test.mjs"
+  - "**/tests/**"
+  - "**/__tests__/**"
+  - "**/fixtures/**"
+  - "**/__fixtures__/**"
+  - node_modules/**
+  - build/**
+  - dist/**
+  - coverage/**
