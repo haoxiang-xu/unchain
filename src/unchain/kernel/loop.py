@@ -755,7 +755,7 @@ class KernelLoop:
                     )
                 if execution_guard is not None:
                     execution_guard.assert_active()
-        except BaseException:
+        except BaseException as error:
             if request_digest is not None:
                 # A durable result CAS may have committed its accounting fact
                 # before a later lease-finalization failure surfaced. Refresh
@@ -784,6 +784,26 @@ class KernelLoop:
                             str(state.provider_state.provider or "unknown")
                         ),
                         status=outcome,
+                    )
+            from ..providers.durable_turn_runtime import DurableProviderTurnTerminalError
+
+            if (isinstance(error, DurableProviderTurnTerminalError)
+                    and error.classification == "non_retryable"
+                    and error.diagnostic is not None
+                    and error.diagnostic.input_context_rejected):
+                previous_ack = copy.deepcopy(state.metadata.get("provider_context_recovery_ack"))
+                self.dispatch_phase(state, phase="on_context_limit", event=phase_event)
+                ack = state.metadata.get("provider_context_recovery_ack")
+                if (isinstance(ack, dict) and ack != previous_ack
+                        and ack.get("iteration") == current_iteration and ack.get("event_id")):
+                    return self.step_once(
+                        state, payload=payload, toolkit=runtime_toolkit, callback=callback,
+                        verbose=verbose, run_id=run_id, emit_stream=emit_stream,
+                        response_format=response_format, openai_text_format=openai_text_format,
+                        on_tool_confirm=on_tool_confirm, on_human_input=on_human_input,
+                        max_iterations=max_iterations, tool_runtime_plugins=tool_runtime_plugins,
+                        tool_runtime_config=tool_runtime_config, execution_guard=execution_guard,
+                        run_bundle_purpose=run_bundle_purpose,
                     )
             raise
         completed_at = (

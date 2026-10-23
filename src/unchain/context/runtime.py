@@ -1027,6 +1027,16 @@ class ContextRuntime:
         ):
             raise ContextCheckpointBindingForbiddenError()
         state = getattr(context, "state", None)
+        recovery = None
+        if self.execution_factory is not None and self.provider_turns_enabled:
+            from .provider_recovery import load_provider_context_recovery, apply_provider_context_recovery
+
+            recovery = load_provider_context_recovery(
+                journal=bundle.journal, attempt=bundle.attempt, iteration=context.state.iteration,
+                provider=request.provider, model=request.model,
+            )
+            if recovery is not None:
+                request = apply_provider_context_recovery(request, recovery)
         ledger = getattr(state, "run_ledger", None)
         capture_metrics = getattr(ledger, "identity", None) is not None
         subject_id = "context-request:unavailable"
@@ -1048,6 +1058,10 @@ class ContextRuntime:
                 raise ContextBuildEnvelopeRequiredError(result)
             if result.envelope.status is ContextBuildStatus.UNAVAILABLE:
                 raise ContextBuildUnavailableError(result)
+            if recovery is not None:
+                from .provider_recovery import verify_provider_context_reduction
+
+                verify_provider_context_reduction(result, recovery)
         except Exception as exc:
             error_code = str(getattr(exc, "code", "context_build_failed") or "")
             if re.fullmatch(r"[a-z][a-z0-9_.-]{0,127}", error_code) is None:
@@ -1090,6 +1104,25 @@ class ContextRuntime:
                     evidence_refs=evidence,
                 )
         return result
+
+    def record_provider_context_recovery(self, context: HarnessContext):
+        """Authorize bounded recovery only for this runtime's durable owner."""
+        if self.execution_factory is None or not self.provider_turns_enabled:
+            return None
+        if context.phase != "on_context_limit":
+            raise ContextExecutionBundleError("provider context recovery requires the rejection phase")
+        from .provider_recovery import prepare_provider_context_recovery, ContextLimitRecoveryError
+
+        bundle = self._bundle_for_context(context)
+        build = context.state.metadata.get("context_v2", {}).get("last_build")
+        if not isinstance(build, Mapping):
+            raise ContextLimitRecoveryError("Context recovery has no owned compiled input")
+        return prepare_provider_context_recovery(
+            journal=bundle.journal, attempt=bundle.attempt, iteration=context.state.iteration,
+            provider=str(context.state.provider_state.provider or ""),
+            model=str(context.state.provider_state.model or ""),
+            envelope=build, messages=context.latest_messages(),
+        )
 
     def prepare_subagent_completion_sink(
         self,
@@ -2865,6 +2898,13 @@ class ContextRuntime:
             raise ContextExecutionBundleError(
                 "provider turn boundary request changed after preparation"
             )
+        from .provider_recovery import load_provider_context_recovery, recovery_occurrence_sha256
+
+        bundle, _service, _model_io = self._provider_turn_host(context)
+        recovery = load_provider_context_recovery(
+            journal=bundle.journal, attempt=bundle.attempt, iteration=context.iteration,
+            provider=context.provider, model=context.model,
+        )
         return service.fetch_prepared(
             model_io=model_io,
             request=request,
@@ -2882,6 +2922,7 @@ class ContextRuntime:
                 None,
             ),
             retry_wait=getattr(before_attempt, "retry_wait", None),
+            occurrence_sha256=recovery_occurrence_sha256(recovery) if recovery is not None else None,
         )
 
     def _validate_provider_turn_boundary(

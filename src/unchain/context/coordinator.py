@@ -1381,6 +1381,24 @@ class ContextCompileCoordinator:
                 artifacts=self._artifacts,
                 provider_turn_result_reader=self._provider_turn_result_reader,
             )
+            from .provider_recovery import provider_recovery_build_trigger
+
+            trigger = provider_recovery_build_trigger(request, snapshot, journal_view.input_receipt)
+            if trigger != journal_view.input_receipt:
+                # Recovery rebuilds are immutable projections at their durable
+                # authorization cursor. Later wire/result receipts must not
+                # change this build's operation payload during cold replay.
+                from unchain.journal.snapshot import capture_journal_snapshot
+
+                snapshot = capture_journal_snapshot(
+                    execution_id=snapshot.execution_id,
+                    events=tuple(event for event in snapshot.events if event.store_seq <= trigger.store_seq),
+                )
+                prepared_request, journal_view = _prepare_journal_view(
+                    request=request, snapshot=snapshot, artifacts=self._artifacts,
+                    provider_turn_result_reader=self._provider_turn_result_reader,
+                )
+                journal_view = replace(journal_view, input_receipt=trigger)
             self._verify_input_trigger_claim(request, journal_view.input_receipt)
         except Exception as error:
             self._mark_partial(request, error)

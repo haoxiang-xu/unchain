@@ -31,7 +31,7 @@ class ContextCompilerHarness(BaseRuntimeHarness):
     """The sole model-context mutator for an explicitly owned V2 run."""
 
     name: str = "context_v2_compiler"
-    phases: tuple[RuntimePhase, ...] = ("before_model",)
+    phases: tuple[RuntimePhase, ...] = ("before_model", "on_context_limit")
     order: int = 900
     runtime: ContextRuntime = field(repr=False, kw_only=True)
 
@@ -40,6 +40,16 @@ class ContextCompilerHarness(BaseRuntimeHarness):
         return self.runtime.owner_id
 
     def build_delta(self, context: HarnessContext) -> HarnessDelta:
+        if context.phase == "on_context_limit":
+            event = self.runtime.record_provider_context_recovery(context)
+            return HarnessDelta(
+                created_by=f"context.{self.name}",
+                base_version_id=context.latest_version_id,
+                state_updates={"provider_context_recovery_ack": (
+                    {"iteration": context.state.iteration, "event_id": event.event_id}
+                    if event is not None else None
+                )},
+            )
         result = self.runtime.compile_context(context)
         result_data = result.to_dict()
         messages = result_data["messages"]
