@@ -388,8 +388,9 @@ def test_context_reads_require_disclosure_and_pass_only_structured_refs_to_capab
         offset=2,
         limit=7,
     )
-    assert page["schema_version"] == "unchain.context_content_page.v1"
-    assert page["trust"] == "UNTRUSTED_DATA"
+    assert page["schema_version"] == "unchain.context_content_page.v2"
+    assert page["evidence_kind"] == "tool_observation"
+    assert "trust" not in page
     assert page["content"] == {
         "encoding": "utf-8",
         "text": "llo con",
@@ -437,8 +438,9 @@ def test_context_reads_require_disclosure_and_pass_only_structured_refs_to_capab
         checkpoint_ref="pupu://context/checkpoint/checkpoint-1",
         limit=1,
     )
-    assert checkpoint_page["schema_version"] == "context_checkpoint_events.v1"
-    assert checkpoint_page["trust"] == "UNTRUSTED_DATA"
+    assert checkpoint_page["schema_version"] == "context_checkpoint_events.v2"
+    assert checkpoint_page["evidence_kind"] == "historical_record"
+    assert "trust" not in checkpoint_page
     assert "owner_chat_id" not in checkpoint_page
     assert checkpoint_page["checkpoint_ref"] == "pupu://context/checkpoint/checkpoint-1"
 

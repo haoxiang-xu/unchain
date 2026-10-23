@@ -17,6 +17,7 @@ from unchain.journal import EventCursor, EventRange, ResourceRef
 from unchain.context_content import (
     ContextContentProtocolError,
     canonical_context_output_read_handle,
+    context_content_read_handle,
     project_context_output_for_model,
     validate_context_content_page,
     validate_context_output_descriptor,
@@ -543,11 +544,22 @@ def _preview(value: Any, limit: int = _PREVIEW_CHARS) -> Any:
     }
 
 
-def _bounded_context_output_preview(value: Any) -> Any:
+def _bounded_context_output_preview(
+    value: Any, *, source_ref: ResourceRef | None = None,
+) -> Any:
     """Reduce tool content while retaining one strict, copyable read handle."""
 
     if not isinstance(value, Mapping):
         return _preview(value)
+    if source_ref is not None and value.get("inline") is True:
+        # A complete managed result has no read_request. Verify its source,
+        # byte count and digest before preserving it in a later request too.
+        projected = project_context_output_for_model(value, source_ref=source_ref)
+        if "read_request" not in projected:
+            if len(_canonical_bytes(projected)) <= _NATIVE_TOOL_RESULT_INLINE_LIMIT:
+                return _plain(projected)
+            projected.update(context_content_read_handle(source_ref))
+        value = projected
     try:
         handle = canonical_context_output_read_handle(value)
     except ContextContentProtocolError:
@@ -613,15 +625,18 @@ def _split_turns(messages: Sequence[Mapping[str, Any]]) -> list[list[dict[str, A
 def _untrusted_message(marker: str, payload: Mapping[str, Any]) -> dict[str, Any]:
     from .untrusted import untrusted_context_message
 
-    untrusted = {**_plain(payload), "trust": "UNTRUSTED_DATA"}
-    return untrusted_context_message(marker, untrusted)
+    return untrusted_context_message(marker, _plain(payload))
 
 
 def _is_pinned_message(message: Mapping[str, Any]) -> bool:
     return message.get(
         "role"
-    ) in {"user", "assistant"} and "[MEMORY_V2_UNTRUSTED_PINNED_CONTEXT]" in str(
-        message.get("content") or ""
+    ) in {"user", "assistant"} and any(
+        marker in str(message.get("content") or "")
+        for marker in (
+            "[MEMORY_V2_UNTRUSTED_PINNED_CONTEXT]",
+            "[MEMORY_V2_EVIDENCE_PINNED_CONTEXT]",
+        )
     )
 
 
@@ -2288,7 +2303,7 @@ def _bounded_pending_interaction(event: Mapping[str, Any]) -> dict[str, Any]:
         content_sha256 = declared_sha256
     durable_refs = _declared_refs(plain_event)
     inline = {
-        "trust": "UNTRUSTED_DATA",
+        "evidence_kind": "historical_record",
         "request": plain_event,
         "content_bytes": content_bytes,
         "content_sha256": content_sha256,
@@ -2304,7 +2319,7 @@ def _bounded_pending_interaction(event: Mapping[str, Any]) -> dict[str, Any]:
     request = plain_event.get("interaction_request")
     request = request if isinstance(request, dict) else plain_event
     return {
-        "trust": "UNTRUSTED_DATA",
+        "evidence_kind": "historical_record",
         "event_type": str(plain_event.get("type") or "")[:64],
         "interaction_id": str(
             request.get("interaction_id") or plain_event.get("interaction_id") or ""
@@ -3143,7 +3158,13 @@ def _neutral_context(
                 else (
                     _historical_context_content_page_marker(model_result)
                     if is_context_page
-                    else _bounded_context_output_preview(model_result)
+                    else _bounded_context_output_preview(
+                        model_result,
+                        source_ref=(
+                            _resource_ref(result["durable_full_output_ref"])
+                            if result["has_model_projection"] else None
+                        ),
+                    )
                 )
             ),
         }

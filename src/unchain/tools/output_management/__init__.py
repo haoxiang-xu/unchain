@@ -101,8 +101,10 @@ def _paged_context_projection(
         return None
     if ref.kind != "artifact" or ref.fragment:
         return None
-    head = text[:preview_chars]
-    tail = text[-preview_chars:] if preview_chars else ""
+    head_chars = min(preview_chars, (len(text) + 1) // 2)
+    tail_chars = min(preview_chars, len(text) - head_chars)
+    head = text[:head_chars]
+    tail = text[-tail_chars:] if tail_chars else ""
     omitted_bytes = len(result_bytes) - len(head.encode("utf-8")) - len(
         tail.encode("utf-8")
     )
@@ -125,6 +127,7 @@ def _context_page_projection(result_bytes: bytes) -> dict[str, Any]:
         from unchain.context_content import (
             ContextContentProtocolError,
             canonical_context_content_result_bytes,
+            project_context_content_result_for_model,
             render_context_content_error,
         )
 
@@ -139,6 +142,8 @@ def _context_page_projection(result_bytes: bytes) -> dict[str, Any]:
             render_context_content_error(
                 {
                     "CONTEXT_READ_NO_PROGRESS": "CONTEXT_READ_NO_PROGRESS",
+                    "context content UTF-8 read cannot make progress; use a larger limit": "CONTEXT_READ_NO_PROGRESS",
+                    "context content page cannot make progress within its budget": "CONTEXT_READ_NO_PROGRESS",
                     "limit must be an integer": "CONTEXT_READ_LIMIT_INVALID_USE_INTEGER_1_TO_8192",
                     "limit must be between 1 and 8192": "CONTEXT_READ_LIMIT_INVALID_USE_INTEGER_1_TO_8192",
                     "offset must be an integer": "CONTEXT_READ_OFFSET_INVALID_USE_INTEGER_0_TO_33554432",
@@ -161,7 +166,7 @@ def _context_page_projection(result_bytes: bytes) -> dict[str, Any]:
         if is_reader_error:
             return payload
         raise ToolOutputManagementError("context content page result is not canonical")
-    return payload
+    return project_context_content_result_for_model(payload)
 
 
 def _compacted_context_content(value: Any) -> list[dict[str, Any]]:
@@ -687,7 +692,9 @@ class ToolOutputManager:
             )
         if (
             policy.name != CONTEXT_PAGE_POLICY
-            and payload.get("schema_version") != "unchain.tool_output.paged.v1"
+            and payload.get("schema_version") not in {
+                "unchain.tool_output.paged.v1", "unchain.tool_output.paged.v2"
+            }
         ):
             payload.update(
                 {
@@ -732,16 +739,19 @@ class ToolOutputManager:
                 "projection": "artifact_only",
                 "note": "Full tool output is available in durable artifact",
             }
-        elif policy.name == "head_tail":
-            payload = {
-                "projection": "head_tail",
-                "preview": text[: policy.preview_chars],
-                "tail_preview": text[-policy.preview_chars :] if policy.preview_chars else "",
-                "content_chars": len(text),
-            }
         else:
-            payload = {"projection": "default"}
-            if len(result_bytes) > policy.inline_chars:
+            complete = {
+                "projection": policy.name,
+                "inline": True,
+                "preview": text,
+            }
+            complete_size = len(canonical_content_bytes({
+                **complete,
+                "full_output_ref": full_output_ref,
+                "content_bytes": len(result_bytes),
+                "content_sha256": digest,
+            }))
+            if complete_size > policy.inline_chars:
                 paged = _paged_context_projection(
                     result_bytes,
                     full_output_ref=full_output_ref,
@@ -750,11 +760,21 @@ class ToolOutputManager:
                 )
                 if paged is not None:
                     return paged
-                payload.update(
-                    {"inline": False, "preview": text[: policy.preview_chars]}
-                )
+                head_chars = min(policy.preview_chars, (len(text) + 1) // 2)
+                tail_chars = min(policy.preview_chars, len(text) - head_chars)
+                payload = {
+                    "projection": policy.name,
+                    "inline": False,
+                    "preview": text[:head_chars],
+                    "note": "Partial preview, not complete content. Retrieve only missing evidence needed for the task from the durable source.",
+                }
+                if policy.name == "head_tail":
+                    payload.update({
+                        "tail_preview": text[-tail_chars:] if tail_chars else "",
+                        "content_chars": len(text),
+                    })
             else:
-                payload.update({"inline": True, "preview": text})
+                payload = complete
         return payload
 
     @staticmethod

@@ -136,7 +136,7 @@ def test_reference_envelope_is_untrusted_budgeted_and_before_current_user():
     ]
     reference = decorated.source_messages[1]
     current = decorated.source_messages[2]
-    assert "MEMORY_V2_UNTRUSTED_LONG_TERM_REFERENCES" in reference["content"]
+    assert "MEMORY_V2_EVIDENCE_LONG_TERM_REFERENCES" in reference["content"]
     assert "ends with this message" in reference["content"]
     payload = json.loads(reference["content"].split("\n", 2)[2])
     assert payload["trusted"] is False
@@ -310,7 +310,7 @@ def test_red_semantic_projection_must_keep_recall_before_current_user():
     reference_index = next(
         index
         for index, message in enumerate(compiled.messages)
-        if "MEMORY_V2_UNTRUSTED_LONG_TERM_REFERENCES"
+        if "MEMORY_V2_EVIDENCE_LONG_TERM_REFERENCES"
         in str(message.get("content") or "")
     )
     current_user_index = next(

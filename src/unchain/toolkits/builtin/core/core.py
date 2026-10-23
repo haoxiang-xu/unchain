@@ -51,10 +51,33 @@ class CoreToolkit(BuiltinToolkit):
         return {"error": "ask_user_question is a reserved runtime tool and cannot be executed directly"}
 
     def _register_tools(self) -> None:
+        self.prompt_sections = (*self.prompt_sections, (
+            "Read strategy: identify the question and locate relevant files or text "
+            "with the available search tools before reading broad ranges. Reuse "
+            "relevant results still present in the current context. A head/tail "
+            "preview is not complete content. Source-file offsets count lines; "
+            "artifact-reader offsets count bytes. Follow a returned read_request "
+            "or next_read only when needed content is missing; do not restart "
+            "at offset zero merely because a result is historical. EOF means "
+            "the page reached the source end, not that earlier bytes were read. "
+            "Read the full source when the task or edit-safety checks require it; "
+            "reread when the source changed, content is unavailable, or fresh "
+            "verification is necessary."
+        ))
         self.register(build_ask_user_question_tool())
         self.register(
             self.read,
-            description="Read a UTF-8 text file by absolute path with line-numbered output and optional line slicing.",
+            description=(
+                "Read a UTF-8 file by absolute path. offset is a 0-based source-line "
+                "offset (default 0); limit is a line count (omitted reads through the end). "
+                "First identify the relevant content, then request the needed range. "
+                "A head/tail preview is incomplete, not a full-file read; use its "
+                "read_request with context_content_read when returned and available, "
+                "then follow next_read for missing content. Otherwise narrow the file "
+                "read. Artifact byte offsets are not source-line offsets. "
+                "Reuse relevant content already in the current context; reread when it "
+                "changed, is no longer available, or current-state verification is needed."
+            ),
             history_arguments_optimizer=self._compact_read_args,
             history_result_optimizer=self._compact_read_result,
             output_policy="head_tail",

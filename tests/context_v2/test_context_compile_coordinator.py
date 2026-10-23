@@ -16,8 +16,12 @@ from unchain.context import (
     ContextRuntime,
     PreparedCheckpoint,
     SourceMessageCursor,
+    build_checkpoint_request,
+    estimate_context_tokens,
+    project_checkpoint_message,
     resolve_context_budget,
 )
+from unchain.context.untrusted import untrusted_context_message
 from unchain.context.coordinator import (
     ContextCompileCoordinator,
     ContextCompileCoordinatorError,
@@ -77,6 +81,30 @@ def _request(*, pressured: bool) -> ContextCompileRequest:
         generation_id="generation-1",
         attempt_id="attempt-1",
     )
+
+
+def _first_checkpoint_candidate_tokens(request, *, history=(), prepared=False):
+    """Price the fixture's first prefix without invoking coordinator selection.
+
+    Repository IDs have a fixed prefix and a 32-character digest. The digest
+    values affect identity, not this synthetic ASCII fixture's token estimate.
+    Include the real evidence guidance rather than assuming its old byte cost.
+    """
+    checkpoint = build_checkpoint_request(
+        source_event_ids=request.source_event_ids[:2],
+        source_event_store_seqs=request.source_event_store_seqs[:2],
+        source_messages=request.source_messages[:2],
+    )
+    projection = project_checkpoint_message(
+        checkpoint_ref=ResourceRef(
+            "checkpoint", ("prepared-" if prepared else "checkpoint-") + "0" * 32, 1,
+        ),
+        request=checkpoint,
+        omitted_complete_turns=1,
+    )
+    return estimate_context_tokens(
+        (projection, *history, *request.source_messages[2:])
+    ).total_tokens
 
 
 class SnapshotJournal(BoundExecutionJournal):
@@ -454,8 +482,8 @@ def test_pressure_persists_exact_checkpoint_then_recompiles_and_records_build() 
 @pytest.mark.parametrize(
     ("retained_chars", "expected_omitted_indexes"),
     (
-        (19_000, (0, 1)),
-        (19_250, (0, 1, 2, 3)),
+        (18_596, (0, 1)),
+        (18_600, (0, 1, 2, 3)),
     ),
 )
 def test_checkpoint_planning_prices_projection_before_preparing_boundary_prefix(
@@ -475,6 +503,11 @@ def test_checkpoint_planning_prices_projection_before_preparing_boundary_prefix(
         source_event_store_seqs=tuple(range(1, 6)),
     )
     checkpoints = RecordingCheckpointRepository()
+    # The evidence wrapper is part of the price: these candidates cost exactly
+    # the unchanged 5,068-token budget and one token more, respectively.
+    first_candidate_tokens = _first_checkpoint_candidate_tokens(request)
+    expected_overflow = int(expected_omitted_indexes == (0, 1, 2, 3))
+    assert first_candidate_tokens == request.budget.pressure_threshold_tokens + expected_overflow
 
     result = _coordinator(request=request, checkpoints=checkpoints).compile(request)
 
@@ -502,10 +535,14 @@ def test_checkpoint_planning_accepts_retained_repository_without_preview(
         source_messages=(
             {"role": "user", "content": "x" * 30_000},
             {"role": "assistant", "content": "Done."},
-            {"role": "user", "content": "y" * 19_000},
+            {"role": "user", "content": "y" * 18_500},
         ),
     )
     checkpoints = repository_type()
+    assert (
+        _first_checkpoint_candidate_tokens(request, prepared=True)
+        <= request.budget.pressure_threshold_tokens
+    )
 
     result = _coordinator(request=request, checkpoints=checkpoints).compile(request)
 
@@ -544,8 +581,8 @@ def test_checkpoint_retry_expands_prefix_for_unpreviewed_real_ref() -> None:
 @pytest.mark.parametrize(
     ("retained_chars", "expected_omitted_indexes"),
     (
-        (17_850, (0, 1)),
-        (17_900, (0, 1, 2, 3)),
+        (16_876, (0, 1)),
+        (16_880, (0, 1, 2, 3)),
     ),
 )
 def test_checkpoint_planning_preserves_complete_tool_suffix_at_exact_boundary(
@@ -611,6 +648,20 @@ def test_checkpoint_planning_preserves_complete_tool_suffix_at_exact_boundary(
         semantic_events=tuple(events),
     )
     checkpoints = RecordingCheckpointRepository()
+    history_payload = {
+        "schema_version": "memory_v2.context.v1",
+        "tool_exchanges": [{
+            "call_id": "call-boundary",
+            "tool_name": "lookup",
+            "arguments": {"query": "price"},
+            "result": {"preview": "z" * 500},
+            "full_output_ref": events[4]["full_output_ref"],
+        }],
+    }
+    history_message = untrusted_context_message("MEMORY_V2_EVIDENCE_HISTORY", history_payload)
+    first_candidate_tokens = _first_checkpoint_candidate_tokens(request, history=(history_message,))
+    expected_overflow = int(expected_omitted_indexes == (0, 1, 2, 3))
+    assert first_candidate_tokens == request.budget.pressure_threshold_tokens + expected_overflow
 
     result = _coordinator(request=request, checkpoints=checkpoints).compile(request)
 
@@ -620,6 +671,14 @@ def test_checkpoint_planning_preserves_complete_tool_suffix_at_exact_boundary(
     )
     assert len(checkpoints.calls) == 1
     assert len(checkpoints.commit_calls) == 1
+    if expected_omitted_indexes == (0, 1):
+        # Both the call arguments and result survive together when this suffix
+        # fits; preserving message indexes alone would not prove that contract.
+        retained_history = next(
+            message for message in result.messages
+            if str(message.get("content", "")).startswith("[MEMORY_V2_EVIDENCE_HISTORY]")
+        )
+        assert json.loads(retained_history["content"].split("\n", 2)[2]) == history_payload
 
 
 def test_checkpoint_prepare_must_match_its_prospective_ref() -> None:

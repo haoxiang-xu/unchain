@@ -1,7 +1,7 @@
 """Additive first-message long-term recall projection for Context V2.
 
 The decorator keeps the compiler as the only context budget authority.  It
-adds only bounded reference metadata as a provider-neutral user message and
+adds only bounded reference metadata as a separate assistant message and
 never injects long-term entry content or promotes recalled data to an
 instruction role.
 """
@@ -24,7 +24,8 @@ from .models import ContextCompileRequest, SourceMessageCursor
 from .runtime import ContextRequestFactory
 
 
-_REFERENCE_MARKER = "MEMORY_V2_UNTRUSTED_LONG_TERM_REFERENCES"
+_REFERENCE_MARKER = "MEMORY_V2_EVIDENCE_LONG_TERM_REFERENCES"
+_LEGACY_REFERENCE_MARKER = "MEMORY_V2_UNTRUSTED_LONG_TERM_REFERENCES"
 
 
 class LongTermRecallContextRequestFactoryError(RuntimeError):
@@ -87,9 +88,9 @@ LongTermRecallOutcomeSink = Callable[[LongTermRecallContextOutcome], Any]
 def _current_user_message(
     request: ContextCompileRequest,
 ) -> tuple[int, str]:
-    marker = f"[{_REFERENCE_MARKER}]"
+    markers = (f"[{_REFERENCE_MARKER}]", f"[{_LEGACY_REFERENCE_MARKER}]")
     if any(
-        marker in str(message.get("content") or "")
+        any(marker in str(message.get("content") or "") for marker in markers)
         for message in request.source_messages
         if isinstance(message, Mapping)
     ):
