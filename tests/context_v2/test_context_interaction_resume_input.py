@@ -145,7 +145,7 @@ def _history_payload(messages) -> dict:
     message = next(
         item
         for item in messages
-        if "MEMORY_V2_UNTRUSTED_HISTORY" in str(item.get("content") or "")
+        if "MEMORY_V2_EVIDENCE_HISTORY" in str(item.get("content") or "")
     )
     return json.loads(message["content"].split("\n", 2)[2])
 

@@ -1,15 +1,15 @@
 {
   "schema": "unchain.context_v2.compiler_golden_manifest.v1",
-  "freeze_version": 2,
+  "freeze_version": 3,
   "provenance": {
     "kind": "unchain_branch_local_compiler_freeze",
     "repository": "unchain",
-    "branch": "dev",
-    "base_head_sha": "7569395ecbd0cc4b0e7068fbfc8428706740eb16",
+    "branch": "codex/ticket-447-read-evidence-guidance",
+    "base_head_sha": "72c75b2c11f25990154622e5179322d4c300f1ee",
     "dirty": true,
     "cross_repo_equivalence_claim": false,
     "host_contract_manifest": "../pupu_p0/manifest.json",
-    "reason": "Issue #268: scoped assistant references preserve live user authority"
+    "reason": "Issue #447: historical evidence guidance and model-only labels; source payloads and checkpoint policy unchanged"
   },
   "comparison": {
     "scope": [
@@ -39,12 +39,12 @@
     {
       "case": "core_cross_provider",
       "file": "cross_provider.json",
-      "sha256": "789faa80313eabe58e632478cb58abba8e9e5e28daab9e32287ae2bc56b1d973"
+      "sha256": "4b95c58cd07222876dae53482873c24d1790775fae182737f1330d76c99d2eed"
     },
     {
       "case": "core_recorded_refs",
       "file": "recorded_refs.json",
-      "sha256": "2f426ee219578120d2553bf2b13a79d253aae3b4179a577921736374507d786c"
+      "sha256": "92358562452e42dcca68998d408f4e5305b7ec9bcae30f31a5a1dbc824917af5"
     }
   ]
 }

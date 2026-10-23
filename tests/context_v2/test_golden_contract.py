@@ -130,6 +130,10 @@ def test_context_compiler_public_contract_is_available() -> None:
         expected = copy.deepcopy(fixture["expected"])
         if fixture["case"] == "tool_and_pinned":
             expected["pending_interaction"]["request"]["store_seq"] = 4
+            # Preserve the original PuPu snapshot and its provenance hash;
+            # #447 changes only this host-owned model presentation label.
+            assert expected["pending_interaction"].pop("trust") == "UNTRUSTED_DATA"
+            expected["pending_interaction"]["evidence_kind"] = "historical_record"
         compiler_owned = ownership["compiler_owned_expected_fields"]
         if compiler_owned == "*":
             assert comparable == expected

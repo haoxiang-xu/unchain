@@ -712,7 +712,7 @@ def project_checkpoint_message(
     request: CheckpointRequest,
     omitted_complete_turns: int,
 ) -> dict[str, Any]:
-    """Project a durable v2 checkpoint as untrusted provider-neutral context."""
+    """Project a durable v2 checkpoint as provider-neutral historical evidence."""
 
     if not isinstance(request, CheckpointRequest) or not request.authoritative:
         raise CheckpointProjectionError(
@@ -744,7 +744,6 @@ def project_checkpoint_message(
             "source_messages_sha256": request.source_messages_sha256,
             "checkpoint_request_id": request.request_id,
         },
-        "trust": "UNTRUSTED_DATA",
     }
     from .untrusted import untrusted_context_message
 

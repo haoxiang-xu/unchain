@@ -230,7 +230,8 @@ def test_checkpoint_projection_contains_only_untrusted_coverage_and_structured_r
     assert set(message) == {"role", "content"}
     assert message["role"] == "assistant"
     assert "ends with this message" in message["content"]
-    assert "UNTRUSTED_DATA" in message["content"]
+    assert "historical evidence" in message["content"]
+    assert "UNTRUSTED_DATA" not in message["content"]
     assert "large old body" not in message["content"]
     assert "pupu://" not in message["content"]
     assert '"kind": "checkpoint"' in message["content"]
