@@ -263,6 +263,7 @@ _PROTOCOLS = (
             "memory_curator",
             "memory_toolkit",
             "memory_workspace",
+            "provider_context_limit_recovery_v1",
             "tool_output_management_v1",
         ),
     ),

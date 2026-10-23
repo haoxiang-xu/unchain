@@ -304,6 +304,7 @@ class ProviderRequestLease:
     # failure diagnostics or uncertainty observations, distinguished exactly.
     DIAGNOSTIC_SCHEMA: ClassVar[str] = "unchain.provider_request_lease.v3"
     DIAGNOSTIC_SCHEMA_V4: ClassVar[str] = "unchain.provider_request_lease.v4"
+    CONTEXT_DIAGNOSTIC_SCHEMA: ClassVar[str] = "unchain.provider_request_lease.v5"
     UNCERTAINTY_SCHEMA: ClassVar[str] = "unchain.provider_request_lease.v4"
 
     subject: ProviderRequestSubject
@@ -472,6 +473,9 @@ class ProviderRequestLease:
         if self.failure_diagnostic is not None:
             diagnostic = self.failure_diagnostic.to_dict()
             record["schema"] = (
+                self.CONTEXT_DIAGNOSTIC_SCHEMA
+                if self.failure_diagnostic.input_context_rejected
+                else
                 self.DIAGNOSTIC_SCHEMA_V4
                 if self.failure_diagnostic.http_status is not None
                 and diagnostic["schema"] == ProviderFailureDiagnostic.SCHEMA_V2
@@ -508,13 +512,16 @@ class ProviderRequestLease:
                 raise ModelValidationError("v4 started lease requires an uncertainty diagnostic")
             if value.get("status") != ProviderRequestStatus.STARTED:
                 raise ModelValidationError("uncertainty lease must remain started")
-        elif schema in {cls.DIAGNOSTIC_SCHEMA, cls.DIAGNOSTIC_SCHEMA_V4}:
+        elif schema in {cls.DIAGNOSTIC_SCHEMA, cls.DIAGNOSTIC_SCHEMA_V4, cls.CONTEXT_DIAGNOSTIC_SCHEMA}:
             fields = fields | {"failure_diagnostic"}
             diagnostic = value.get("failure_diagnostic")
             if type(diagnostic) is not dict:
                 raise ModelValidationError("failure lease requires a diagnostic")
             parsed = ProviderFailureDiagnostic.from_dict(diagnostic)
             expected = (
+                cls.CONTEXT_DIAGNOSTIC_SCHEMA
+                if parsed.input_context_rejected
+                else
                 cls.DIAGNOSTIC_SCHEMA_V4
                 if parsed.http_status is not None
                 and diagnostic["schema"] == ProviderFailureDiagnostic.SCHEMA_V2
@@ -537,7 +544,7 @@ class ProviderRequestLease:
             raise TypeError("provider request lease must be an exact dict")
         if value.get("schema") in {
             cls.SCHEMA, cls.DIAGNOSTIC_SCHEMA, cls.DIAGNOSTIC_SCHEMA_V4,
-            cls.UNCERTAINTY_SCHEMA,
+            cls.UNCERTAINTY_SCHEMA, cls.CONTEXT_DIAGNOSTIC_SCHEMA,
         }:
             return cls.from_dict(value)
         legacy_schema = "unchain.provider_request_lease.v1"

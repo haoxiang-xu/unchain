@@ -11,6 +11,7 @@ from .state import RunState
 RuntimePhase = Literal[
     "bootstrap",
     "before_model",
+    "on_context_limit",
     "after_model",
     "on_tool_call",
     "after_tool_batch",
