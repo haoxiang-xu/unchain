@@ -171,7 +171,28 @@ from .task_state import (
     ContextTaskStateReadOutcome,
 )
 
+from .compression import (
+    AgentSummarizer,
+    CompressionArchive,
+    CompressionArchiveStore,
+    CompressionError,
+    CompressionResult,
+    ContextCompressor,
+    DirectoryCompressionStore,
+    SUMMARY_SYSTEM_PROMPT,
+    SummaryRequest,
+)
+
 __all__ = [
+    "AgentSummarizer",
+    "CompressionArchive",
+    "CompressionArchiveStore",
+    "CompressionError",
+    "CompressionResult",
+    "ContextCompressor",
+    "DirectoryCompressionStore",
+    "SUMMARY_SYSTEM_PROMPT",
+    "SummaryRequest",
     "ArtifactBudgetError",
     "ArtifactIntegrityError",
     "ArtifactReadPage",
