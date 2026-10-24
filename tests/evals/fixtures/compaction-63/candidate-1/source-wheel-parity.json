@@ -1,0 +1,18 @@
+{
+  "compression.py": {
+    "same_bytes": true,
+    "sha256": "160ce1328717a81262212229c984d5487bff5737e78a5bf93476054259944850"
+  },
+  "compiler.py": {
+    "same_bytes": true,
+    "sha256": "23433282064153ec46a93a1a79dcb567917bcba842707e2886773cf875b13a1b"
+  },
+  "suffix_cost.py": {
+    "same_bytes": true,
+    "sha256": "0e46600b1bbb9e1680f2be75035a70db4f510e6876f974fb690e3ad30e54d288"
+  },
+  "__init__.py": {
+    "same_bytes": true,
+    "sha256": "ba3040307493d938179908014ef3b4697e5432e9fd0f4b377803dce78aa34abb"
+  }
+}

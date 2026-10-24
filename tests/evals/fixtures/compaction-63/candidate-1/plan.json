@@ -1,0 +1,57 @@
+{
+  "schema": "unchain.summary_fidelity_plan.v1",
+  "revision": 5,
+  "changes_from_attempt_1": [
+    "Worker action envelope decoding permits surrounding visible prose, matching text-plus-tool-call turns; raw responses remain retained. Summary decoding is unchanged and remains the production strict decoder.",
+    "Both conditions begin with the same authored handoff history backed by real fixture reads and actual initial failing tests. Setup is excluded from live-model behavior; every summary and subsequent continuation action is a real-model decision.",
+    "Each stage must complete its actual required effect before the next stage."
+  ],
+  "model": "claude-sonnet-4-6",
+  "transport": "authenticated Claude CLI, all built-in tools disabled, one inference turn per request; custom Unchain ModelIO executes fixture tools in the actual kernel",
+  "artifact": "/Users/red/.codex/artifacts/compact-tickets-63-457-20261023/candidate-1/wheels/unchain-0.2.0-py3-none-any.whl",
+  "artifact_sha256": "65be180adc474b37229bcf2b6927ab060cdde6d24e4dd652ec9c79dc0e299a43",
+  "cases": [
+    "incident_handoff",
+    "coding_handoff"
+  ],
+  "conditions": [
+    "summary",
+    "full_history"
+  ],
+  "summary_refreshes_per_case": 3,
+  "max_input_tokens": 5200,
+  "summary_reserve_tokens": 2200,
+  "max_summary_input_tokens": 100000,
+  "worker_max_iterations_per_stage": 8,
+  "call_limit": 80,
+  "list_price_cost_cap_usd": 8.0,
+  "timeout_seconds_per_call": 120,
+  "repetitions": 1,
+  "semantic_retries": 0,
+  "history_policy": "Canonical full history is maintained independently. Each refresh summarizes the new omitted canonical prefix; recursive summary-of-summary is rejected by the implementation.",
+  "pressure_policy": "Actual fixture tool results include explicitly labeled synthetic background logs, making each completed stage exceed the next-stage input budget.",
+  "acceptance": {
+    "archive_integrity": "Every archived message equals its canonical original; source digests and actual call/result links verify; every complete exchange has both sides.",
+    "summary_grounding": "Closed summary schema and valid source ids required; reviewer checks factual support, contradictions and unfinished items separately from mere reference existence.",
+    "continuation": "After each compressed stage, actual Unchain tools are used to advance the original task. Incident replay executes six elapsed-time boundary checks; coding uses five public tests plus a separate 100-case deterministic oracle. Final files and these independent checks are authoritative.",
+    "retrieval": "Final phase asks for a previously non-salient token from the earliest log. If absent from the view, the agent must retrieve it with the scoped archive tool.",
+    "corrections": "Stage-two correction supersedes the original instruction. Completion artifacts must use corrected values.",
+    "unfinished": "Tasks close only after successful fixture tool effects. Approval-denied publication remains blocked in final artifacts.",
+    "pending": "Adding an unmatched approval request under pressure must defer summary with zero model invocations. Adding the denial must allow continued compression.",
+    "restart": "After each compression reopen the directory store and repeat the same request; the archive/view must replay without another inference call."
+  },
+  "limits": [
+    "Single model, one repetition per condition: no broad reliability or cross-provider claim.",
+    "Controlled fixture tasks, not open-ended real-world repository qualification.",
+    "The inference transport is CLI-backed ModelIO, not native Anthropic SDK wire qualification.",
+    "A failed semantic cell remains failed; a later attempt never erases the first result.",
+    "No production source edits during this evaluation."
+  ],
+  "candidate_changes": [
+    "Production decoder accepts one enclosing JSON fence, short exact model aliases map to canonical IDs, source/block provenance guards permission attribution, prompt distinguishes observed values from invented blockers, per-exchange chronological retrieval.",
+    "No external summary normalization; built-in AgentSummarizer is used directly. Prior candidate failures retained separately.",
+    "Raw canonical fixture tool results retained in both conditions via explicit high result budgets and disabled mid-run microcompact; this does not qualify default Agent composition."
+  ],
+  "installed_module_root": "/Users/red/.codex/artifacts/compact-tickets-63-457-20261023/candidate-1/wheel-install",
+  "retrieval_probe": "Separate bounded exact-original code/stderr/hash/call-ID recovery; same strict original-equality oracle as the failed baseline."
+}

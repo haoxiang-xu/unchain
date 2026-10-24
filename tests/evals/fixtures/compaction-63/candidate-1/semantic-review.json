@@ -1,0 +1,127 @@
+{
+  "schema": "unchain.summary_semantic_review.v1",
+  "candidate": "candidate-1",
+  "attempt": "attempt-1",
+  "model": "claude-sonnet-4-6",
+  "review_scope": "Six summaries, exact canonical sources, actual continuation messages and saved task artifacts; no extra inference or production edits.",
+  "verdict": {
+    "exact_archive_and_links": "PASS",
+    "task_continuation": "PASS for both summary cases",
+    "semantic_grounding": "FAIL: unsupported confirmation prerequisites in 5 of 6 summaries"
+  },
+  "archive_checks": [
+    {
+      "case": "incident_handoff",
+      "stage": 1,
+      "archive_id": "ae0eb2249e454de38866cfc6057d621205a9e5d1260d841f100a05d5625e6620",
+      "exact_original_prefix": true,
+      "source_digest_and_ids": true,
+      "independent_anthropic_and_approval_links": true,
+      "content_digest": true
+    },
+    {
+      "case": "incident_handoff",
+      "stage": 2,
+      "archive_id": "9dd44083240b5b15d6797570c437fe415e6de701cfde904bf7ef6eb140b918fe",
+      "exact_original_prefix": true,
+      "source_digest_and_ids": true,
+      "independent_anthropic_and_approval_links": true,
+      "content_digest": true
+    },
+    {
+      "case": "incident_handoff",
+      "stage": 3,
+      "archive_id": "72fa50c629e6e4d986fe38160d45291dc9f48aea580fb80a44ff48a0c7b553d1",
+      "exact_original_prefix": true,
+      "source_digest_and_ids": true,
+      "independent_anthropic_and_approval_links": true,
+      "content_digest": true
+    },
+    {
+      "case": "coding_handoff",
+      "stage": 1,
+      "archive_id": "4e37e2df0b4838d1e38203bb9953492c668fb64b156b754d084001e9db9e1321",
+      "exact_original_prefix": true,
+      "source_digest_and_ids": true,
+      "independent_anthropic_and_approval_links": true,
+      "content_digest": true
+    },
+    {
+      "case": "coding_handoff",
+      "stage": 2,
+      "archive_id": "e53b2a76abbcbd83fcc599af96a5de0c27b3d39fe6ae7263826a3455ccfa09f3",
+      "exact_original_prefix": true,
+      "source_digest_and_ids": true,
+      "independent_anthropic_and_approval_links": true,
+      "content_digest": true
+    },
+    {
+      "case": "coding_handoff",
+      "stage": 3,
+      "archive_id": "42d26afc72fcf2e59ff5e5c1384f6ba51c0f0aa85832d7ac689b238d3f4b5b63",
+      "exact_original_prefix": true,
+      "source_digest_and_ids": true,
+      "independent_anthropic_and_approval_links": true,
+      "content_digest": true
+    }
+  ],
+  "per_summary": [
+    {
+      "case": "incident_handoff",
+      "stage": 1,
+      "permission_invention": true,
+      "evidence": "open_items: Await explicit user confirmation or later-stage tool result before finalizing.",
+      "assessment": "Unsupported: initial user says audit_token will be requested later; diagnostics already contains its exact value."
+    },
+    {
+      "case": "incident_handoff",
+      "stage": 2,
+      "permission_invention": true,
+      "evidence": "next_steps: confirm audit_token if provided; progress: UNVERIFIED as the authoritative value because requested later.",
+      "assessment": "Repeated unsupported prerequisite; exact observed value remains preserved."
+    },
+    {
+      "case": "incident_handoff",
+      "stage": 3,
+      "permission_invention": true,
+      "evidence": "open_items: confirm whether this observed value should be used; next_steps: UNVERIFIED if correct to use.",
+      "assessment": "Repeated unsupported prerequisite. Awaiting instruction to execute T-write is separately grounded in the explicit stage-2 do-not-write instruction."
+    },
+    {
+      "case": "coding_handoff",
+      "stage": 1,
+      "permission_invention": false,
+      "evidence": "Observed audit_token preserved and proposed for final manifest without a consent prerequisite.",
+      "assessment": "Initial failing checks and open task state are consistent with sources."
+    },
+    {
+      "case": "coding_handoff",
+      "stage": 2,
+      "permission_invention": true,
+      "evidence": "next_steps: await or confirm audit_token value; open_items: spec says requested later so confirm before writing.",
+      "assessment": "Unsupported prerequisite. T-fix completed and tests/docs still pending are correctly distinguished."
+    },
+    {
+      "case": "coding_handoff",
+      "stage": 3,
+      "permission_invention": true,
+      "evidence": "next_steps: Await user instruction to provide or confirm audit_token value; open_items: await any explicit instruction confirming this is the value to use.",
+      "assessment": "Repeated unsupported prerequisite. Original failing module, superseded alphabetical write, corrected write and passing checks retain distinct hashes/call references."
+    }
+  ],
+  "grounded_findings": [
+    "Incident evidence ID/hash/error/proof nonce and evidence-read call ID remain consistent with originals.",
+    "Incident owner TTL correction 2500 to 2750 is applied after it enters the archived prefix; proof/replay receipts and pending write state are accurate.",
+    "Coding initial failing checks remain distinct from later passing checks; original 725d... hash, superseded 9fa3... write, corrected 7dc7... write and live-024-0 passing check are not conflated.",
+    "Both final artifacts preserve denied publication and blocked approval IDs; no completed verification/replay or final-stage code edits were repeated."
+  ],
+  "continuation_limitations": [
+    "Both tasks succeeded after an explicit final live user instruction, so this run does not demonstrate an actual task stop caused by the invented prerequisite.",
+    "Full-history incident control call 016 also says awaiting audit_token and explicit write approval; the weakness is not proven to be caused exclusively by compression.",
+    "Incident archive selector attempt live-008-0 mixed call_id with a hallucinated tool_name and was correctly rejected. Recovery then used two source_id pages.",
+    "Coding final recovery also used two source_id pages. These continuations do not establish successful model use of the new exchange selectors.",
+    "Each summary was recomputed from the canonical journal, not recursively from the previous summary. Later journals contain assistant confirmation claims, which the summary prompt should not promote into requirements.",
+    "Only one model and one repetition per case were evaluated here."
+  ],
+  "failed_attempts_preserved": true
+}

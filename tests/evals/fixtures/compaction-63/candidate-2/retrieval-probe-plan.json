@@ -1,0 +1,10 @@
+{
+  "purpose": "Exercise real-model archive recovery of exact old evidence absent from the summary text.",
+  "input": "Latest accepted coding view from the fixed candidate; retain the canonical-source worker configuration.",
+  "request": "Recover original intake module and complete original failing-test stderr, actual original read/check call IDs, and original hash. Save a recovery receipt; do not edit or rerun original task.",
+  "oracle": "Exact equality to original seed tool results, actual archived call IDs, and at least one real context_archive_read call.",
+  "max_iterations": 8,
+  "repetitions": 1,
+  "semantic_retries": 0,
+  "conclusion_boundary": "This checks scoped archive recovery only; cannot repair or qualify a failed main cell."
+}

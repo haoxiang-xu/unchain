@@ -1,0 +1,99 @@
+[
+  {
+    "attempt": "attempt-1",
+    "scope": "Exact source preservation and structural references only; not a semantic grounding verdict.",
+    "archives": [
+      {
+        "cell": "coding_handoff-summary",
+        "archive": "1d98695f65252329c43b562b9f8d02d819cd2f2d5ae7de28b554ec8dad64ce15.json",
+        "messages": 8,
+        "exchanges": 5,
+        "checks": {
+          "exact_canonical_prefix": true,
+          "source_digest": true,
+          "content_digest": true,
+          "independent_tool_chain": true,
+          "no_orphan_exchanges": true,
+          "source_ids_exist": true
+        },
+        "all_pass": true
+      },
+      {
+        "cell": "coding_handoff-summary",
+        "archive": "9e80f77766a2b933c844932f2d2bb724ba7f2747b84028577a28d014b36ee6a9.json",
+        "messages": 4,
+        "exchanges": 4,
+        "checks": {
+          "exact_canonical_prefix": true,
+          "source_digest": true,
+          "content_digest": true,
+          "independent_tool_chain": true,
+          "no_orphan_exchanges": true,
+          "source_ids_exist": true
+        },
+        "all_pass": true
+      },
+      {
+        "cell": "coding_handoff-summary",
+        "archive": "c1d6c174a4b1987df6e3570ad32cf6115309a1e0d03209cecd17936687186c3d.json",
+        "messages": 16,
+        "exchanges": 8,
+        "checks": {
+          "exact_canonical_prefix": true,
+          "source_digest": true,
+          "content_digest": true,
+          "independent_tool_chain": true,
+          "no_orphan_exchanges": true,
+          "source_ids_exist": true
+        },
+        "all_pass": true
+      },
+      {
+        "cell": "incident_handoff-summary",
+        "archive": "5eee53c4bc48619a3a769f8b4c292d826d7b08aa2c4fcd73c854df46c51e234e.json",
+        "messages": 14,
+        "exchanges": 6,
+        "checks": {
+          "exact_canonical_prefix": true,
+          "source_digest": true,
+          "content_digest": true,
+          "independent_tool_chain": true,
+          "no_orphan_exchanges": true,
+          "source_ids_exist": true
+        },
+        "all_pass": true
+      },
+      {
+        "cell": "incident_handoff-summary",
+        "archive": "7bcdda7e2c94c84b24cec50e2d805e03daae6d46409602bdce4b2c2d8832eb8f.json",
+        "messages": 8,
+        "exchanges": 4,
+        "checks": {
+          "exact_canonical_prefix": true,
+          "source_digest": true,
+          "content_digest": true,
+          "independent_tool_chain": true,
+          "no_orphan_exchanges": true,
+          "source_ids_exist": true
+        },
+        "all_pass": true
+      },
+      {
+        "cell": "incident_handoff-summary",
+        "archive": "da98a64b2c3eaaf655bcc70190a4d14d06520b23183c691d6856aa3d54111795.json",
+        "messages": 4,
+        "exchanges": 3,
+        "checks": {
+          "exact_canonical_prefix": true,
+          "source_digest": true,
+          "content_digest": true,
+          "independent_tool_chain": true,
+          "no_orphan_exchanges": true,
+          "source_ids_exist": true
+        },
+        "all_pass": true
+      }
+    ],
+    "all_pass": true
+  }
+]

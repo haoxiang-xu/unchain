@@ -45,6 +45,7 @@ from .budget import (
     estimate_context_tokens,
     resolve_context_budget,
 )
+from .suffix_cost import SuffixTokenCost
 from .attachments import (
     HostResolvedAttachment,
     normalize_host_resolved_attachments,
@@ -3526,6 +3527,33 @@ def _reduce(
     cutoff_order = range(minimum_cutoff, len(turns) + 1)
     if request.checkpoint_ref is not None:
         cutoff_order = range(max(1, minimum_cutoff), len(turns) + 1)
+    # Only the suffix's bare cost is monotone. Checkpoint metadata/ref lengths
+    # and legal tool boundaries are not; keep checking those in ascending order.
+    # Normalize/transform each message once, then binary-search the first suffix
+    # that could fit before constructing/pricing actual checkpoint candidates.
+    prepared_head = [transformed(message) for message in systems + injected]
+    prepared_tail = [transformed(message) for message in injected_tail]
+    prepared_turns = [
+        [transformed(message) for message in turn]
+        if index >= cutoff_order.start else []
+        for index, turn in enumerate(turns)
+    ]
+    flattened = [message for turn in prepared_turns for message in turn]
+    offsets = [0]
+    for turn in prepared_turns:
+        offsets.append(offsets[-1] + len(turn))
+    suffix_cost = SuffixTokenCost(
+        [_strip_internal_metadata(message) for message in flattened],
+        fixed=[_strip_internal_metadata(message) for message in prepared_head + prepared_tail],
+    )
+    low, high = cutoff_order.start, cutoff_order.stop
+    while low < high:
+        middle = (low + high) // 2
+        if suffix_cost.estimate(offsets[middle]).total_tokens <= message_budget:
+            high = middle
+        else:
+            low = middle + 1
+    cutoff_order = range(low, cutoff_order.stop)
     for cutoff in cutoff_order:
         if any(index < cutoff for index in pinned_indexes):
             continue
@@ -3535,17 +3563,8 @@ def _reduce(
             for dependent_indexes in pair_turn_indexes.values()
         ):
             continue
-        candidate = (
-            [transformed(message) for message in systems + injected]
-            + [
-                transformed(message)
-                for turn_index, turn in enumerate(turns)
-                if turn_index >= cutoff
-                for message in turn
-            ]
-            + [transformed(message) for message in injected_tail]
-        )
-        candidate_estimate = _estimate(candidate).total_tokens
+        candidate = prepared_head + flattened[offsets[cutoff]:] + prepared_tail
+        candidate_estimate = suffix_cost.estimate(offsets[cutoff]).total_tokens
         if candidate_estimate > message_budget:
             continue
         candidate_checkpoint_request: CheckpointRequest | None = None
