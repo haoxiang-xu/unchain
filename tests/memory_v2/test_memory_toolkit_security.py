@@ -455,6 +455,85 @@ def test_context_reads_require_disclosure_and_pass_only_structured_refs_to_capab
         )
 
 
+def test_context_content_read_accepts_disclosed_bare_context_event_ref():
+    context = FakeContext()
+    event = ResourceRef("context_event", "event-1", 1)
+    context.disclosed.add(event)
+    toolkit, _, _, _, codec = normal_toolkit(context=context)
+
+    page = invoke(
+        toolkit,
+        "context_content_read",
+        ref="pupu://context/event/event-1",
+    )
+
+    assert page["schema_version"] == "unchain.context_content_page.v2"
+    assert page["content"] == {"encoding": "utf-8", "text": "hello context"}
+    assert codec.decoded[-1] == (
+        "pupu://context/event/event-1",
+        ReferencePurpose.CONTEXT_CONTENT,
+        event,
+    )
+    assert context.calls == [
+        ("authorize", (event, ReferencePurpose.CONTEXT_CONTENT)),
+        ("read_content", event),
+    ]
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        encode_context_content_locator(
+            ResourceRef("context_event", "event-1", 1, "metadata")
+        ),
+        "unchain://context/v1/not-a-locator",
+        "unchain://context/v1/"
+        + base64.urlsafe_b64encode(
+            b'{"fragment":"","id":"event-1","kind":"context_event","revision":0}'
+        )
+        .decode("ascii")
+        .rstrip("="),
+    ],
+)
+def test_context_content_read_rejects_unsupported_event_fragment_revision_and_locator(
+    ref,
+):
+    context = FakeContext()
+    context.disclosed.add(ResourceRef("context_event", "event-1", 1))
+    toolkit, _, _, _, _ = normal_toolkit(context=context)
+
+    with pytest.raises(MemoryToolkitError):
+        invoke(toolkit, "context_content_read", ref=ref)
+
+    assert context.calls == []
+
+
+def test_context_content_read_rejects_foreign_bare_context_event_ref():
+    context = FakeContext()
+    context.disclosed.add(ResourceRef("context_event", "event-1", 1))
+    toolkit, _, _, _, _ = normal_toolkit(context=context)
+
+    with pytest.raises(
+        MemoryToolkitError,
+        match="^content ref was not disclosed to this agent context$",
+    ):
+        invoke(
+            toolkit,
+            "context_content_read",
+            ref="pupu://context/event/foreign-event",
+        )
+
+    assert context.calls == [
+        (
+            "authorize",
+            (
+                ResourceRef("context_event", "foreign-event", 1),
+                ReferencePurpose.CONTEXT_CONTENT,
+            ),
+        )
+    ]
+
+
 @pytest.mark.parametrize(
     ("returned_offset", "returned_bytes", "message"),
     [
