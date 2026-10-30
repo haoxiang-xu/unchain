@@ -30,17 +30,20 @@ SKELETON_FEATURES = [
     "subagent_graphs_v1",
     "tool_call_v1",
 ]
-# Frozen from the actual imported producer before the BC-019 addition. These
-# are independent expected wire values, not data read from the producer parser.
+# Frozen from dev d2aa98f5's actual producer before integrating BC-019. These
+# independent expected wire values retain the newer dev features as well.
 BASELINE_FEATURES = {
     "context_memory": [
         "artifact_handoff", "canonical_journal",
         "chat_deletion_sqlite_scope_closure", "context_compiler",
-        "context_content_paging_v1", "context_content_read_recovery_v1",
-        "context_contribution_manifest_v1",
-        "generation_rebase_live_interaction_cycles",
+        "context_content_paging_v1", "context_content_paging_v2",
+        "context_content_read_recovery_v1", "context_contribution_manifest_v1",
+        "durable_interaction_settlement_fence_v1",
+        "generation_rebase_live_interaction_cycles", "graph_failure_terminals_v1",
+        "historical_evidence_guidance_v1",
         "interaction_resolution_compat", "long_term_promotion", "memory_curator",
-        "memory_toolkit", "memory_workspace", "tool_output_management_v1",
+        "memory_toolkit", "memory_workspace", "provider_context_limit_recovery_v1",
+        "small_tool_output_inline_v1", "tool_output_management_v1",
     ],
     "durable_interaction": [
         "cancel_pending", "expected_interaction_id_cas", "fresh_run_lineage",

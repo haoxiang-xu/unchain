@@ -226,8 +226,11 @@ def test_explicit_compression_uses_private_summary_then_main_kernel_wire(tmp_pat
     main_wires = [request for request in client.requests if request not in summary_wires]
     assert len(summary_wires) >= 2
     assert len(main_wires) == 1
-    assert _SUMMARY in json.dumps(main_wires[0])
-    assert "historical evidence" not in json.dumps(main_wires[0])
+    main_wire = json.dumps(main_wires[0])
+    assert _SUMMARY in main_wire
+    # The governing guidance legitimately says "historical evidence". Check
+    # the actual old message bodies, rather than that shared phrase.
+    assert all(event.payload["message"]["content"] not in main_wire for event in history)
     assert all(_SENTINEL not in json.dumps(request) for request in client.requests)
     assert all(request["model"] == "compression-test-model" for request in client.requests)
     assert all(request["max_output_tokens"] == 128 for request in summary_wires)

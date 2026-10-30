@@ -2913,6 +2913,10 @@ class ContextRuntime:
         context: HarnessContext,
     ) -> ContextExecutionBundle:
         attempt_id = str(context.event.get("run_id") or "").strip()
+        if self.execution_factory is None:
+            raise ContextExecutionBundleError(
+                "context compile has no bootstrap execution factory"
+            )
         execution_id = self.execution_factory.execution_id_for_context(context)
         if not attempt_id or not execution_id:
             raise ContextExecutionBundleError(

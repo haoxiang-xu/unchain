@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import time
+import venv
 
 import pytest
 
@@ -118,16 +119,16 @@ def test_real_python_process_keeps_logs_separate_and_persists_fingerprints(tmp_p
 
 
 def test_real_user_venv_and_standalone_provider_free_execution(tmp_path):
-    # The suite itself runs from Unchain's real project venv. Reusing that
-    # executable proves venv selection without creating a broken relocatable
-    # copy of a standalone macOS Python distribution.
-    assert sys.prefix != sys.base_prefix
-    executable = Path(sys.executable)
+    # Qualify an actual user venv even when CI runs pytest from a base Python.
+    # Let Python create it; copying a standalone executable loses its resources.
+    environment = tmp_path / "user-venv"
+    venv.EnvBuilder(with_pip=False, symlinks=os.name != "nt").create(environment)
+    executable = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     source = tmp_path / "source"
-    _write(source, "def main(input, context):\n return {'answer': context['node_id']+':'+input['text']}\n")
+    _write(source, "import sys\ndef main(input, context):\n return {'answer': str(sys.prefix != sys.base_prefix)+':'+context['node_id']+':'+input['text']}\n")
     run, _ = _runner(tmp_path, source, profiles={"builtin": _profile("builtin", executable)})
     run.create({"text": "venv"})
-    assert run.run().outputs == {"answer": "code:venv"}
+    assert run.run().outputs == {"answer": "True:code:venv"}
 
 
 def test_real_pupu_bundled_python_runs_the_same_protocol_when_supplied(tmp_path):
