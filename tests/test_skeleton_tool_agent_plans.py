@@ -13,8 +13,8 @@ from unchain.skeleton.errors import SkeletonValidationError
 from unchain.skeleton.tool_runtime import SkeletonToolRuntime, SkeletonSkillRuntime
 from unchain.tools import Toolkit
 
-from test_skeleton_tool_runtime import _tool_document, _skill_document
-from test_skeleton_kernel_profile import _config
+from tests.test_skeleton_tool_runtime import _tool_document, _skill_document
+from tests.test_skeleton_kernel_profile import _config
 
 
 def _agent_plan(kind):
