@@ -48,7 +48,10 @@ from unchain.execution import (
     _BorrowedExecutionGuard,
     _borrow_execution_guard,
 )
-from unchain.context.tool_executor import _assert_official_execution_guard_active
+from unchain.context.tool_executor import (
+    _assert_official_execution_guard_active,
+    _resolve_official_execution_guard,
+)
 from unchain.context.artifacts import MAX_INLINE_TOOL_RESULT_BYTES
 from unchain.context_content import encode_context_content_locator
 from unchain.context.tool_harness import ContextToolAuthorityHarness
@@ -301,11 +304,16 @@ def test_runtime_uses_durable_projection_without_rereading_tool_artifact(
         )
         object.__setattr__(bundle, "tool_output_manager", manager)
         bundle.projector.bind_tool_output_manager(manager)
-        runtime = ContextRuntime._for_test(
+        factory = DurableContextRuntimeFactory(
+            bundle_builder=lambda _attempt: bundle,
+            generation_resolver=lambda _context, _execution_id: (
+                receipt.attempt.generation.generation_id
+            ),
+            current_input_resolver=lambda _context, _attempt: None,
+        )
+        runtime = ContextRuntime.from_factory(
             owner_id="context-test",
-            request_factory=lambda _context: None,
-            durable_event_sink=lambda _event: None,
-            partial_attempt_sink=lambda _event, _error: None,
+            execution_factory=factory,
         )
         runtime._attempt_bundles[("execution-1", "attempt-1")] = bundle
         state = RunState()
@@ -1772,6 +1780,67 @@ def test_executor_accepts_projected_child_guard_for_child_attempt(
         root.release()
 
 
+def test_executor_rejects_projected_guard_for_sibling_child_attempt() -> None:
+    child_attempt = AttemptRef(
+        GenerationRef("execution-1:child-1", "generation-child-1"),
+        "attempt-child-1",
+    )
+    boundary, journal, order = _boundary(attempt=child_attempt)
+    _persist_intent(boundary)
+    root = _guard()
+    sibling = _borrow_execution_guard(
+        root,
+        session_id="execution-1:child-2",
+    )
+    try:
+        with pytest.raises(
+            DurableToolExecutorContractError,
+            match="execution guard does not match the durable attempt",
+        ):
+            DurableToolExecutor(
+                boundary=boundary,
+                artifacts=boundary.projector.artifacts,
+                execution_guard=sibling,
+            )
+        assert [event.event_type for event in journal.events] == ["tool_call"]
+        assert order == ["journal:tool_call"]
+    finally:
+        sibling.release()
+        root.release()
+
+
+@pytest.mark.parametrize("supply_chain", [False, True])
+def test_direct_executor_rejects_child_guard_for_root_journal_attempt(
+    supply_chain,
+) -> None:
+    boundary, journal, order = _boundary()
+    _persist_intent(boundary)
+    root = _guard()
+    child = _borrow_execution_guard(
+        root,
+        session_id="execution-1:child-1",
+    )
+    try:
+        with pytest.raises(
+            DurableToolExecutorContractError,
+            match="execution guard does not match the durable attempt",
+        ):
+            DurableToolExecutor(
+                boundary=boundary,
+                artifacts=boundary.projector.artifacts,
+                execution_guard=child,
+                expected_guard_chain=(
+                    _resolve_official_execution_guard(child)[2]
+                    if supply_chain else None
+                ),
+            )
+        assert [event.event_type for event in journal.events] == ["tool_call"]
+        assert order == ["journal:tool_call"]
+    finally:
+        child.release()
+        root.release()
+
+
 def test_forged_foreign_borrowed_guard_and_guard_cycle_fail_closed() -> None:
     root = _guard()
     foreign = _BorrowedExecutionGuard(
@@ -2591,6 +2660,414 @@ def test_concurrent_cold_finalizers_accept_duplicate_terminal_receipt(
         ) == 1
     finally:
         guard.release()
+
+
+@pytest.mark.parametrize("shared_root_journal", [False, True])
+@pytest.mark.parametrize("use_batch_guard", [False, True])
+def test_context_runtime_executes_and_recovers_child_tool_with_projected_fence(
+    use_batch_guard,
+    shared_root_journal,
+) -> None:
+    child_execution_id = "execution-1:child-1"
+    attempt_id = "attempt-child-1"
+    bundles = {}
+
+    def build(attempt):
+        key = (attempt.generation.execution_id, attempt.attempt_id)
+        if key not in bundles:
+            bundles[key] = _bundle(attempt)
+        return bundles[key]
+
+    def runtime():
+        return ContextRuntime.from_factory(
+            owner_id="context-v2-child-tool",
+            execution_factory=DurableContextRuntimeFactory(
+                bundle_builder=build,
+                generation_resolver=lambda _context, _execution_id: "generation-child-1",
+                current_input_resolver=_current_input,
+                execution_id_resolver=(
+                    (lambda _context, _session: "execution-1")
+                    if shared_root_journal else None
+                ),
+            ),
+        )
+
+    root = _guard()
+    child = _borrow_execution_guard(root, session_id=child_execution_id)
+    guard = (
+        _BatchExecutionGuard(child, threading.Event())
+        if use_batch_guard
+        else child
+    )
+    arguments = {"query": "safe"}
+    calls = []
+    toolkit = Toolkit()
+    toolkit.register(
+        lambda query: calls.append(query) or {"ok": query == "safe"},
+        name="lookup",
+    )
+    call = ToolCall(call_id="call-child-1", name="lookup", arguments=arguments)
+    try:
+        first = runtime()
+        bootstrap = _context(
+            session_id=child_execution_id,
+            run_id=attempt_id,
+            current_input=None,
+        )
+        bootstrap.event["execution_guard"] = guard
+        first.build_harnesses()[0].build_delta(bootstrap)
+        bootstrap_token = _resolve_official_execution_guard(guard)[0].fencing_token
+        root.release_for_wait()
+        root.reacquire()
+        assert _resolve_official_execution_guard(guard)[0].fencing_token > (
+            bootstrap_token
+        )
+        bundle_execution_id = (
+            "execution-1" if shared_root_journal else child_execution_id
+        )
+        bundle = bundles[(bundle_execution_id, attempt_id)]
+        bundle.durable_event_sink(
+            {
+                "type": "tool_call",
+                "run_id": attempt_id,
+                "iteration": 0,
+                "tool_name": call.name,
+                "call_id": call.call_id,
+                "arguments": arguments,
+            }
+        )
+        context = HarnessContext(
+            state=bootstrap.state,
+            phase="on_tool_call",
+            event={
+                "run_id": attempt_id,
+                "execution_guard": guard,
+                "toolkit": toolkit,
+                "tool_call": call,
+            },
+        )
+        permit = first.prepare_tool_execution(context)
+        receipt = first.execute_prepared_tool(context, permit)
+        assert receipt.visible_result == {"ok": True}
+        assert receipt.current_execution_fence == (
+            _assert_official_execution_guard_active(guard)
+        )
+
+        cold = runtime()
+        cold_bootstrap = _context(
+            session_id=child_execution_id,
+            run_id=attempt_id,
+            current_input=None,
+        )
+        cold_bootstrap.event["execution_guard"] = guard
+        cold.build_harnesses()[0].build_delta(cold_bootstrap)
+        cold_context = HarnessContext(
+            state=cold_bootstrap.state,
+            phase="on_tool_call",
+            event={
+                "run_id": attempt_id,
+                "execution_guard": guard,
+                "tool_call": call,
+            },
+        )
+        recovered_permit = cold.prepare_tool_execution(cold_context)
+        recovered = cold.execute_prepared_tool(cold_context, recovered_permit)
+        assert recovered.reused is True
+        assert recovered.current_execution_fence == receipt.current_execution_fence
+        assert calls == ["safe"]
+        assert [event.event_type for event in bundle.journal.events] == [
+            "tool_call",
+            "tool.started",
+            "tool_result",
+        ]
+        if shared_root_journal:
+            root_subject = replace(
+                receipt.execution_subject,
+                execution_fence=root.fence,
+            )
+            with pytest.raises(
+                DurableToolBoundaryCorruptError,
+                match="execution fence does not match the tool execution",
+            ):
+                bundle.tool_boundary.authorize_execution(
+                    tool_name=call.name,
+                    call_id=call.call_id,
+                    iteration=0,
+                    subject=root_subject,
+                )
+
+            sibling = _borrow_execution_guard(
+                root, session_id="execution-1:child-2"
+            )
+            try:
+                sibling_runtime = runtime()
+                sibling_bootstrap = _context(
+                    session_id="execution-1:child-2",
+                    run_id=attempt_id,
+                    current_input=None,
+                )
+                sibling_bootstrap.event["execution_guard"] = sibling
+                sibling_runtime.build_harnesses()[0].build_delta(
+                    sibling_bootstrap
+                )
+                sibling_context = HarnessContext(
+                    state=sibling_bootstrap.state,
+                    phase="on_tool_call",
+                    event={
+                        "run_id": attempt_id,
+                        "execution_guard": sibling,
+                        "tool_call": call,
+                    },
+                )
+                with pytest.raises(
+                    DurableToolBoundaryCorruptError,
+                    match="different projected execution",
+                ):
+                    sibling_runtime.prepare_tool_execution(sibling_context)
+            finally:
+                sibling.release()
+            assert calls == ["safe"]
+    finally:
+        child.release()
+        root.release()
+
+
+@pytest.mark.parametrize("shared_root_journal", [False, True])
+def test_context_runtime_rejects_sibling_guard_before_child_tool_binding(
+    shared_root_journal,
+) -> None:
+    runtime = ContextRuntime.from_factory(
+        owner_id="context-v2-sibling-tool",
+        execution_factory=DurableContextRuntimeFactory(
+            bundle_builder=_bundle,
+            generation_resolver=lambda _context, _execution_id: "generation-child-1",
+            current_input_resolver=_current_input,
+            execution_id_resolver=(
+                (lambda _context, _session: "execution-1")
+                if shared_root_journal else None
+            ),
+        ),
+    )
+    root = _guard()
+    sibling = _borrow_execution_guard(
+        root,
+        session_id="execution-1:child-2",
+    )
+    bootstrap = _context(
+        session_id="execution-1:child-1",
+        run_id="attempt-child-1",
+        current_input=None,
+    )
+    bootstrap.event["execution_guard"] = sibling
+    try:
+        with pytest.raises(
+            ContextExecutionBundleError,
+            match="bootstrap execution guard does not match its session",
+        ):
+            runtime.build_harnesses()[0].build_delta(bootstrap)
+        assert runtime._attempt_bundles == {}
+    finally:
+        sibling.release()
+        root.release()
+
+
+def test_context_runtime_rejects_root_guard_masked_as_child_session() -> None:
+    runtime = ContextRuntime.from_factory(
+        owner_id="context-v2-root-mask-tool",
+        execution_factory=DurableContextRuntimeFactory(
+            bundle_builder=_bundle,
+            generation_resolver=lambda _context, _execution_id: "generation-child-1",
+            current_input_resolver=_current_input,
+            execution_id_resolver=lambda _context, _session: "execution-1",
+        ),
+    )
+    root = _guard()
+    bootstrap = _context(
+        session_id="execution-1:child-1",
+        run_id="attempt-child-1",
+        current_input=None,
+    )
+    bootstrap.event["execution_guard"] = root
+    try:
+        with pytest.raises(
+            ContextExecutionBundleError,
+            match="bootstrap execution guard does not match its session",
+        ):
+            runtime.build_harnesses()[0].build_delta(bootstrap)
+        assert runtime._attempt_bundles == {}
+    finally:
+        root.release()
+
+
+def test_context_runtime_rejects_session_change_after_child_bootstrap() -> None:
+    runtime = ContextRuntime.from_factory(
+        owner_id="context-v2-child-session-tool",
+        execution_factory=DurableContextRuntimeFactory(
+            bundle_builder=_bundle,
+            generation_resolver=lambda _context, _execution_id: "generation-child-1",
+            current_input_resolver=_current_input,
+            execution_id_resolver=lambda _context, _session: "execution-1",
+        ),
+    )
+    root = _guard()
+    child = _borrow_execution_guard(root, session_id="execution-1:child-1")
+    bootstrap = _context(
+        session_id="execution-1:child-1",
+        run_id="attempt-child-1",
+        current_input=None,
+    )
+    bootstrap.event["execution_guard"] = child
+    try:
+        runtime.build_harnesses()[0].build_delta(bootstrap)
+        bootstrap.state.session_state.session_id = "execution-1:child-2"
+        context = HarnessContext(
+            state=bootstrap.state,
+            phase="on_tool_call",
+            event={
+                "run_id": "attempt-child-1",
+                "execution_guard": child,
+            },
+        )
+        with pytest.raises(
+            DurableToolExecutorContractError,
+            match="session changed after bootstrap binding",
+        ):
+            runtime.prepare_tool_execution(context)
+    finally:
+        child.release()
+        root.release()
+
+
+def test_context_runtime_rebootstrap_rejects_new_child_chain_after_reacquire() -> None:
+    runtime = ContextRuntime.from_factory(
+        owner_id="context-v2-child-chain-tool",
+        execution_factory=DurableContextRuntimeFactory(
+            bundle_builder=_bundle,
+            generation_resolver=lambda _context, _execution_id: "generation-child-1",
+            current_input_resolver=_current_input,
+            execution_id_resolver=lambda _context, _session: "execution-1",
+        ),
+    )
+    root = _guard()
+    child = _borrow_execution_guard(root, session_id="execution-1:child-1")
+    first_bootstrap = _context(
+        session_id="execution-1:child-1",
+        run_id="attempt-child-1",
+        current_input=None,
+    )
+    first_bootstrap.event["execution_guard"] = child
+    replacement = None
+    try:
+        runtime.build_harnesses()[0].build_delta(first_bootstrap)
+        root.release_for_wait()
+        root.reacquire()
+        replacement = _borrow_execution_guard(
+            root, session_id="execution-1:child-1"
+        )
+        changed_bootstrap = _context(
+            session_id="execution-1:child-1",
+            run_id="attempt-child-1",
+            current_input=None,
+        )
+        changed_bootstrap.event["execution_guard"] = replacement
+        with pytest.raises(
+            ContextExecutionBundleError,
+            match="bootstrap execution guard authority regressed or changed",
+        ):
+            runtime.build_harnesses()[0].build_delta(changed_bootstrap)
+    finally:
+        if replacement is not None:
+            replacement.release()
+        child.release()
+        root.release()
+
+
+def test_context_runtime_rebootstrap_rejects_new_root_with_unconsumed_tool_permit() -> None:
+    bundles = {}
+
+    def build(attempt):
+        bundle = _bundle(attempt)
+        bundles[attempt.attempt_id] = bundle
+        return bundle
+
+    runtime = ContextRuntime.from_factory(
+        owner_id="context-v2-pending-permit-tool",
+        execution_factory=DurableContextRuntimeFactory(
+            bundle_builder=build,
+            generation_resolver=lambda _context, _execution_id: "generation-1",
+            current_input_resolver=_current_input,
+        ),
+    )
+    execution_runtime = ExecutionRuntime(InMemorySessionStore())
+    root = execution_runtime.acquire("execution-1", "owner-1")
+    successor = None
+    calls = []
+    toolkit = Toolkit()
+    toolkit.register(
+        lambda query: calls.append(query) or {"ok": True},
+        name="lookup",
+    )
+    call = ToolCall(
+        call_id="call-pending-permit",
+        name="lookup",
+        arguments={"query": "safe"},
+    )
+    bootstrap = _context(
+        session_id="execution-1",
+        run_id="attempt-pending-permit",
+        current_input=None,
+    )
+    bootstrap.event["execution_guard"] = root
+    try:
+        runtime.build_harnesses()[0].build_delta(bootstrap)
+        bundle = bundles["attempt-pending-permit"]
+        bundle.durable_event_sink(
+            {
+                "type": "tool_call",
+                "run_id": "attempt-pending-permit",
+                "iteration": 0,
+                "tool_name": call.name,
+                "call_id": call.call_id,
+                "arguments": call.arguments,
+            }
+        )
+        context = HarnessContext(
+            state=bootstrap.state,
+            phase="on_tool_call",
+            event={
+                "run_id": "attempt-pending-permit",
+                "execution_guard": root,
+                "toolkit": toolkit,
+                "tool_call": call,
+            },
+        )
+        assert runtime.prepare_tool_execution(context) is not None
+        assert [event.event_type for event in bundle.journal.events] == [
+            "tool_call"
+        ]
+
+        root.release()
+        successor = execution_runtime.acquire("execution-1", "owner-2")
+        assert successor.fence.fencing_token > root.lease.fencing_token
+        changed_bootstrap = _context(
+            session_id="execution-1",
+            run_id="attempt-pending-permit",
+            current_input=None,
+        )
+        changed_bootstrap.event["execution_guard"] = successor
+        with pytest.raises(
+            ContextExecutionBundleError,
+            match="bootstrap execution guard authority regressed or changed",
+        ):
+            runtime.build_harnesses()[0].build_delta(changed_bootstrap)
+        assert [event.event_type for event in bundle.journal.events] == [
+            "tool_call"
+        ]
+        assert calls == []
+    finally:
+        if successor is not None:
+            successor.release()
+        root.release()
 
 
 def test_context_runtime_cold_finalize_skips_route_approval_and_handler(

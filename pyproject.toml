@@ -12,6 +12,7 @@ dependencies = [
     "anthropic>=0.87.0",
     "google-genai>=1.68.0",
     "httpx>=0.28.1",
+    "jsonschema>=4.22,<5",
     "mcp>=1.30.0,<2.0.0",
     "openai>=2.7.1",
     "platformdirs>=4.4.0",

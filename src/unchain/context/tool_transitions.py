@@ -268,9 +268,18 @@ def _terminal_handoff_state_snapshot(
         optional=True,
     )
     if require_terminal:
-        if run_status != "completed":
+        child_wait = None
+        if run_status == "awaiting_human_input" and raw["transcript"]:
+            from ..tools.runtime import decode_subagent_wait_marker
+            child_wait = decode_subagent_wait_marker(
+                raw["transcript"][-1].get("content")
+                if type(raw["transcript"][-1]) is dict else None
+            )
+        if run_status not in {"completed", "awaiting_human_input"} or (
+            run_status == "awaiting_human_input" and child_wait is None
+        ):
             raise _contract_error(
-                "subagent terminal handoff run status must be completed"
+                "subagent terminal handoff run status is invalid"
             )
         if pending_tool_calls:
             raise _contract_error(

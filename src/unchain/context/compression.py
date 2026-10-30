@@ -731,3 +731,13 @@ class ContextCompressor:
                         raise CompressionError("stored summary exceeds the final input budget")
             return CompressionResult(tuple(output), self.mode, True, after, archive_id)
         raise CompressionError("no safe history boundary fits the input budget")
+
+
+# Durable Skeleton receipts and explicit history compression are separate APIs.
+# Keep the existing history implementation and its private helpers unchanged.
+from .durable_compression import (
+    CompressionOutcomeUnknown,
+    ContextCompressionError,
+    ContextCompressionService,
+    validate_compression_projection,
+)

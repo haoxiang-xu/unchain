@@ -1,0 +1,1 @@
+{"name":"Full","description":"Full template","instructions":"Follow rules","allowed_modes":["delegate","worker"],"output_mode":"full_trace","memory_policy":"scoped_persistent","parallel_safe":false,"allowed_tools":["one","two"],"model":" model-y "}

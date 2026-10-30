@@ -116,10 +116,13 @@ class ContextBuildUnavailableError(RuntimeError):
 class _BoundExecutionGuard:
     guard: Any = field(repr=False, compare=False)
     root_guard: Any = field(repr=False, compare=False)
+    attempt: AttemptRef
     execution_id: str
+    root_execution_id: str
     owner_id: str
     fencing_token: int
     chain: tuple[tuple[Any, ...], ...]
+    _authority: object = field(repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -142,6 +145,38 @@ class _ProviderTurnBoundaryBinding:
     model_toolkit_object_id: int
     execution_toolkit_object_id: int
     tool_identities: tuple[tuple[str, int, int], ...]
+
+
+@dataclass(frozen=True)
+class ContextToolPreparationPolicyResult:
+    """One closed pre-execution policy result owned by the Context authority.
+
+    The policy may only replace arguments, monotonically require confirmation,
+    or stop this invocation before any tool side effect.  It never chooses a
+    route or receives the terminal handler.
+    """
+
+    arguments: dict[str, Any]
+    force_approval: bool = False
+    blocked: dict[str, str] | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.arguments) is not dict:
+            raise TypeError("tool preparation policy arguments must be an object")
+        _canonical_bytes(self.arguments)
+        if type(self.force_approval) is not bool:
+            raise TypeError("tool preparation policy force_approval must be an exact boolean")
+        if self.blocked is None:
+            return
+        if (
+            type(self.blocked) is not dict
+            or set(self.blocked) != {"code", "reason"}
+            or any(
+                type(value) is not str or not value.strip()
+                for value in self.blocked.values()
+            )
+        ):
+            raise TypeError("tool preparation policy block must contain code and reason")
 
 
 @dataclass(frozen=True)
@@ -298,6 +333,14 @@ class ContextRuntime:
     )
     provider_turns_enabled: bool = False
     tool_output_management_active: bool = False
+    tool_preparation_policy: Callable[..., ContextToolPreparationPolicyResult] | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
+    tool_completion_policy: Callable[..., Any] | None = field(
+        default=None, repr=False, compare=False,
+    )
     _test_authority: object | None = field(
         default=None,
         repr=False,
@@ -429,6 +472,12 @@ class ContextRuntime:
             raise TypeError("provider_turns_enabled must be an exact boolean")
         if type(self.tool_output_management_active) is not bool:
             raise TypeError("tool_output_management_active must be an exact boolean")
+        if self.tool_preparation_policy is not None and not callable(
+            self.tool_preparation_policy
+        ):
+            raise TypeError("tool_preparation_policy must be callable")
+        if self.tool_completion_policy is not None and not callable(self.tool_completion_policy):
+            raise TypeError("tool_completion_policy must be callable")
         if self.provider_turns_enabled and self.execution_factory is None:
             raise TypeError("durable provider turns require a factory ContextRuntime")
         if self.execution_factory is not None:
@@ -488,12 +537,16 @@ class ContextRuntime:
         execution_factory: DurableContextRuntimeFactory,
         provider_turns_enabled: bool = False,
         tool_output_management_active: bool = False,
+        tool_preparation_policy: Callable[..., ContextToolPreparationPolicyResult] | None = None,
+        tool_completion_policy: Callable[..., Any] | None = None,
     ) -> ContextRuntime:
         return cls(
             owner_id=owner_id,
             execution_factory=execution_factory,
             provider_turns_enabled=provider_turns_enabled,
             tool_output_management_active=tool_output_management_active,
+            tool_preparation_policy=tool_preparation_policy,
+            tool_completion_policy=tool_completion_policy,
         )
 
     def bind_context(
@@ -650,17 +703,29 @@ class ContextRuntime:
             lease, root_guard, guard_chain = _resolve_official_execution_guard(
                 raw_guard
             )
-            if lease.execution_id != bundle.attempt.generation.execution_id:
+            session_id = str(context.state.session_state.session_id or "").strip()
+            if lease.execution_id != session_id:
+                raise ContextExecutionBundleError(
+                    "bootstrap execution guard does not match its session"
+                )
+            root_execution_id = root_guard.lease.execution_id
+            if bundle.attempt.generation.execution_id not in {
+                lease.execution_id,
+                root_execution_id,
+            }:
                 raise ContextExecutionBundleError(
                     "bootstrap execution guard does not match its attempt"
                 )
             guard_binding = _BoundExecutionGuard(
                 guard=raw_guard,
                 root_guard=root_guard,
+                attempt=bundle.attempt,
                 execution_id=lease.execution_id,
+                root_execution_id=root_execution_id,
                 owner_id=lease.owner_id,
                 fencing_token=lease.fencing_token,
                 chain=guard_chain,
+                _authority=_CONTEXT_EXECUTION_BINDING_AUTHORITY,
             )
         interaction_binding = _resolve_bootstrap_interaction_authority(
             context,
@@ -705,25 +770,55 @@ class ContextRuntime:
 
                 previous_guard = self._attempt_execution_guards.get(binding_key)
                 if previous_guard is not None:
-                    same_token = (
-                        guard_binding.fencing_token == previous_guard.fencing_token
-                    )
-                    invalid_rebind = (
+                    scope_changed = (
                         guard_binding.fencing_token < previous_guard.fencing_token
-                        or (
-                            same_token
-                            and (
-                                guard_binding.owner_id != previous_guard.owner_id
-                                or guard_binding.root_guard
-                                is not previous_guard.root_guard
-                                or not _same_execution_guard_chain(
-                                    guard_binding.chain,
-                                    previous_guard.chain,
-                                )
-                            )
+                        or guard_binding.attempt != previous_guard.attempt
+                        or guard_binding.execution_id != previous_guard.execution_id
+                        or guard_binding.root_execution_id
+                        != previous_guard.root_execution_id
+                    )
+                    same_guard = (
+                        guard_binding.guard is previous_guard.guard
+                        and guard_binding.root_guard is previous_guard.root_guard
+                        and _same_execution_guard_chain(
+                            guard_binding.chain, previous_guard.chain
                         )
                     )
-                    if invalid_rebind:
+                    if same_guard:
+                        scope_changed = (
+                            scope_changed
+                            or guard_binding.owner_id != previous_guard.owner_id
+                        )
+                    else:
+                        previous_root = previous_guard.root_guard
+                        with previous_root._lock:
+                            previous_released = previous_root._state in {
+                                "waiting", "released"
+                            }
+                        root_replacement = (
+                            guard_binding.execution_id
+                            == guard_binding.root_execution_id
+                            == previous_guard.execution_id
+                            == previous_guard.root_execution_id
+                            and guard_binding.fencing_token
+                            > previous_guard.fencing_token
+                            and previous_released
+                            and guard_binding.root_guard._runtime
+                            is previous_root._runtime
+                            and guard_binding.chain[-1][3]
+                            is previous_guard.chain[-1][3]
+                        )
+                        with self._tool_permit_lock:
+                            has_prepared_tool = any(
+                                prepared.attempt_key == binding_key
+                                for prepared in self._prepared_tool_bindings.values()
+                            )
+                        scope_changed = (
+                            scope_changed
+                            or not root_replacement
+                            or has_prepared_tool
+                        )
+                    if scope_changed:
                         raise ContextExecutionBundleError(
                             "bootstrap execution guard authority regressed or changed"
                         )
@@ -1598,6 +1693,8 @@ class ContextRuntime:
             DurableToolExecutionRequest,
             DurableToolExecutor,
             DurableToolExecutorContractError,
+            _resolve_official_execution_guard,
+            _same_execution_guard_chain,
         )
 
         if not isinstance(context, HarnessContext):
@@ -1626,6 +1723,28 @@ class ContextRuntime:
             raise DurableToolExecutorContractError(
                 "durable tool preparation has no bootstrap guard binding"
             )
+        lease, root_guard, guard_chain = _resolve_official_execution_guard(
+            guard_binding.guard
+        )
+        session_id = str(context.state.session_state.session_id or "").strip()
+        if session_id != guard_binding.execution_id:
+            raise DurableToolExecutorContractError(
+                "durable tool session changed after bootstrap binding"
+            )
+        if (
+            guard_binding._authority is not _CONTEXT_EXECUTION_BINDING_AUTHORITY
+            or guard_binding.attempt != bundle.attempt
+            or root_guard is not guard_binding.root_guard
+            or root_guard.lease.execution_id != guard_binding.root_execution_id
+            or not _same_execution_guard_chain(guard_chain, guard_binding.chain)
+            or lease.execution_id != guard_binding.execution_id
+            or lease.owner_id != guard_binding.owner_id
+            or lease.fencing_token < guard_binding.fencing_token
+        ):
+            raise DurableToolExecutorContractError(
+                "durable tool bootstrap guard authority changed"
+            )
+        live_fence = lease.fence
 
         raw_tool_call = context.event.get("tool_call")
         if not isinstance(raw_tool_call, ToolCall):
@@ -1720,7 +1839,7 @@ class ContextRuntime:
                 terminal_handler_manifest_sha256=(
                     recorded_subject.terminal_handler_manifest_sha256
                 ),
-                execution_fence=guard_binding.guard.fence,
+                execution_fence=live_fence,
             )
             request = DurableToolExecutionRequest(
                 tool_name=tool_name,
@@ -1739,6 +1858,14 @@ class ContextRuntime:
                 artifacts=bundle.artifacts,
                 execution_guard=guard_binding.guard,
                 expected_guard_chain=guard_binding.chain,
+                bootstrap_binding=guard_binding,
+                completion_policy=(
+                    (lambda *, request, raw_draft, effective_arguments, artifacts:
+                        self.tool_completion_policy(context=context, request=request,
+                            raw_draft=raw_draft, effective_arguments=effective_arguments,
+                            artifacts=artifacts))
+                    if self.tool_completion_policy is not None else None
+                ),
             )
             permit_key = (*attempt_key, call_id)
             with self._tool_permit_lock:
@@ -1790,10 +1917,14 @@ class ContextRuntime:
         )
         from ..interaction.effects import build_tool_approval_continuation
         from ..interaction.requests import (
+            build_runtime_schema_subject,
             build_tool_approval_interaction_request,
             ensure_interaction_binding_matches,
         )
-        from ..tools.confirmation import prepare_tool_confirmation
+        from ..tools.confirmation import (
+            normalize_tool_arguments,
+            prepare_tool_confirmation,
+        )
         from ..tools.models import (
             ToolConfirmationResponse,
             ToolExecutionContext,
@@ -1823,27 +1954,223 @@ class ContextRuntime:
             turn_id=f"{bundle.attempt.attempt_id}:turn-{iteration}",
             run_state=context.state,
         )
-        confirmation = prepare_tool_confirmation(
-            toolkit=toolkit,
-            tool_call=trusted_tool_call,
-            execution_context=execution_context,
-            execution_guard=guard_binding.guard,
-        )
-        if confirmation.resolver_error is not None:
-            raise DurableToolExecutorContractError(
-                "durable tool approval policy resolver failed"
+        hook_resume_consumed = False
+        raw_resume_request = context.event.get("interaction_request")
+        if raw_resume_request is not None:
+            from ..interaction.durable import InteractionRequest
+            from ..skeleton.hooks_runtime import validate_hook_child_wait
+            try:
+                resume_request = InteractionRequest.from_dict(raw_resume_request)
+            except (TypeError, ValueError) as exc:
+                raise DurableToolExecutorContractError(
+                    "tool approval resume request is invalid"
+                ) from exc
+            subject = resume_request.subject
+            raw_hook_wait = subject.get("hook_child_wait") if type(subject) is dict else None
+            if raw_hook_wait is not None:
+                try:
+                    validate_hook_child_wait(raw_hook_wait,
+                        parent_call_id=call_id, parent_tool_name=tool_name)
+                except (TypeError, ValueError) as exc:
+                    raise DurableToolExecutorContractError(
+                        "Hook approval changed its durable parent binding"
+                    ) from exc
+                session_id = str(context.state.session_state.session_id or "").strip()
+                with self._bundle_lock:
+                    from ..interaction.runtime import DurableInteractionRuntime
+                    if (interaction_binding is None
+                            or session_id != interaction_binding.session_id
+                            or type(interaction_binding.receipt_reader) is not DurableInteractionRuntime
+                            or interaction_binding.receipt_reader.memory_runtime.store
+                            is not interaction_binding.memory_store):
+                        raise DurableToolExecutorContractError(
+                            "Hook approval interaction authority changed"
+                        )
+                    try:
+                        hook_snapshot = DurableInteractionRuntime.require_receipt(
+                            interaction_binding.receipt_reader, session_id)
+                    except InteractionNotPendingError:
+                        raise DurableToolExecutorContractError(
+                            "raw Hook approval cannot replace a durable receipt"
+                        ) from None
+                ensure_interaction_binding_matches(hook_snapshot.request, resume_request)
+                if (hook_snapshot.receipt is None
+                        or hook_snapshot.receipt.response != context.event.get("interaction_response")
+                        or resume_request.source_run_id != bundle.attempt.attempt_id
+                        or resume_request.session_id != session_id):
+                    raise DurableToolExecutorContractError(
+                        "Hook approval receipt changed its durable identity"
+                    )
+                expected_authority = {
+                    "schema": "unchain.context_tool_approval.v1",
+                    "intent_cursor": EventCursor(intent.store_seq, intent.event_id).to_dict(),
+                    "original_arguments_sha256": _canonical_digest(original_arguments),
+                    "route_kind": route.route_kind.value,
+                    "route_manifest_sha256": route.route_manifest_sha256,
+                    "terminal_handler_manifest_sha256": route.terminal_handler_manifest_sha256,
+                }
+                expected_subject = build_runtime_schema_subject(context.state,
+                    toolkit=toolkit, tool_name=tool_name,
+                    extra={"context_v2_tool_authority": expected_authority})
+                expected_subject["hook_child_wait"] = copy.deepcopy(raw_hook_wait)
+                if subject != expected_subject:
+                    raise DurableToolExecutorContractError(
+                        "Hook approval changed its tool authority"
+                    )
+                hook_resume_consumed = True
+        policy_result = None
+        policy_arguments = copy.deepcopy(original_arguments)
+        if self.tool_preparation_policy is not None:
+            try:
+                policy_arguments = normalize_tool_arguments(
+                    toolkit=toolkit,
+                    tool_call=trusted_tool_call,
+                    validate_schema=True,
+                )
+            except Exception as exc:
+                raise DurableToolExecutorContractError(
+                    "tool preparation policy requires valid tool arguments"
+                ) from exc
+        if self.tool_preparation_policy is not None:
+            try:
+                candidate = self.tool_preparation_policy(
+                    context=trusted_context,
+                    tool_call=ToolCall(
+                        call_id=call_id,
+                        name=tool_name,
+                        arguments=copy.deepcopy(policy_arguments),
+                    ),
+                    execution_context=execution_context,
+                )
+            except Exception as exc:
+                from ..subagents.types import SubagentWaitSignal
+                if not isinstance(exc, SubagentWaitSignal):
+                    raise
+                from ..interaction.durable import build_interaction_request
+                from ..skeleton.hooks_runtime import validate_hook_child_wait
+                try:
+                    child_request = validate_hook_child_wait(
+                        exc.request, parent_call_id=call_id, parent_tool_name=tool_name)
+                except (TypeError, ValueError) as error:
+                    raise DurableToolExecutorContractError(
+                        "Hook child wait is invalid"
+                    ) from error
+                if (exc.wait_id != child_request.interaction_id
+                        or exc.parent_tool_call != {"call_id": call_id, "tool_name": tool_name}
+                        or (hook_resume_consumed
+                            and exc.wait_id == raw_hook_wait["child_wait_id"])):
+                    raise DurableToolExecutorContractError(
+                        "Hook child wait changed its parent tool identity"
+                    )
+                authority_subject = {
+                    "schema": "unchain.context_tool_approval.v1",
+                    "intent_cursor": EventCursor(intent.store_seq, intent.event_id).to_dict(),
+                    "original_arguments_sha256": _canonical_digest(original_arguments),
+                    "route_kind": route.route_kind.value,
+                    "route_manifest_sha256": route.route_manifest_sha256,
+                    "terminal_handler_manifest_sha256": route.terminal_handler_manifest_sha256,
+                }
+                subject = build_runtime_schema_subject(context.state, toolkit=toolkit,
+                    tool_name=tool_name,
+                    extra={"context_v2_tool_authority": authority_subject})
+                subject["hook_child_wait"] = copy.deepcopy(exc.request)
+                revision = context.state.memory_state.get("session_revision")
+                if type(revision) is not int or revision < 0:
+                    revision = 0
+                projected = build_interaction_request(
+                    session_id=str(context.state.session_state.session_id or ""),
+                    kind=INTERACTION_KIND_TOOL_APPROVAL,
+                    source_run_id=bundle.attempt.attempt_id,
+                    occurrence=f"hook:{call_id}:{exc.wait_id}:{iteration}",
+                    payload=child_request.payload,
+                    response_contract=child_request.response_contract,
+                    created_revision=revision,
+                    subject=subject,
+                )
+                continuation = build_tool_approval_continuation(
+                    interaction_request=projected,
+                    payload=(copy.deepcopy(context.event.get("payload"))
+                             if isinstance(context.event.get("payload"), dict) else {}),
+                    response_format=context.event.get("response_format"),
+                    max_iterations=int(context.event.get("max_iterations") or 0),
+                    tool_calls=list(context.event.get("tool_calls") or []),
+                    batch_state=context.state.tool_batch_state.copy(),
+                    state=context.state,
+                    run_id=bundle.attempt.attempt_id,
+                    tool_exposure_plan=snapshot_durable_tool_exposure_plan(
+                        list(context.event.get("tool_runtime_plugins") or [])),
+                )
+                continuation["paused_call_id"] = call_id
+                return _new_tool_approval_pending(
+                    interaction_request=projected.to_dict(), continuation=continuation)
+            if type(candidate) is not ContextToolPreparationPolicyResult:
+                raise DurableToolExecutorContractError(
+                    "tool preparation policy returned an invalid result"
+                )
+            policy_result = candidate
+        prepared_tool_call = (
+            ToolCall(
+                call_id=call_id,
+                name=tool_name,
+                arguments=copy.deepcopy(policy_result.arguments),
             )
+            if policy_result is not None
+            else trusted_tool_call
+        )
 
-        effective_arguments = original_arguments
+        effective_arguments = copy.deepcopy(
+            original_arguments
+            if policy_result is None
+            else policy_result.arguments
+        )
         approval_state = DurableToolApprovalState.NOT_REQUIRED
         approval_request_sha256 = ""
         approval_receipt_sha256 = ""
         terminal_handler = route.terminal_handler
         terminal_handler_manifest_sha256 = route.terminal_handler_manifest_sha256
-        if confirmation.needs_confirmation_response:
+        if policy_result is not None and policy_result.blocked is not None:
+            blocked = copy.deepcopy(policy_result.blocked)
+
+            def terminal_handler(_effective_arguments):
+                return DurableToolCompletionDraft(
+                    result={"error": blocked, "tool": tool_name},
+                    should_observe=True,
+                )
+
+            terminal_handler_manifest_sha256 = _canonical_digest(
+                {
+                    "schema": "unchain.context_tool_terminal.v1",
+                    "terminal": {
+                        "kind": "policy_blocked",
+                        "tool_name": tool_name,
+                        "call_id": call_id,
+                        "blocked": blocked,
+                    },
+                }
+            )
+            confirmation = None
+        else:
+            confirmation = prepare_tool_confirmation(
+                toolkit=toolkit,
+                tool_call=prepared_tool_call,
+                execution_context=execution_context,
+                execution_guard=guard_binding.guard,
+                force_confirmation=(
+                    False
+                    if policy_result is None
+                    else policy_result.force_approval
+                ),
+                validate_arguments=policy_result is not None,
+            )
+            if confirmation.resolver_error is not None:
+                raise DurableToolExecutorContractError(
+                    "durable tool approval policy resolver failed"
+                )
+            effective_arguments = copy.deepcopy(confirmation.effective_arguments)
+        if confirmation is not None and confirmation.needs_confirmation_response:
             session_id = str(context.state.session_state.session_id or "").strip()
-            has_resume_request = "interaction_request" in context.event
-            has_resume_response = "interaction_response" in context.event
+            has_resume_request = "interaction_request" in context.event and not hook_resume_consumed
+            has_resume_response = "interaction_response" in context.event and not hook_resume_consumed
             if has_resume_request != has_resume_response:
                 raise DurableToolExecutorContractError(
                     "durable tool approval resume fields are incomplete"
@@ -1909,7 +2236,7 @@ class ContextRuntime:
             interaction_request = build_tool_approval_interaction_request(
                 state=context.state,
                 toolkit=toolkit,
-                tool_call=trusted_tool_call,
+                tool_call=prepared_tool_call,
                 confirmation_request=confirmation_request,
                 run_id=bundle.attempt.attempt_id,
                 source_request=source_request,
@@ -1958,7 +2285,20 @@ class ContextRuntime:
             if approval.approved:
                 approval_state = DurableToolApprovalState.APPROVED
                 if approval.modified_arguments is not None:
-                    effective_arguments = copy.deepcopy(approval.modified_arguments)
+                    try:
+                        effective_arguments = normalize_tool_arguments(
+                            toolkit=toolkit,
+                            tool_call=ToolCall(
+                                call_id=call_id,
+                                name=tool_name,
+                                arguments=approval.modified_arguments,
+                            ),
+                            validate_schema=True,
+                        )
+                    except Exception as exc:
+                        raise DurableToolExecutorContractError(
+                            "tool approval modified arguments are invalid"
+                        ) from exc
             else:
                 approval_state = DurableToolApprovalState.DENIED
                 denial_result = {
@@ -1983,7 +2323,7 @@ class ContextRuntime:
                         },
                     }
                 )
-        elif (
+        elif confirmation is not None and not hook_resume_consumed and (
             "interaction_request" in context.event
             or "interaction_response" in context.event
         ):
@@ -2001,7 +2341,7 @@ class ContextRuntime:
             route_kind=route.route_kind,
             route_manifest_sha256=route.route_manifest_sha256,
             terminal_handler_manifest_sha256=(terminal_handler_manifest_sha256),
-            execution_fence=guard_binding.guard.fence,
+            execution_fence=live_fence,
         )
         request = DurableToolExecutionRequest(
             tool_name=tool_name,
@@ -2020,6 +2360,14 @@ class ContextRuntime:
             artifacts=bundle.artifacts,
             execution_guard=guard_binding.guard,
             expected_guard_chain=guard_binding.chain,
+            bootstrap_binding=guard_binding,
+            completion_policy=(
+                (lambda *, request, raw_draft, effective_arguments, artifacts:
+                    self.tool_completion_policy(context=context, request=request,
+                        raw_draft=raw_draft, effective_arguments=effective_arguments,
+                        artifacts=artifacts))
+                if self.tool_completion_policy is not None else None
+            ),
         )
         invocation = executor.bind_invocation(
             request=request,
@@ -2050,6 +2398,92 @@ class ContextRuntime:
             self._prepared_tool_bindings[id(permit)] = binding
             self._prepared_tool_keys[permit_key] = id(permit)
         return permit
+
+    def _project_after_hook_child_wait(self, context, binding, bundle, wait):
+        """Suspend a sealed parent Tool while its after-Hook child asks approval."""
+        from ..interaction.durable import (
+            INTERACTION_KIND_TOOL_APPROVAL, build_interaction_request,
+        )
+        from ..interaction.effects import build_tool_approval_continuation
+        from ..journal import EventCursor
+        from ..journal.models import _thaw_json
+        from ..skeleton.hooks_runtime import validate_hook_child_wait
+        from ..subagents.types import SubagentWaitSignal
+        from ..tools.runtime import snapshot_durable_tool_exposure_plan
+        from .tool_boundary import _canonical_digest
+        from .tool_executor import DurableToolExecutorContractError
+        from ..interaction.requests import build_runtime_schema_subject
+
+        if not isinstance(wait, SubagentWaitSignal):
+            raise TypeError("Hook child suspension requires a typed wait")
+        request = binding.request
+        recovery = bundle.tool_boundary.sink.recover_tool_side_effect(request.call_id)
+        intent = recovery.intent_event
+        if intent is None or intent.event_type != "tool_call":
+            raise DurableToolExecutorContractError("after Hook wait has no parent intent")
+        child_request = validate_hook_child_wait(wait.request,
+            parent_call_id=request.call_id, parent_tool_name=request.tool_name)
+        if (wait.wait_id != child_request.interaction_id
+                or wait.parent_tool_call != {
+                    "call_id": request.call_id, "tool_name": request.tool_name,
+                } or recovery.sealed_event is None
+                or recovery.sealed_event.event_type != "tool.hook_raw.sealed"):
+            raise DurableToolExecutorContractError("after Hook wait changed parent Tool identity")
+        resume_request = context.event.get("interaction_request")
+        resume_subject = resume_request.get("subject") if type(resume_request) is dict else None
+        prior_wait = resume_subject.get("hook_child_wait") if type(resume_subject) is dict else None
+        if type(prior_wait) is dict and prior_wait.get("child_wait_id") == wait.wait_id:
+            raise DurableToolExecutorContractError("after Hook repeated the same child wait")
+        original_arguments = _thaw_json(intent.payload.get("arguments", {}))
+        route = binding.route
+        if route is not None and (
+            route.route_kind != request.subject.route_kind
+            or route.route_manifest_sha256 != request.subject.route_manifest_sha256
+            or route.terminal_handler_manifest_sha256
+            != request.subject.terminal_handler_manifest_sha256
+        ):
+            raise DurableToolExecutorContractError("after Hook route changed")
+        authority_subject = {
+            "schema": "unchain.context_tool_approval.v1",
+            "intent_cursor": EventCursor(intent.store_seq, intent.event_id).to_dict(),
+            "original_arguments_sha256": _canonical_digest(original_arguments),
+            "route_kind": request.subject.route_kind.value,
+            "route_manifest_sha256": request.subject.route_manifest_sha256,
+            "terminal_handler_manifest_sha256": request.subject.terminal_handler_manifest_sha256,
+        }
+        subject = build_runtime_schema_subject(context.state,
+            toolkit=context.event.get("toolkit"), tool_name=request.tool_name,
+            extra={"context_v2_tool_authority": authority_subject})
+        subject["hook_child_wait"] = copy.deepcopy(wait.request)
+        revision = context.state.memory_state.get("session_revision")
+        if type(revision) is not int or revision < 0:
+            revision = 0
+        projected = build_interaction_request(
+            session_id=str(context.state.session_state.session_id or ""),
+            kind=INTERACTION_KIND_TOOL_APPROVAL,
+            source_run_id=bundle.attempt.attempt_id,
+            occurrence=f"hook:{request.call_id}:{wait.wait_id}:{request.iteration}",
+            payload=child_request.payload,
+            response_contract=child_request.response_contract,
+            created_revision=revision,
+            subject=subject,
+        )
+        continuation = build_tool_approval_continuation(
+            interaction_request=projected,
+            payload=(copy.deepcopy(context.event.get("payload"))
+                     if isinstance(context.event.get("payload"), dict) else {}),
+            response_format=context.event.get("response_format"),
+            max_iterations=int(context.event.get("max_iterations") or 0),
+            tool_calls=list(context.event.get("tool_calls") or []),
+            batch_state=context.state.tool_batch_state.copy(),
+            state=context.state,
+            run_id=bundle.attempt.attempt_id,
+            tool_exposure_plan=snapshot_durable_tool_exposure_plan(
+                list(context.event.get("tool_runtime_plugins") or [])),
+        )
+        continuation["paused_call_id"] = request.call_id
+        return _new_tool_approval_pending(
+            interaction_request=projected.to_dict(), continuation=continuation)
 
     def execute_prepared_tool(self, context: HarnessContext, permit):
         """Consume one runtime-owned permit and return a sealed durable receipt."""
@@ -2097,6 +2531,9 @@ class ContextRuntime:
                 invocation=binding.invocation,
             )
         except Exception as error:
+            from ..subagents.types import SubagentWaitSignal
+            if isinstance(error, SubagentWaitSignal):
+                return self._project_after_hook_child_wait(context, binding, bundle, error)
             first_failure = self._latch_failure(attempt_key, error)
             if not first_failure:
                 self._raise_latched_failure(attempt_key)
@@ -2476,7 +2913,7 @@ class ContextRuntime:
         context: HarnessContext,
     ) -> ContextExecutionBundle:
         attempt_id = str(context.event.get("run_id") or "").strip()
-        execution_id = str(context.state.session_state.session_id or attempt_id).strip()
+        execution_id = self.execution_factory.execution_id_for_context(context)
         if not attempt_id or not execution_id:
             raise ContextExecutionBundleError(
                 "context compile has no bootstrap attempt binding"
@@ -2705,10 +3142,14 @@ class ContextRuntime:
             )
         bundle = self._bundle_for_event({"attempt_id": context.attempt_id})
         attempt = bundle.attempt
+        root_execution_id = attempt.generation.execution_id
         if (
             context.attempt_id != attempt.attempt_id
             or context.run_id != attempt.attempt_id
-            or context.execution_id != attempt.generation.execution_id
+            or not (
+                context.execution_id == root_execution_id
+                or context.execution_id.startswith(root_execution_id + ":")
+            )
             or (
                 context.generation_id
                 and context.generation_id != attempt.generation.generation_id
@@ -2962,9 +3403,28 @@ class ContextRuntime:
             ) from exc
         tool_calls = continuation.get("tool_calls")
         paused_call_id = str(continuation.get("paused_call_id") or "")
+        subject = request.subject
+        hook_wait = subject.get("hook_child_wait") if type(subject) is dict else None
+        parent_tool_name = request.payload.get("tool_name")
+        if hook_wait is not None:
+            from ..skeleton.hooks_runtime import validate_hook_child_wait
+            parent_call = hook_wait.get("parent_tool_call") if type(hook_wait) is dict else None
+            parent_tool_name = parent_call.get("tool_name") if type(parent_call) is dict else None
+            try:
+                child_request = validate_hook_child_wait(hook_wait,
+                    parent_call_id=paused_call_id, parent_tool_name=parent_tool_name)
+            except (TypeError, ValueError) as exc:
+                raise ContextExecutionBundleError(
+                    "provider tool resume has an invalid Hook child wait"
+                ) from exc
+            if (request.payload != child_request.payload
+                    or request.response_contract != child_request.response_contract):
+                raise ContextExecutionBundleError(
+                    "provider tool resume changed the Hook child approval"
+                )
         if (
             request.kind != INTERACTION_KIND_TOOL_APPROVAL
-            or request.session_id != bundle.attempt.generation.execution_id
+            or request.session_id != context.execution_id
             or request.source_run_id != bundle.attempt.attempt_id
             or continuation.get("type") != "tool_approval_continuation"
             or continuation.get("interaction_id") != request.interaction_id
@@ -2975,7 +3435,7 @@ class ContextRuntime:
             or not any(
                 isinstance(item, Mapping)
                 and item.get("call_id") == paused_call_id
-                and item.get("name") == request.payload.get("tool_name")
+                and item.get("name") == parent_tool_name
                 for item in tool_calls
             )
         ):
