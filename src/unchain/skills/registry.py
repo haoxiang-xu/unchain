@@ -611,6 +611,40 @@ class SkillRegistry:
             metadata=dict(record.metadata),
         )
 
+    def get_exact(self, identity: SkillIdentity) -> LoadedSkill | None:
+        """Read an authored identity without applying name/alias precedence.
+
+        Enumerate configured sources, never open a caller-supplied source_id.
+        This separate scan does not change the ordinary name-resolution cache.
+        """
+        diagnostics: list[SkillDiagnostic] = []
+        candidates: list[_Candidate] = []
+        seen_real_paths: set[Path] = set()
+        for root in self.roots():
+            if root.source != identity.source or not root.path.is_dir():
+                continue
+            try:
+                entries = sorted(root.path.iterdir(), key=lambda item: item.name)
+            except OSError:
+                continue
+            for entry in entries:
+                _scan_root_entry(root, entry, seen_real_paths, diagnostics, candidates)
+        _scan_toolkit_skills(
+            self.runtime_toolkit, diagnostics, candidates, self.config.extra_skills
+        )
+        matches = [candidate for candidate in candidates if candidate.identity == identity]
+        if len(matches) != 1:
+            return None
+        candidate = matches[0]
+        # Exact reads do not publish slash-command aliases.
+        summary = SkillSummary(
+            identity=candidate.identity, description=candidate.description,
+            rank=candidate.rank, path=candidate.path, base_dir=candidate.base_dir,
+            model_invocable=candidate.model_invocable, user_invocable=candidate.user_invocable,
+        )
+        return LoadedSkill(summary, candidate.body, candidate.revision,
+                           tools=candidate.tools, metadata=dict(candidate.metadata))
+
     def resolve(self, token: str) -> SkillSummary | None:
         inventory = self.list()
         stripped = token[1:] if token.startswith("/") else token

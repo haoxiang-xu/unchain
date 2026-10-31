@@ -289,6 +289,14 @@ class SkeletonSkillRuntime:
                 _fail("identity_mismatch", ("skill",), "Skill reader identity changed")
             from unchain.skills.models import SkillIdentity, SkillSummary
             return LoadedSkill(SkillSummary(SkillIdentity(**actual), "loaded skill", 0, None, None), raw["body"], raw["revision"])
+        get_exact = getattr(self.registry, "get_exact", None)
+        if callable(get_exact):
+            from unchain.skills.models import SkillIdentity
+            requested = SkillIdentity(**identity)
+            loaded = get_exact(requested)
+            if type(loaded) is not LoadedSkill or loaded.summary.identity != requested:
+                _fail("identity_mismatch", ("skill",), "Skill identity is unavailable")
+            return loaded
         resolve = getattr(self.registry, "resolve", None)
         get = getattr(self.registry, "get", None)
         if not callable(resolve) or not callable(get):
