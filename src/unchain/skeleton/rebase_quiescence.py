@@ -14,7 +14,7 @@ from hashlib import sha256
 
 from unchain.context import ArtifactService, CanonicalSemanticEventProjector
 from unchain.journal import (
-    ArtifactRef, AttemptRef, JournalAppendRequest, JournalEvent,
+    ArtifactRef, AttemptRef, JournalAppendRequest, JournalEvent, SemanticEventDraft,
     build_operation_ref,
 )
 from unchain.journal.graph_attempt_quiescence import CANONICAL_ATTEMPT_TERMINALS
@@ -70,10 +70,9 @@ def _root_completion_audit(event, attempt):
     if (operation_id != "memory-curator-audit." + digest or len(digest) != 64
             or any(char not in "0123456789abcdef" for char in digest)):
         _reject("graph_root_audit")
-    request = JournalAppendRequest(event_id="memory-curator-audit-" + digest,
-        event_type=event.event_type, attempt=attempt,
-        operation=build_operation_ref(operation_id, domain=event.event_type, payload=payload),
-        payload=payload)
+    request = SemanticEventDraft(event_id="memory-curator-audit-" + digest,
+        event_type=event.event_type, attempt=attempt, operation_id=operation_id,
+        payload=payload).to_append_request()
     if not _matches_request(event, request):
         _reject("graph_root_audit")
 
