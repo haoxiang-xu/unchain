@@ -448,6 +448,14 @@ class DurableWorkflowRunner:
                     port = _mapped(lambda: select_case(value, cfg["cases"]),
                                    {"cases": self._config_path(node_id) + ("cases",),
                                     "value": self._config_path(node_id) + ("value",)})
+                if kind in {"if_else", "switch_case"}:
+                    # Seal the choice and untaken sibling edges in the same
+                    # Journal commit. A shared downstream node is never skipped.
+                    result = {"schema": "unchain.skeleton.branch_selection.v1", "node_id": node_id,
+                              "selected_edge_id": self.edges[(node_id, port)].id,
+                              "skipped_edges": [{"edge_id": edge.id, "status": "skipped"}
+                                                for (source, outlet), edge in self.edges.items()
+                                                if source == node_id and outlet != port]}
                 record = self._commit_node(record, node_id, resolved, result, port)
         except SkeletonValidationError as exc:
             # Only a pre-effect error or a saved-result mapping error is safely failed.
