@@ -392,7 +392,8 @@ class ToolExecutionHarness(BaseToolHarness):
         if (
             tool_call.call_id in batch_state.executed_call_ids
             or batch_state.awaiting_human_input
-            or context.state.run_status == "awaiting_interaction"
+            or context.state.run_status in {"awaiting_interaction", "awaiting_human_input"}
+            or context.state.run_status == "completed"
         ):
             return None
 

@@ -74,6 +74,23 @@ def test_json_read_only_shell_uses_the_same_policy(shell_toolkit):
     assert preparation.requires_confirmation is False
 
 
+def test_builtin_toolkit_subclass_prepares_a_confirmable_call(tmp_path):
+    core = CoreToolkit(workspace_root=str(tmp_path))
+    command = "'approved' | Set-Content probe.txt" if sys.platform.startswith("win") else "printf approved > probe.txt"
+    call = ToolCall(
+        call_id="builtin-subclass",
+        name="shell",
+        arguments={"action": "run", "command": command},
+    )
+    try:
+        preparation = prepare_tool_confirmation(toolkit=core, tool_call=call)
+        assert preparation.resolver_error is None
+        assert preparation.needs_confirmation_response
+        assert preparation.effective_arguments == {"action": "run", "command": command}
+    finally:
+        core.shutdown()
+
+
 @pytest.mark.parametrize("command", ["mkdir probe && touch probe/file", "cat > probe.txt <<'EOF'\nhello\nEOF"])
 def test_real_openai_adapter_produces_a_confirmable_shell_request(shell_toolkit, command):
     from unchain.providers import OpenAIModelIO

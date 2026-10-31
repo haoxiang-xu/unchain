@@ -64,6 +64,33 @@ class ToolConfirmationPreparation:
 _CONFIRMATION_RESPONSE_UNSET = object()
 
 
+def normalize_tool_arguments(
+    *,
+    toolkit: Toolkit,
+    tool_call: ToolCall,
+    validate_schema: bool = False,
+) -> dict[str, Any]:
+    """Parse one tool argument payload exactly as execution will parse it."""
+
+    if not isinstance(toolkit, Toolkit):
+        raise TypeError("toolkit must be a Toolkit")
+    if not isinstance(tool_call, ToolCall):
+        raise TypeError("tool_call must be a ToolCall")
+    if type(validate_schema) is not bool:
+        raise TypeError("validate_schema must be an exact boolean")
+    tool_obj = toolkit.get(tool_call.name)
+    arguments = copy.deepcopy(tool_call.arguments)
+    if tool_obj is not None:
+        arguments = copy.deepcopy(tool_obj._parse_arguments(arguments))
+    if not isinstance(arguments, dict):
+        raise ValueError("tool arguments must decode to an object")
+    if tool_obj is not None and validate_schema:
+        from jsonschema import Draft202012Validator
+
+        Draft202012Validator(tool_obj.to_json()["parameters"]).validate(arguments)
+    return arguments
+
+
 def _resolve_builtin_toolkit_owner(toolkit: Toolkit, tool_name: str) -> BuiltinToolkit | None:
     tool_obj = toolkit.get(tool_name)
     if tool_obj is None:
@@ -109,7 +136,13 @@ def prepare_tool_confirmation(
     tool_call: ToolCall,
     execution_context: ToolExecutionContext | None = None,
     execution_guard: ExecutionGuard | None = None,
+    force_confirmation: bool = False,
+    validate_arguments: bool = False,
 ) -> ToolConfirmationPreparation:
+    if type(force_confirmation) is not bool:
+        raise TypeError("force_confirmation must be an exact boolean")
+    if type(validate_arguments) is not bool:
+        raise TypeError("validate_arguments must be an exact boolean")
     tool_obj = toolkit.get(tool_call.name)
     should_observe = bool(tool_obj is not None and tool_obj.observe)
     effective_arguments = copy.deepcopy(tool_call.arguments)
@@ -121,9 +154,11 @@ def prepare_tool_confirmation(
             # Use the executor's parser before policy evaluation. Providers may
             # encode the same object as JSON; policy, UI and execution must see
             # the same arguments, including the existing JSON repair behavior.
-            effective_arguments = copy.deepcopy(tool_obj._parse_arguments(effective_arguments))
-            if not isinstance(effective_arguments, dict):
-                raise ValueError("tool arguments must decode to an object")
+            effective_arguments = normalize_tool_arguments(
+                toolkit=toolkit,
+                tool_call=tool_call,
+                validate_schema=validate_arguments,
+            )
         except ExecutionLeaseError:
             raise
         except Exception as exc:
@@ -158,6 +193,7 @@ def prepare_tool_confirmation(
 
     if confirmation_policy is not None:
         requires_confirmation = requires_confirmation and confirmation_policy.requires_confirmation
+    requires_confirmation = requires_confirmation or force_confirmation
 
     confirmation_request: ToolConfirmationRequest | None = None
     if tool_obj is not None and requires_confirmation:

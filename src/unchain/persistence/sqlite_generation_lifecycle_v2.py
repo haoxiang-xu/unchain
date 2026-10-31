@@ -23,8 +23,35 @@ from unchain.journal.models import (
 )
 from unchain.persistence.sqlite_v2 import (
     SQLiteContextV2Store,
+    existing_context_v2_readonly_connection,
     serialized_context_v2_database_access,
 )
+
+
+def read_existing_host_generation_binding(*, database_path, owner_chat_id, execution_id, session_id, attempt_id):
+    """Read a validated head and attempt atomically without initializing storage.
+
+    This can also run inside a journal write precondition: it acquires no
+    second write lock and the outer transaction prevents a concurrent rebase.
+    """
+    owner = _required_text(owner_chat_id, "owner_chat_id", identifier=True)
+    execution = _required_text(execution_id, "execution_id", identifier=True)
+    session = _required_text(session_id, "session_id", identifier=True)
+    attempt = _required_text(attempt_id, "attempt_id", identifier=True)
+    try:
+        with existing_context_v2_readonly_connection(database_path) as connection:
+            head_row = connection.execute("SELECT * FROM host_generation_heads WHERE owner_chat_id=?", (owner,)).fetchone()
+            binding_row = connection.execute("SELECT * FROM host_generation_attempt_bindings WHERE owner_chat_id=? AND execution_id=? AND attempt_id=?",
+                (owner, execution, attempt)).fetchone()
+            head = SQLiteHostGenerationLifecycleV2._head_from_row(head_row) if head_row is not None else None
+            binding = SQLiteHostGenerationLifecycleV2._attempt_binding_from_row(binding_row) if binding_row is not None else None
+            if head is not None and (head.execution_id != execution or head.session_id != session):
+                raise HostGenerationConflict("host generation read binding does not match durable scope")
+            if binding is not None and binding.session_id != session:
+                raise HostGenerationConflict("host generation attempt read binding does not match durable scope")
+            return head, binding
+    except sqlite3.Error as exc:
+        raise HostGenerationUnavailable("existing host generation read failed") from exc
 
 
 class HostGenerationLifecycleError(RuntimeError):

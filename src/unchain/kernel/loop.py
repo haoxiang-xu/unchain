@@ -1350,6 +1350,66 @@ class KernelLoop:
         else:
             state.iteration = next_iteration
 
+    def _dispatch_sealed_tool_recovery(
+        self, state, *, recovered, payload, response_format, callback,
+        verbose, on_tool_confirm, on_human_input, max_iterations, toolkit,
+        run_id, tool_runtime_plugins, tool_runtime_config, execution_guard,
+    ):
+        """Complete a verified, already-sent provider Tool batch after a crash."""
+        if (type(recovered) is not tuple or len(recovered) != 2
+                or type(recovered[0]) is not int or recovered[0] < 0
+                or type(recovered[1]) is not ModelTurnResult
+                or not recovered[1].tool_calls):
+            raise ValueError("sealed Tool recovery requires an exact provider turn")
+        iteration, turn = recovered
+        if state.iteration != iteration:
+            raise ValueError("sealed Tool recovery changed provider iteration")
+        phase_event = {
+            "payload": dict(payload or {}), "toolkit": toolkit,
+            "callback": callback, "verbose": verbose, "run_id": run_id,
+            "emit_stream": True, "response_format": response_format,
+            "on_tool_confirm": on_tool_confirm, "on_human_input": on_human_input,
+            "max_iterations": max_iterations, "supports_tools": True,
+            "loop": self, "model_io": self._model_io,
+            "tool_runtime_plugins": list(tool_runtime_plugins or []),
+            "tool_runtime_config": copy.deepcopy(tool_runtime_config or {}),
+            "execution_guard": execution_guard, "turn_result": turn,
+        }
+        boundary = self.final_model_tool_boundary
+        if boundary is None:
+            raise InteractionIntegrityError("sealed Tool recovery has no final model boundary")
+        if execution_guard is not None:
+            execution_guard.assert_active()
+        boundary_context = _snapshot_final_model_tool_boundary_context(
+            state=state, event=phase_event, iteration=iteration,
+        )
+        preparation = boundary.prepare(boundary_context)
+        if self.final_model_tool_boundary is not boundary:
+            raise InteractionIntegrityError("sealed Tool recovery boundary changed")
+        if (type(preparation) is not FinalModelToolPreparation
+                or not isinstance(preparation.execution_toolkit, Toolkit)
+                or preparation.execution_binding is None):
+            raise InteractionIntegrityError("sealed Tool recovery has no Tool authority")
+        phase_event["toolkit"] = preparation.execution_toolkit
+        phase_event["tool_execution_binding"] = preparation.execution_binding
+        self.apply_model_turn(state, turn, created_by="kernel.recovered_model_turn")
+        tool_calls = list(state.pending_tool_calls)
+        if not tool_calls or tool_calls != list(turn.tool_calls):
+            raise InteractionIntegrityError("sealed Tool recovery changed provider calls")
+        for index, tool_call in enumerate(tool_calls):
+            if execution_guard is not None:
+                execution_guard.renew()
+            self.dispatch_phase(state, phase="on_tool_call", event={
+                **phase_event, "tool_call": tool_call,
+                "tool_call_index": index, "tool_calls": tool_calls,
+            })
+            if execution_guard is not None:
+                execution_guard.assert_active()
+        self.dispatch_phase(state, phase="after_tool_batch", event={
+            **phase_event, "tool_calls": tool_calls,
+        })
+        state.iteration = iteration + 1
+
     def _run_state(
         self,
         state: RunState,
@@ -1375,6 +1435,7 @@ class KernelLoop:
         run_bundle_purpose: str = "agent_turn",
         run_bundle_receipts: tuple["ProviderCallReceipt", ...] = (),
         provider_turn_ownership: Any = None,
+        recovered_tool_turn: Any = None,
     ) -> KernelRunResult:
         if self._model_io is None:
             raise RuntimeError("KernelLoop.model_io is not configured")
@@ -1406,6 +1467,17 @@ class KernelLoop:
                 tool_runtime_config=tool_runtime_config,
                 execution_guard=execution_guard,
             )
+        if recovered_tool_turn is not None:
+            self._dispatch_sealed_tool_recovery(
+                state, recovered=recovered_tool_turn, payload=payload,
+                response_format=response_format, callback=callback,
+                verbose=verbose, on_tool_confirm=on_tool_confirm,
+                on_human_input=on_human_input, max_iterations=max_iterations,
+                toolkit=runtime_toolkit, run_id=run_id,
+                tool_runtime_plugins=tool_runtime_plugins,
+                tool_runtime_config=tool_runtime_config,
+                execution_guard=execution_guard,
+            )
         state.run_ledger.assert_continuation_verified()
         self.emit_event(
             callback,
@@ -1413,6 +1485,13 @@ class KernelLoop:
             run_id,
             **build_run_started_payload(state),
         )
+        if state.run_status == "awaiting_interaction":
+            return finish_awaiting_interaction_run(
+                state, callback=callback, run_id=run_id,
+                dispatch_on_suspend=partial(
+                    self._dispatch_on_suspend, execution_guard=execution_guard,
+                ),
+            )
         effective_max = int(max_iterations)
         if (
             state.memory_state.get("execution_checkpoint_restored") is True
@@ -1682,6 +1761,28 @@ class KernelLoop:
                 )
                 continue
             if state.run_status == "awaiting_human_input":
+                from ..tools.runtime import decode_subagent_wait_marker
+                child_wait = decode_subagent_wait_marker(
+                    state.transcript[-1].get("content")
+                    if state.transcript and isinstance(state.transcript[-1], dict)
+                    else None
+                )
+                if child_wait is not None:
+                    from .results import build_kernel_run_result
+                    state.run_ledger.record_iteration_outcome(
+                        iteration=max(0, int(state.iteration) - 1),
+                        outcome="requested",
+                    )
+                    self.emit_event(
+                        callback,
+                        "response_received",
+                        run_id,
+                        **build_response_received_payload(state, turn),
+                    )
+                    return build_kernel_run_result(
+                        state,
+                        status="awaiting_human_input",
+                    )
                 pending_human_request = (
                     state.tool_batch_state.human_input_request
                 )
@@ -2014,7 +2115,15 @@ class KernelLoop:
         _run_bundle_purpose: str = "agent_turn",
         _run_bundle_receipts: tuple["ProviderCallReceipt", ...] = (),
         _provider_turn_ownership: Any = None,
+        _initial_iteration: int = 0,
+        _recovered_tool_turn: Any = None,
     ) -> KernelRunResult:
+        if (
+            isinstance(_initial_iteration, bool)
+            or not isinstance(_initial_iteration, int)
+            or _initial_iteration < 0
+        ):
+            raise ValueError("_initial_iteration must be a non-negative integer")
         plan = prepare_fresh_run_invocation(
             messages=messages,
             payload=payload,
@@ -2030,6 +2139,7 @@ class KernelLoop:
         )
         if isinstance(_provider_replay_frame, dict):
             set_provider_replay_frame(plan.state, _provider_replay_frame)
+        plan.state.iteration = _initial_iteration
         with self._scope_for_session(
             session_id=session_id,
             execution_guard=_execution_guard,
@@ -2056,6 +2166,7 @@ class KernelLoop:
                 run_bundle_purpose=_run_bundle_purpose,
                 run_bundle_receipts=_run_bundle_receipts,
                 provider_turn_ownership=_provider_turn_ownership,
+                recovered_tool_turn=_recovered_tool_turn,
             )
 
     def resume_human_input(
@@ -2255,6 +2366,7 @@ class KernelLoop:
         _run_bundle_purpose: str = "agent_turn",
         _run_bundle_receipts: tuple["ProviderCallReceipt", ...] = (),
         _provider_turn_ownership: Any = None,
+        _max_iterations_override: int | None = None,
     ) -> KernelRunResult:
         if self._interaction_runtime is None:
             raise InteractionNotPendingError(
@@ -2264,6 +2376,12 @@ class KernelLoop:
             raise InteractionNotPendingError(
                 "resume_interaction requires a non-empty session_id"
             )
+        if _max_iterations_override is not None and (
+            isinstance(_max_iterations_override, bool)
+            or not isinstance(_max_iterations_override, int)
+            or _max_iterations_override < 1
+        ):
+            raise ValueError("_max_iterations_override must be a positive integer")
 
         with self._scope_for_session(
             session_id=session_id,
@@ -2359,6 +2477,11 @@ class KernelLoop:
                 run_id=run_id,
                 run_id_factory=lambda: str(uuid.uuid4()),
             )
+            resume_max_iterations = (
+                _max_iterations_override
+                if _max_iterations_override is not None
+                else plan.max_iterations
+            )
             initialize_run_ledger(
                 plan.state,
                 run_id=plan.run_id,
@@ -2419,7 +2542,7 @@ class KernelLoop:
                     response_format=plan.response_format,
                     callback=callback,
                     verbose=verbose,
-                    max_iterations=plan.max_iterations,
+                    max_iterations=resume_max_iterations,
                     on_tool_confirm=on_tool_confirm,
                     on_human_input=on_human_input,
                     on_max_iterations=on_max_iterations,
@@ -2448,7 +2571,7 @@ class KernelLoop:
                     verbose=verbose,
                     on_tool_confirm=on_tool_confirm,
                     on_human_input=on_human_input,
-                    max_iterations=plan.max_iterations,
+                    max_iterations=resume_max_iterations,
                     toolkit=toolkit if toolkit is not None else Toolkit(),
                     run_id=plan.run_id,
                     tool_runtime_plugins=tool_runtime_plugins,
@@ -2480,7 +2603,7 @@ class KernelLoop:
                     response_format=plan.response_format,
                     callback=callback,
                     verbose=verbose,
-                    max_iterations=plan.max_iterations,
+                    max_iterations=resume_max_iterations,
                     on_tool_confirm=on_tool_confirm,
                     on_human_input=on_human_input,
                     on_max_iterations=on_max_iterations,
