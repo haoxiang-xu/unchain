@@ -186,6 +186,12 @@ class ContextBudgetExceededError(ContextCompilerError):
     """Mandatory context cannot fit or cannot be checkpointed safely."""
 
 
+class SemanticHistoryProjectionBudgetError(ContextBudgetExceededError):
+    """The local evidence representation exceeds its byte limit, not a model window."""
+
+    code = "context_semantic_history_projection_exceeded"
+
+
 class PinnedTaskStateBudgetError(ContextBudgetExceededError):
     """Pinned task state cannot fit even in its reference-only form."""
 
@@ -3342,6 +3348,81 @@ def _neutral_context(
     )
 
 
+def _historical_tool_evidence(
+    value: Any,
+    *,
+    ref: ResourceRef,
+    field_name: str,
+) -> Any:
+    """Keep a small evidence preview and a readable, exact durable source."""
+
+    original = _canonical_bytes(value)
+    candidate = {
+        "evidence_kind": f"historical_tool_{field_name}",
+        "preview": original.decode("utf-8")[:256],
+        "truncated": True,
+        # These describe the value being projected, not the reader's source:
+        # arguments are recovered inside a whole canonical event, while a
+        # result's durable artifact can predate its managed model projection.
+        "projected_value_bytes": len(original),
+        "projected_value_sha256": hashlib.sha256(original).hexdigest(),
+        "read_scope": (
+            "canonical_tool_call_event" if field_name == "arguments" else "full_tool_output"
+        ),
+        **context_content_read_handle(ref),
+    }
+    # A short value is already a better projection than its reference wrapper.
+    return candidate if len(_canonical_bytes(candidate)) < len(original) else _plain(value)
+
+
+def _compact_completed_history(
+    request: ContextCompileRequest,
+    payload: Mapping[str, Any],
+) -> tuple[dict[str, Any], int]:
+    """Shrink verbose closed exchanges without dropping records or changing the journal."""
+
+    events = tuple(_validated_projection_events(request))
+    batch = _current_completed_tool_batch(
+        request, projection_events=events, pending_inputs=_pending_inputs(request)
+    )
+    protected = set(batch.call_ids if batch is not None else ())
+    calls: dict[str, ResourceRef] = {}
+    results: dict[str, ResourceRef] = {}
+    for _index, raw, event in events:
+        if _interaction_is_child(event, root_attempt_id=request.attempt_id or ""):
+            continue
+        call_id = str(event.get("call_id") or event.get("tool_call_id") or "").strip()
+        if event.get("type") == "tool_call" and call_id:
+            event_id, _store_seq = _required_semantic_event_cursor(raw, event)
+            calls[call_id] = ResourceRef("context_event", event_id, 1)
+        elif event.get("type") == "tool_result" and call_id:
+            output_ref = _resource_ref(event.get("full_output_ref"))
+            if output_ref is None or output_ref.kind != "artifact":
+                raise ContextCompilerError("completed tool result has no readable source")
+            results[call_id] = output_ref
+
+    compacted = _plain(payload)
+    count = 0
+    for exchange in compacted.get("tool_exchanges", ()):
+        call_id = str(exchange["call_id"])
+        if call_id in protected or exchange.get("tool_name") == _CONTEXT_CONTENT_READER_TOOL:
+            # Keep the immediate result byte-for-byte and preserve older page
+            # cursors/EOF information introduced by the paging contract.
+            continue
+        if call_id not in calls or call_id not in results:
+            raise ContextCompilerError("historical tool evidence source is missing")
+        before = _canonical_bytes(exchange)
+        exchange["arguments"] = _historical_tool_evidence(
+            exchange.get("arguments"), ref=calls[call_id], field_name="arguments"
+        )
+        exchange["result"] = _historical_tool_evidence(
+            exchange.get("result"), ref=results[call_id], field_name="result"
+        )
+        if _canonical_bytes(exchange) != before:
+            count += 1
+    return compacted, count
+
+
 def _assemble(
     request: ContextCompileRequest,
     *,
@@ -3349,6 +3430,7 @@ def _assemble(
     journal_projection: _JournalMessageProjection | None = None,
     include_optional_history: bool = True,
     current_provider_turn: _CurrentProviderTurnProjection | None = None,
+    history_message_budget_tokens: int | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], list[str], tuple[int, ...]]:
     source: list[dict[str, Any]] = []
     for index, raw_message in enumerate(request.source_messages):
@@ -3404,15 +3486,6 @@ def _assemble(
         },
     }
     injected: list[dict[str, Any]] = []
-    if len(optional_payload) > 1:
-        optional_bytes, _ = _fingerprint(optional_payload)
-        if optional_bytes > _SEMANTIC_HISTORY_LIMIT:
-            raise ContextBudgetExceededError(
-                "semantic history exceeds the bounded inline projection"
-            )
-        history = _untrusted_message("MEMORY_V2_UNTRUSTED_HISTORY", optional_payload)
-        history[_INJECTED_MANDATORY_KEY] = True
-        injected.append(history)
     if len(pinned_payload) > 1:
         pinned = _untrusted_message(
             "MEMORY_V2_UNTRUSTED_PINNED_CONTEXT", pinned_payload
@@ -3430,11 +3503,52 @@ def _assemble(
         if not _is_system(message):
             break
         leading_system_count += 1
+
+    def assemble_history(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
+        history_messages = []
+        if len(payload) > 1:
+            history = _untrusted_message("MEMORY_V2_UNTRUSTED_HISTORY", payload)
+            history[_INJECTED_MANDATORY_KEY] = True
+            history_messages.append(history)
+        return (
+            source[:leading_system_count]
+            + history_messages
+            + injected
+            + source[leading_system_count:]
+            + native_tail
+        )
+
+    combined = assemble_history(optional_payload)
+    if len(optional_payload) > 1:
+        before_bytes, _ = _fingerprint(optional_payload)
+        before_tokens = _estimate(combined).total_tokens
+        compacted_count = 0
+        if before_bytes > _SEMANTIC_HISTORY_LIMIT or (
+            history_message_budget_tokens is not None
+            and before_tokens > history_message_budget_tokens
+        ):
+            optional_payload, compacted_count = _compact_completed_history(
+                request, optional_payload
+            )
+            combined = assemble_history(optional_payload)
+        after_bytes, _ = _fingerprint(optional_payload)
+        if after_bytes > _SEMANTIC_HISTORY_LIMIT:
+            raise SemanticHistoryProjectionBudgetError(
+                "Local semantic-history projection exceeds the "
+                f"{_SEMANTIC_HISTORY_LIMIT}-byte inline limit after safe evidence "
+                "compaction. Durable history is unchanged; its remaining "
+                "reference records cannot fit in this projection."
+            )
+        if compacted_count:
+            neutral["_semantic_history_diagnostics"] = {
+                "semantic_history_before_bytes": before_bytes,
+                "semantic_history_after_bytes": after_bytes,
+                "semantic_history_before_estimated_tokens": before_tokens,
+                "semantic_history_after_estimated_tokens": _estimate(combined).total_tokens,
+                "semantic_history_compacted_exchange_count": compacted_count,
+            }
     return (
-        source[:leading_system_count]
-        + injected
-        + source[leading_system_count:]
-        + native_tail,
+        combined,
         neutral,
         atomic_call_ids,
         consumed_event_indexes,
@@ -4208,6 +4322,9 @@ class ContextCompiler:
         if journal_projection is None:
             request = project_canonical_journal_messages(request)
         budget = request.budget or self._default_budget
+        history_message_budget_tokens = budget.pressure_threshold_tokens - max(
+            0, int(request.fixed_overhead_tokens or 0)
+        )
         if request.task_state_unavailable is not None:
             diagnostics = {
                 "status": "task_state_unavailable",
@@ -4271,6 +4388,7 @@ class ContextCompiler:
                 ),
                 journal_projection=journal_projection,
                 current_provider_turn=current_provider_turn,
+                history_message_budget_tokens=history_message_budget_tokens,
             )
             messages, reduction, checkpoint_requests = _reduce(
                 combined,
@@ -4301,6 +4419,7 @@ class ContextCompiler:
                 journal_projection=journal_projection,
                 include_optional_history=False,
                 current_provider_turn=current_provider_turn,
+                history_message_budget_tokens=history_message_budget_tokens,
             )
             recovered = False
             for minimum_cutoff in range(
@@ -4341,6 +4460,7 @@ class ContextCompiler:
                         ),
                         journal_projection=journal_projection,
                         current_provider_turn=current_provider_turn,
+                        history_message_budget_tokens=history_message_budget_tokens,
                     )
                     messages, reduction, checkpoint_requests = _reduce(
                         combined,
@@ -4357,16 +4477,27 @@ class ContextCompiler:
                 recovered = True
                 break
             if not recovered:
-                original_error.code = "context_budget_exceeded"
-                original_error.args = (
-                    f"{request.provider or 'model'}:{request.model or 'unknown'} "
-                    f"has a {budget.context_window_tokens}-token context window: "
-                    f"{original_error}. Reduce the input or selected tools, or choose "
-                    "a model with a larger context window.",
-                )
+                if not isinstance(original_error, SemanticHistoryProjectionBudgetError):
+                    original_error.code = "context_budget_exceeded"
+                    original_error.args = (
+                        f"{request.provider or 'model'}:{request.model or 'unknown'} "
+                        f"has a {budget.context_window_tokens}-token context window: "
+                        f"{original_error}. Reduce the input or selected tools, or choose "
+                        "a model with a larger context window.",
+                    )
                 raise original_error
+        history_diagnostics = neutral.get("_semantic_history_diagnostics", {})
         diagnostics = {
             **reduction,
+            **history_diagnostics,
+            "before_estimated_tokens": max(
+                reduction["before_estimated_tokens"],
+                history_diagnostics.get("semantic_history_before_estimated_tokens", 0),
+            ),
+            "compacted": bool(
+                reduction["compacted"]
+                or history_diagnostics.get("semantic_history_compacted_exchange_count")
+            ),
             "provider": request.provider or "",
             "model": request.model or "",
             "fixed_overhead_tokens": int(request.fixed_overhead_tokens or 0),
