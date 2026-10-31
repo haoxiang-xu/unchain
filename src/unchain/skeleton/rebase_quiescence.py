@@ -3,7 +3,8 @@
 This is deliberately not a terminal-event allowlist. Every graph receipt and
 its immutable artifacts must validate first. A native Kernel terminal may be
 followed only by its exact result receipt; a chat root terminal may be followed
-only by its exact End acknowledgement. Legacy attempts remain unclassified.
+by one validated completion audit and its exact End acknowledgement. Legacy
+attempts remain unclassified.
 """
 from __future__ import annotations
 
@@ -44,6 +45,37 @@ def _matches_request(event, request):
             and event.event_type == request.event_type and event.operation == request.operation
             and event.resource_refs == request.resource_refs
             and canonical_bytes(_thaw_json(event.payload)) == canonical_bytes(_thaw_json(request.payload)))
+
+
+def _root_completion_audit(event, attempt):
+    """Validate the existing Host's content-free v1 enqueue decision, not work."""
+    statuses = {"memory.curator.enqueued": "Enqueued", "memory.curator.noop": "NoOp",
+                "memory.curator.isolated": "Isolated", "memory.curator.failed": "Failed"}
+    payload = _thaw_json(event.payload)
+    keys = {"schema", "backend", "status", "enqueue_status", "reason", "trigger",
+            "run_id", "job_id", "candidate_count", "worker_status"}
+    status = statuses.get(event.event_type)
+    if (event.attempt != attempt or set(payload) != keys or status is None
+            or payload["schema"] != "pupu.memory_curator_completion.v1"
+            or payload["backend"] != "unchain" or payload["status"] != status
+            or payload["enqueue_status"] != status or payload["trigger"] != "completed_root_run"
+            or payload["run_id"] != attempt.attempt_id or type(payload["reason"]) is not str
+            or not payload["reason"] or type(payload["job_id"]) is not str
+            or type(payload["candidate_count"]) is not int or payload["candidate_count"] < 0
+            or payload["worker_status"] != ("Pending" if status == "Enqueued" else "NotScheduled")
+            or (status == "Enqueued" and not payload["job_id"])):
+        _reject("graph_root_audit")
+    operation_id = event.operation.operation_id
+    digest = operation_id.removeprefix("memory-curator-audit.")
+    if (operation_id != "memory-curator-audit." + digest or len(digest) != 64
+            or any(char not in "0123456789abcdef" for char in digest)):
+        _reject("graph_root_audit")
+    request = JournalAppendRequest(event_id="memory-curator-audit-" + digest,
+        event_type=event.event_type, attempt=attempt,
+        operation=build_operation_ref(operation_id, domain=event.event_type, payload=payload),
+        payload=payload)
+    if not _matches_request(event, request):
+        _reject("graph_root_audit")
 
 
 def _native_completion(events, journal, attempt, *, parent_id=None, expected_message=None,
@@ -292,6 +324,11 @@ def _classify(events, journal):
         if native is not None:
             final, terminal = native
             outputs = store.read_json(end["output_ref"])
+            root_seal = [final, terminal]
+            if len(after_end) == 4 and after_end[2].event_type.startswith("memory.curator."):
+                _root_completion_audit(after_end[2], store.attempt)
+                root_seal.append(after_end[2])
+            root_seal.append(chain[-1].event)
             if (len(state["call_stack"]) != 1 or not state["root_committed"]
                     or type(outputs.get("message")) is not str
                     or final.payload["content"] != outputs["message"]
@@ -299,7 +336,7 @@ def _classify(events, journal):
                     or completed_receipt.event.store_seq >= final.store_seq
                     or len(chain) < 2 or chain[-2] != completed_receipt
                     or chain[-1].event.store_seq <= terminal.store_seq
-                    or after_end != [final, terminal, chain[-1].event]):
+                    or after_end != root_seal):
                 _reject("graph_root_seal")
         elif after_end:
             # A standalone root acknowledgement has no native chat terminal;
