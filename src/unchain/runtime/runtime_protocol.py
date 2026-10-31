@@ -318,14 +318,17 @@ _PROTOCOLS = (
     RuntimeProtocol(
         id="skeleton_execution",
         major=1,
-        minor=1,
+        minor=4,
         features=(
             "code_python_v1",
             "draft_diagnostics_v1",
             "durable_exclusive_dag_v2",
             "end_only_root_completion_v1",
             "explicit_bindings_v1",
+            "hook_embedded_workflow_v1",
+            "hook_enable_v1",
             "hook_phase_receipts_v1",
+            "hook_tool_set_v1",
             "kernel_profiles_v1",
             "legacy_conversion_v1",
             "non_llm_workflow_v1",

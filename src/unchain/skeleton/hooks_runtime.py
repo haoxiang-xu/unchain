@@ -5,6 +5,7 @@ from copy import deepcopy
 from typing import Any, Callable
 
 from .errors import SkeletonValidationError
+from .hooks_config import hook_matches_tool
 from .io import _validate_json
 
 
@@ -158,7 +159,7 @@ class SkeletonBeforeToolHookDispatcher:
             hook = binding.hook
             if hook["event"] != "before_tool_call":
                 continue
-            if hook["tool_name"] is not None and hook["tool_name"] != tool_call.name:
+            if not hook_matches_tool(hook["tool_name"], tool_call.name):
                 continue
             if self._run_hook_workflow is None:
                 return ContextToolPreparationPolicyResult(
@@ -257,6 +258,117 @@ class SkeletonBeforeToolHookDispatcher:
         )
 
 
+def _replay_after_denial_history(phases, binding, inputs, historical_result):
+    """Replay only the known denial-marker variant of an old pinned input.
+
+    The phase reader remains exact. A different parent, argument, revision or
+    raw value cannot become admissible by trying the historical marker alone.
+    """
+    from .hook_phase_journal import _digest
+
+    try:
+        return phases.replay(binding, "after_tool_call", inputs), inputs
+    except SkeletonValidationError as error:
+        if error.code != "identity_mismatch":
+            raise
+        historical_inputs = deepcopy(inputs)
+        historical_inputs["visible_result"] = deepcopy(historical_result)
+        current_business = deepcopy(inputs["visible_result"])
+        historical_business = deepcopy(historical_result)
+        current_business.pop("denied", None)
+        historical_business.pop("denied", None)
+        if (inputs["visible_result"].get("denied") is not True
+                or _digest(inputs) == _digest(historical_inputs)
+                or _digest(current_business) != _digest(historical_business)):
+            raise
+        decision = phases.replay(binding, "after_tool_call", historical_inputs)
+        if decision is None:
+            raise error
+        return decision, historical_inputs
+
+
+def _pinned_after_denial_inputs(runner, binding, inputs, historical_result,
+                                parent_context, parent_store):
+    """Admit only the current input or its one known historical marker variant.
+
+    The host supplies existing fixed bytes, not authority to change them. The
+    original child create and phase receipt validators still check that choice.
+    No failed child invocation is retried with alternate inputs.
+    """
+    from .hook_phase_journal import _digest
+
+    reader = getattr(runner, "read_pinned_inputs", None)
+    if reader is None:
+        return inputs
+    if not callable(reader):
+        _fail("identity_mismatch", ("hooks", binding.hook["id"]),
+              "Hook fixed-input reader is invalid")
+    pinned = reader(binding=binding, inputs=deepcopy(inputs),
+        parent_context=parent_context, parent_store=parent_store)
+    if pinned is None:
+        return inputs
+    if type(pinned) is not dict:
+        _fail("identity_mismatch", ("hooks", binding.hook["id"]),
+              "Hook fixed inputs must be an object")
+    _validate_json(pinned, ("hooks", binding.hook["id"], "inputs"))
+    if _digest(pinned) == _digest(inputs):
+        return inputs
+    historical = deepcopy(inputs)
+    historical["visible_result"] = deepcopy(historical_result)
+    current_business = deepcopy(inputs["visible_result"])
+    historical_business = deepcopy(historical_result)
+    current_business.pop("denied", None)
+    historical_business.pop("denied", None)
+    if (inputs["visible_result"].get("denied") is not True
+            or _digest(current_business) != _digest(historical_business)
+            or _digest(pinned) != _digest(historical)):
+        _fail("identity_mismatch", ("hooks", binding.hook["id"]),
+              "Hook fixed input differs from its sealed denial history")
+    return deepcopy(pinned)
+
+
+def _retain_sealed_denial_result(artifacts, sealed_event, current, historical):
+    """Keep an exact result already claimed before an interrupted publication.
+
+    A failed descriptor probe is not proof of a historical result. A different
+    descriptor must match the current protected result instead, or fail. The
+    unchanged finalizer still verifies the artifact operation and its bytes.
+    """
+    from unchain.context.artifacts import ArtifactIntegrityError
+    from unchain.context.ports import ContextScopeError
+    from unchain.journal.models import _thaw_json
+    from .hook_phase_journal import _digest
+
+    if _digest(current) == _digest(historical):
+        return current
+    if artifacts.execution_id != sealed_event.attempt.generation.execution_id:
+        raise SkeletonValidationError("identity_mismatch", ("hooks",),
+            "Hook result artifact escaped its sealed execution")
+    subject_sha256 = _thaw_json(sealed_event.payload)["execution_subject_sha256"]
+    operation_id = "artifact.tool-result." + subject_sha256
+    prepared = artifacts.prepare_json_value(historical, operation_id=operation_id,
+        operation_binding={"kind": "tool_result_full_output"})
+    try:
+        content = artifacts.read_full(prepared.artifact,
+            remaining_budget_bytes=prepared.artifact.byte_length)
+    except ContextScopeError:
+        # This deterministic, execution-scoped artifact has not been claimed.
+        return current
+    except ArtifactIntegrityError:
+        # A protected writer may already have claimed the same operation.
+        # Verify it, rather than swallowing a damaged/unrelated old result.
+        protected = artifacts.prepare_json_value(current, operation_id=operation_id,
+            operation_binding={"kind": "tool_result_full_output"})
+        content = artifacts.read_full(protected.artifact,
+            remaining_budget_bytes=protected.artifact.byte_length)
+        if content != protected.sanitized:
+            raise ArtifactIntegrityError("sealed Hook result bytes changed")
+        return current
+    if content != prepared.sanitized:
+        raise ArtifactIntegrityError("historical Hook result bytes changed")
+    return deepcopy(historical)
+
+
 class SkeletonAfterToolHookDispatcher:
     """Run pinned after Hooks before a parent result becomes visible."""
 
@@ -279,12 +391,12 @@ class SkeletonAfterToolHookDispatcher:
         from .hook_phase_journal import HookPhaseJournal, _digest
         from .hook_raw_seal import HookRawSealStore
         from unchain.context.tool_executor import DurableToolCompletionDraft
+        from unchain.context.tool_boundary import DurableToolApprovalState
         from unchain.journal.models import _thaw_json
 
         matching = [binding for binding in self._bindings
             if binding.hook["event"] == "after_tool_call"
-            and (binding.hook["tool_name"] is None
-                 or binding.hook["tool_name"] == request.tool_name)]
+            and hook_matches_tool(binding.hook["tool_name"], request.tool_name)]
         if not matching:
             return raw_draft
         manifest_sha256 = _digest([{
@@ -295,12 +407,15 @@ class SkeletonAfterToolHookDispatcher:
         } for binding in matching])
         raw_seal = HookRawSealStore(self._parent_store, self._parent_context,
             manifest_sha256=manifest_sha256)
-        raw_seal.record(request, raw_draft, artifacts, effective_arguments)
+        resuming_seal = raw_seal.load(request, artifacts) is not None
+        sealed = raw_seal.record(request, raw_draft, artifacts, effective_arguments)
         raw = _thaw_json(raw_draft.result)
         if type(raw) is not dict:
             raise SkeletonValidationError("invalid_type", ("hooks", "raw_result"),
                 "after Hook requires an object tool result")
         visible = deepcopy(raw)
+        historical_visible = deepcopy(raw)
+        approval_denied = request.subject.approval_state is DurableToolApprovalState.DENIED
         raw_available = True
         phases = HookPhaseJournal(self._parent_store, self._parent_context,
             call_id=request.call_id, tool_name=request.tool_name)
@@ -317,8 +432,17 @@ class SkeletonAfterToolHookDispatcher:
                 "raw_result": deepcopy(raw) if raw_available else {},
                 "visible_result": deepcopy(visible),
             }
-            decision = phases.replay(binding, "after_tool_call", inputs)
+            if resuming_seal and approval_denied:
+                decision, phase_inputs = _replay_after_denial_history(
+                    phases, binding, inputs, historical_visible)
+            else:
+                decision = phases.replay(binding, "after_tool_call", inputs)
+                phase_inputs = inputs
             if decision is None:
+                if resuming_seal and approval_denied:
+                    phase_inputs = _pinned_after_denial_inputs(
+                        self._run_hook_workflow, binding, inputs, historical_visible,
+                        self._parent_context, self._parent_store)
                 resume_request = context.event.get("interaction_request")
                 subject = resume_request.get("subject") if type(resume_request) is dict else None
                 hook_wait = subject.get("hook_child_wait") if type(subject) is dict else None
@@ -329,20 +453,30 @@ class SkeletonAfterToolHookDispatcher:
                     else None
                 )
                 decision = self._run_hook_workflow(
-                    binding=binding, inputs=inputs,
+                    binding=binding, inputs=phase_inputs,
                     parent_context=self._parent_context,
                     parent_store=self._parent_store,
                     **({"hook_resume": resume} if resume is not None else {}),
                 )
             try:
                 visible = apply_after_decision(visible, decision, ("hooks", hook["id"]))
+                historical_visible = apply_after_decision(
+                    historical_visible, decision, ("hooks", hook["id"]))
             except SkeletonValidationError as error:
                 raise SkeletonValidationError("hook_invalid_decision",
                     ("hooks", hook["id"]),
                     "after Hook produced an invalid decision") from error
-            phases.record(binding, "after_tool_call", inputs, decision)
+            phases.record(binding, "after_tool_call", phase_inputs, decision)
+            if approval_denied:
+                # Hooks may redact the result, but cannot turn a durable user
+                # denial into apparent success. Keep only this control fact;
+                # never restore private fields removed by a replacement.
+                visible["denied"] = True
             if decision["decision"] == "replace":
                 raw_available = False
+        if resuming_seal and approval_denied:
+            visible = _retain_sealed_denial_result(
+                artifacts, sealed[0], visible, historical_visible)
         return DurableToolCompletionDraft(
             result=visible,
             should_observe=raw_draft.should_observe,
