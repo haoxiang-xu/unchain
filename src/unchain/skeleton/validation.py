@@ -217,6 +217,27 @@ def _diagnose_draft_tree(document: Any, *, depth: int) -> tuple[SkeletonDiagnost
                     "Agent preparation requires agent kind")
 
     for node_index, node in enumerate(skeleton["nodes"]):
+        if node["type"] == "hooks_pool" and skeleton["kind"] == "agent":
+            hooks = node["config"].get("hooks")
+            for hook_index, hook in enumerate(hooks if type(hooks) is list else []):
+                workflow = hook.get("workflow") if type(hook) is dict else None
+                if type(workflow) is not dict or workflow.get("kind") != "embedded":
+                    continue
+                prefix = ("document", "nodes", node_index, "config", "hooks",
+                          hook_index, "workflow", "document")
+                if "document" not in workflow:
+                    _diagnostic(diagnostics, "missing_field", prefix, "required field is missing")
+                    continue
+                body = workflow["document"]
+                try:
+                    if type(body) is dict and body.get("kind") != "workflow":
+                        raise SkeletonValidationError("wrong_kind", ("document", "kind"),
+                                                      "embedded Hook requires Workflow kind")
+                    child_diagnostics = _diagnose_draft_tree(body, depth=0)
+                except SkeletonValidationError as exc:
+                    child_diagnostics = (SkeletonDiagnostic(exc.code, exc.path, str(exc)),)
+                diagnostics.extend(SkeletonDiagnostic(item.code, prefix + item.path[1:], item.message)
+                                   for item in child_diagnostics)
         if node["type"] != "subagent_pool":
             continue
         entries = node["config"].get("subagents")

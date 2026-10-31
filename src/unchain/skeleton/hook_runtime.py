@@ -23,11 +23,20 @@ def _fail(code: str, path: tuple[str | int, ...], message: str) -> None:
 
 
 @dataclass(frozen=True)
+class EmbeddedHookWorkflow:
+    """A definition-derived run identity, never a published Store revision."""
+
+    workflow_id: str
+    revision_id: str
+    document: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class PinnedHookWorkflow:
     """One closed Hook entry plus its exact executable Workflow revision."""
 
     hook: dict[str, Any]
-    workflow: PublishedWorkflow
+    workflow: PublishedWorkflow | EmbeddedHookWorkflow
     plan: PreparedWorkflowPlan
 
 
@@ -60,21 +69,31 @@ class SkeletonHookRuntime:
                 hook_ids.add(hook_id)
                 path = hook_path + ("workflow",)
                 reference = hook["workflow"]
-                workflow_id = reference["workflow_id"]
-                revision_id = reference["revision_id"]
-                try:
-                    published = resolver(workflow_id, revision_id)
-                except SkeletonValidationError:
-                    raise
-                except Exception as exc:
-                    raise SkeletonValidationError(
-                        "resource_unavailable", path,
-                        "published Hook Workflow revision is unavailable",
-                    ) from exc
-                if type(published) is not PublishedWorkflow:
-                    _fail("invalid_type", path, "Hook resolver returned an invalid Workflow revision")
-                if published.workflow_id != workflow_id or published.revision_id != revision_id:
-                    _fail("identity_mismatch", path, "resolved Hook Workflow changed identity")
+                embedded = reference.get("kind") == "embedded"
+                if embedded:
+                    from .agent_preparation import execution_definition_digest
+                    embedded_plan = prepare_workflow(reference["document"])
+                    workflow_id = embedded_plan.document_id
+                    if workflow_id == self.plan.document_id:
+                        _fail("recursive_reference", path, "embedded Hook repeats its parent definition id")
+                    revision_id = "embedded-sha256-" + execution_definition_digest(embedded_plan)
+                    published = EmbeddedHookWorkflow(workflow_id, revision_id, embedded_plan.snapshot())
+                else:
+                    workflow_id = reference["workflow_id"]
+                    revision_id = reference["revision_id"]
+                    try:
+                        published = resolver(workflow_id, revision_id)
+                    except SkeletonValidationError:
+                        raise
+                    except Exception as exc:
+                        raise SkeletonValidationError(
+                            "resource_unavailable", path,
+                            "published Hook Workflow revision is unavailable",
+                        ) from exc
+                    if type(published) is not PublishedWorkflow:
+                        _fail("invalid_type", path, "Hook resolver returned an invalid Workflow revision")
+                    if published.workflow_id != workflow_id or published.revision_id != revision_id:
+                        _fail("identity_mismatch", path, "resolved Hook Workflow changed identity")
                 if type(published.document) is not dict or published.document.get("kind") != "workflow":
                     _fail("wrong_kind", path, "Hook resolved a non-Workflow resource")
                 try:
@@ -87,7 +106,7 @@ class SkeletonHookRuntime:
                     _fail("identity_mismatch", path + ("workflow_id",), "Hook definition id differs from resource id")
                 bindings.append(PinnedHookWorkflow(
                     hook=deepcopy(hook),
-                    workflow=PublishedWorkflow(workflow_id, revision_id, deepcopy(published.document)),
+                    workflow=type(published)(workflow_id, revision_id, deepcopy(published.document)),
                     plan=workflow_plan,
                 ))
             self._by_kernel[kernel_id] = tuple(bindings)
@@ -96,7 +115,7 @@ class SkeletonHookRuntime:
         """Return detached, stable-order Hook dependencies for one Kernel node."""
         return tuple(PinnedHookWorkflow(
             hook=deepcopy(binding.hook),
-            workflow=PublishedWorkflow(
+            workflow=type(binding.workflow)(
                 binding.workflow.workflow_id,
                 binding.workflow.revision_id,
                 deepcopy(binding.workflow.document),

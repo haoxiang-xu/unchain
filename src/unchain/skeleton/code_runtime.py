@@ -467,7 +467,8 @@ class SkeletonCodeRuntime:
     @staticmethod
     def _command(profile: PythonEnvironmentProfile, request: Path, result: Path) -> list[str]:
         if profile.kind == "venv" or (profile.kind == "bundled" and len(profile.command) == 1):
-            return [profile.command[0], "-I", "-c", _WORKER_SOURCE, str(request), str(result)]
+            # -I ignores PYTHONDONTWRITEBYTECODE; keep imported runtime files unchanged.
+            return [profile.command[0], "-I", "-B", "-c", _WORKER_SOURCE, str(request), str(result)]
         return [*profile.command, str(request), str(result)]
 
     @staticmethod
