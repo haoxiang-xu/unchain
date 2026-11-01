@@ -2410,7 +2410,7 @@ class ContextRuntime:
         from ..skeleton.hooks_runtime import validate_hook_child_wait
         from ..subagents.types import SubagentWaitSignal
         from ..tools.runtime import snapshot_durable_tool_exposure_plan
-        from .tool_boundary import _canonical_digest
+        from .tool_boundary import DurableToolApprovalState, _canonical_digest
         from .tool_executor import DurableToolExecutorContractError
         from ..interaction.requests import build_runtime_schema_subject
 
@@ -2436,11 +2436,22 @@ class ContextRuntime:
             raise DurableToolExecutorContractError("after Hook repeated the same child wait")
         original_arguments = _thaw_json(intent.payload.get("arguments", {}))
         route = binding.route
+        expected_terminal = route.terminal_handler_manifest_sha256 if route is not None else None
+        if request.subject.approval_state is DurableToolApprovalState.DENIED:
+            # A denial substitutes its own terminal before after-Hooks run.
+            # Match that exact terminal, never the unexecuted Tool handler.
+            expected_terminal = _canonical_digest({
+                "schema": "unchain.context_tool_terminal.v1",
+                "terminal": {
+                    "kind": "approval_denied",
+                    "tool_name": request.tool_name,
+                    "call_id": request.call_id,
+                },
+            })
         if route is not None and (
             route.route_kind != request.subject.route_kind
             or route.route_manifest_sha256 != request.subject.route_manifest_sha256
-            or route.terminal_handler_manifest_sha256
-            != request.subject.terminal_handler_manifest_sha256
+            or expected_terminal != request.subject.terminal_handler_manifest_sha256
         ):
             raise DurableToolExecutorContractError("after Hook route changed")
         authority_subject = {
