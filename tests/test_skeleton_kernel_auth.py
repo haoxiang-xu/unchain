@@ -36,6 +36,7 @@ def test_real_anthropic_sdk_sends_only_the_fixed_authentication_mode(auth_mode, 
     made = []
     def factory(**kwargs):
         made.append(deepcopy(kwargs))
+        assert sum(kwargs.get(key) is not None for key in ("api_key", "auth_token")) == 1
         return anthropic.Anthropic(**kwargs,
             http_client=httpx.Client(transport=httpx.MockTransport(respond)))
 
@@ -49,9 +50,10 @@ def test_real_anthropic_sdk_sends_only_the_fixed_authentication_mode(auth_mode, 
     assert len(requests) == 1
     assert made[0]["max_retries"] == 0
     assert made[0]["base_url"] == config["profile"]["endpoint"]
-    # Explicitly suppress the SDK's other environment-driven auth source.
-    assert made[0]["api_key"] == ("" if selected_auth == "bearer" else "sentinel-fixed")
-    assert made[0]["auth_token"] == ("sentinel-fixed" if selected_auth == "bearer" else "")
+    # One explicit argument on new SDKs; Omit keeps the alternate header out
+    # even when an older SDK reads the alternate environment credential.
+    assert made[0]["api_key"] == (None if selected_auth == "bearer" else "sentinel-fixed")
+    assert made[0]["auth_token"] == ("sentinel-fixed" if selected_auth == "bearer" else None)
     assert "sentinel-fixed" not in repr(binding)
 
 

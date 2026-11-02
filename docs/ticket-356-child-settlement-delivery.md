@@ -39,7 +39,7 @@ and profile digests. Protocol-specific modes: Responses=bearer;
 Anthropic=x-api-key|bearer; Gemini=api-key; Ollama=none|bearer. Known native
 brands retain their existing mode; absence preserves legacy profiles verbatim.
 Unsupported header/custom authentication fails explicitly. Authenticated SDK
-construction clears both ambient Anthropic auth inputs and explicitly omits
+construction pins one explicit Anthropic credential argument and explicitly omits
 the unselected HTTP header. Endpoints and max_retries remain pinned. Real SDK
 HTTPX no-socket tests cover both modes, hostile environment auth and byte-exact
 header identity. Minor6 advertises kernel_profile_auth_v1; old minors remain
@@ -50,3 +50,18 @@ valid for their old contracts but do not authorize the updated Host.
 requires minor>=4 plus its exact features; the dedicated protocol test still
 asserts the complete current minor6 manifest exactly. No runtime contract was
 weakened to satisfy an obsolete version pin.
+
+
+The a95444c full CI found 3 real-SDK authentication failures (5678 passed,
+17 skipped,5 xfailed). Its newer SDK rejects simultaneously passing api_key
+and auth_token even when one is empty. Correct by selecting exactly one non-null
+argument and explicitly omitting the alternate HTTP header. Older SDKs may read
+an alternate ambient credential into the SDK object, but Omit prevents that
+header from reaching the wire; the tests poison both environment variables.
+Do not claim older SDKs never read the alternate environment variable. CI now
+runs these bounded protocol/auth checks before the unchanged full suite.
+
+Process exception: the existing auth test gained its explicit single-credential
+assertion before a dedicated impact query on that test symbol. The production
+factory had pre-edit impact LOW. Record the test-only sequencing error openly;
+subsequent impact/text corroboration is not a retroactive pre-edit receipt.

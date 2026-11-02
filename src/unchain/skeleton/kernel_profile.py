@@ -182,10 +182,11 @@ def _pinned_anthropic_factory(factory: Callable[..., Any], endpoint: str, auth_m
         from anthropic import omit
 
         options = dict(kwargs)
-        # Empty strings suppress environment fallback in the real SDK; None
-        # would read ANTHROPIC_API_KEY/AUTH_TOKEN and mix two profiles.
-        options["api_key"] = api_key if auth_mode == "x-api-key" else ""
-        options["auth_token"] = api_key if auth_mode == "bearer" else ""
+        # New SDKs admit only one explicit credential. Older SDKs may read the
+        # alternate environment value for None, so explicitly omit its wire
+        # header below rather than sending either an ambient or empty header.
+        options["api_key"] = api_key if auth_mode == "x-api-key" else None
+        options["auth_token"] = api_key if auth_mode == "bearer" else None
         headers = {key: value for key, value in dict(options.get("default_headers") or {}).items()
                    if key.lower() not in {"authorization", "x-api-key"}}
         headers["X-Api-Key" if auth_mode == "bearer" else "Authorization"] = omit
