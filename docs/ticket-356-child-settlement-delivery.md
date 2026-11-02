@@ -76,3 +76,13 @@ credentials. A first test-only attempt used Timeout.__module__, but re-exported
 class metadata is shared/mutable across SDKs; that 3-failure log is retained.
 A misconstructed narrow-test argument list ran no tests and is retained too.
 Fresh CI must pass on the installed newer SDK before acceptance.
+
+3e97c0f CI passed the SDK transport seam, but found two real wire failures:
+Anthropic2.4 sends api_key via Authorization, while these retained profiles
+explicitly require X-Api-Key. The pinned factory now writes the selected header
+as well as omitting the alternate header, independent of SDK defaults. No SDK
+pin, credential fallback or product-wide provider change. Both the real-SDK
+wire controls and the exact factory-options test retain the selected mode;
+local old-SDK regression74/74. The new SDK full CI remains required.
+Primary source corroboration: https://raw.githubusercontent.com/anthropics/anthropic-sdk-python/main/src/anthropic/_client.py
+(auth_headers/_api_key_auth). CI's installed SDK request is the actual evidence.

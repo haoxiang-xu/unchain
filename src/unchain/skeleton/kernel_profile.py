@@ -189,6 +189,10 @@ def _pinned_anthropic_factory(factory: Callable[..., Any], endpoint: str, auth_m
         options["auth_token"] = api_key if auth_mode == "bearer" else None
         headers = {key: value for key, value in dict(options.get("default_headers") or {}).items()
                    if key.lower() not in {"authorization", "x-api-key"}}
+        # SDK releases differ in api_key's default wire header. The fixed
+        # profile, rather than that SDK default, owns both authentication keys.
+        headers["Authorization" if auth_mode == "bearer" else "X-Api-Key"] = (
+            f"Bearer {api_key}" if auth_mode == "bearer" else api_key)
         headers["X-Api-Key" if auth_mode == "bearer" else "Authorization"] = omit
         options["default_headers"] = headers
         options["base_url"] = endpoint
