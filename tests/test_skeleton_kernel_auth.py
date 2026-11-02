@@ -1,9 +1,9 @@
 """A fixed Kernel must preserve the selected endpoint's authentication mode."""
 from copy import deepcopy
+import importlib
 import json
 
 import anthropic
-import httpx
 import pytest
 
 from unchain.skeleton.errors import SkeletonValidationError
@@ -14,6 +14,12 @@ from tests.test_skeleton_kernel_profile import _config
 
 @pytest.mark.parametrize("auth_mode", [None, "bearer", "x-api-key"])
 def test_real_anthropic_sdk_sends_only_the_fixed_authentication_mode(auth_mode, monkeypatch):
+    # Use the SDK's public HTTP implementation: old and new SDKs use different
+    # transport packages, whose Client/Timeout objects are not interchangeable.
+    transport_package = next(base.__module__.split(".")[0]
+        for base in anthropic.DefaultHttpxClient.__mro__
+        if base.__module__.split(".")[0] in {"httpx", "httpx2"})
+    http = importlib.import_module(transport_package)
     config = _config(provider="custom.route", protocol="anthropic")
     if auth_mode is not None:
         config["profile"]["auth_mode"] = auth_mode
@@ -29,7 +35,7 @@ def test_real_anthropic_sdk_sends_only_the_fixed_authentication_mode(auth_mode, 
         assert request.headers.get("authorization") == ("Bearer sentinel-fixed" if selected_auth == "bearer" else None)
         assert request.headers.get("x-api-key") == ("sentinel-fixed" if selected_auth == "x-api-key" else None)
         assert json.loads(request.content)["model"] == "model-a"
-        return httpx.Response(200, json={"id": "msg_offline", "type": "message", "role": "assistant",
+        return http.Response(200, json={"id": "msg_offline", "type": "message", "role": "assistant",
             "model": "model-a", "content": [{"type": "text", "text": "ok"}],
             "stop_reason": "end_turn", "stop_sequence": None, "usage": {"input_tokens": 1, "output_tokens": 1}})
 
@@ -38,13 +44,16 @@ def test_real_anthropic_sdk_sends_only_the_fixed_authentication_mode(auth_mode, 
         made.append(deepcopy(kwargs))
         assert sum(kwargs.get(key) is not None for key in ("api_key", "auth_token")) == 1
         return anthropic.Anthropic(**kwargs,
-            http_client=httpx.Client(transport=httpx.MockTransport(respond)))
+            http_client=anthropic.DefaultHttpxClient(transport=http.MockTransport(respond)))
 
     binding = bind_kernel_profile(config,
         profile_resolver=lambda _id: deepcopy(config["profile"]),
         credential_resolver=lambda _ref: "sentinel-fixed",
         client_factories={"hyperspace": factory})
-    with binding.model_io._client_factory(api_key=binding.model_io.api_key) as sdk:
+    timeout = binding.model_io._ANTHROPIC_TIMEOUT
+    assert isinstance(timeout, anthropic.Timeout)
+    assert timeout.as_dict() == {"connect": 10.0, "read": 600.0, "write": 30.0, "pool": 10.0}
+    with binding.model_io._client_factory(api_key=binding.model_io.api_key, timeout=timeout) as sdk:
         assert sdk.messages.create(model="model-a", max_tokens=4,
             messages=[{"role": "user", "content": "local only"}]).content[0].text == "ok"
     assert len(requests) == 1

@@ -65,3 +65,14 @@ Process exception: the existing auth test gained its explicit single-credential
 assertion before a dedicated impact query on that test symbol. The production
 factory had pre-edit impact LOW. Record the test-only sequencing error openly;
 subsequent impact/text corroboration is not a retroactive pre-edit receipt.
+
+157ab8e CI failed its fast check: 3 SDK tests injected httpx.Client into
+anthropic2.4.0, whose public client requires httpx2. Product timeout handling
+already uses the SDK public Timeout, preserving Hyperspace read600/connect10/
+write30/pool10. Test transport now follows DefaultHttpxClient base classes and
+passes that actual adapter timeout; it does not guess an SDK version or alter
+production admission. Old SDK local control16/16 passes with hostile ambient
+credentials. A first test-only attempt used Timeout.__module__, but re-exported
+class metadata is shared/mutable across SDKs; that 3-failure log is retained.
+A misconstructed narrow-test argument list ran no tests and is retained too.
+Fresh CI must pass on the installed newer SDK before acceptance.
