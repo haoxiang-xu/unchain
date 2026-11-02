@@ -31,3 +31,22 @@ The loaded producer declares `subagent_tool_settlement_projection_v1` in
 Skeleton protocol v1.5. The Host independently requires that manifest feature
 and minor; neither a module-presence check nor a source/Git allowlist substitutes
 for compatibility admission. Other protocols retain their exact wire values.
+
+
+BC-356-CLOSE-004 / SEQ-356-CLOSE-004 extends original M3/AC007/008/011/014:
+Kernel profile gains optional closed auth_mode, bound into immutable definition
+and profile digests. Protocol-specific modes: Responses=bearer;
+Anthropic=x-api-key|bearer; Gemini=api-key; Ollama=none|bearer. Known native
+brands retain their existing mode; absence preserves legacy profiles verbatim.
+Unsupported header/custom authentication fails explicitly. Authenticated SDK
+construction clears both ambient Anthropic auth inputs and explicitly omits
+the unselected HTTP header. Endpoints and max_retries remain pinned. Real SDK
+HTTPX no-socket tests cover both modes, hostile environment auth and byte-exact
+header identity. Minor6 advertises kernel_profile_auth_v1; old minors remain
+valid for their old contracts but do not authorize the updated Host.
+
+91745f90 full CI found one stale Hooks test asserting minor==4 (5664 passed,
+1 failed,17 skipped,5 xfailed). Keep that failure. That compatibility test now
+requires minor>=4 plus its exact features; the dedicated protocol test still
+asserts the complete current minor6 manifest exactly. No runtime contract was
+weakened to satisfy an obsolete version pin.

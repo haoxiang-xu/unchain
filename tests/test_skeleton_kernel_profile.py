@@ -271,6 +271,9 @@ def test_sdk_factories_pin_endpoint_and_disable_sdk_retries_without_secret_leaka
     else:
         expected |= {"base_url": "https://profile.example/v1", "max_retries": 0,
                      "http_options": {"timeout": 12, "retry_options": {"attempts": 99}}}
+        if transport in {"anthropic", "hyperspace"}:
+            from anthropic import omit
+            expected |= {"auth_token": "", "default_headers": {"Authorization": omit}}
     assert seen == [expected]
     assert "secret-value" not in repr(binding)
 

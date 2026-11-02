@@ -23,6 +23,7 @@ SKELETON_FEATURES = [
     "hook_enable_v1",
     "hook_phase_receipts_v1",
     "hook_tool_set_v1",
+    "kernel_profile_auth_v1",
     "kernel_profiles_v1",
     "legacy_conversion_v1",
     "non_llm_workflow_v1",
@@ -91,7 +92,7 @@ def _expected_skeleton_protocol():
         "features": SKELETON_FEATURES,
         "id": "skeleton_execution",
         "major": 1,
-        "minor": 5,
+        "minor": 6,
     }
 
 
@@ -102,7 +103,7 @@ def test_actual_runtime_advertises_exact_closed_skeleton_execution_v1():
     assert protocol == _expected_skeleton_protocol()
     assert type(protocol["major"]) is int
     assert type(protocol["minor"]) is int
-    assert len(protocol["features"]) == len(set(protocol["features"])) == 19
+    assert len(protocol["features"]) == len(set(protocol["features"])) == 20
     assert protocol["features"] == sorted(
         protocol["features"], key=lambda item: item.encode("utf-8"),
     )
