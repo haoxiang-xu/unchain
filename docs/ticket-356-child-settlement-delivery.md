@@ -26,3 +26,8 @@ The existing wheel 17b04aea lacks this module and is prior evidence only for
 this path. Build and verify one replacement wheel and the corresponding Host
 sidecar before deployment/acceptance. Do not relabel the old pair as passing.
 Evidence is recorded in PuPu #356 and its direct close implementation plan.
+
+The loaded producer declares `subagent_tool_settlement_projection_v1` in
+Skeleton protocol v1.5. The Host independently requires that manifest feature
+and minor; neither a module-presence check nor a source/Git allowlist substitutes
+for compatibility admission. Other protocols retain their exact wire values.
