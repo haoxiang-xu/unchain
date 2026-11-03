@@ -13,7 +13,7 @@ import json
 from types import MappingProxyType
 from typing import Any, Callable, Mapping
 
-from .kernel_config import validate_kernel_config
+from .kernel_config import effective_kernel_auth_mode, validate_kernel_config
 
 
 _NATIVE_PROTOCOLS = {
@@ -177,6 +177,30 @@ def _pinned_gemini_factory(factory: Callable[..., Any], endpoint: str) -> Callab
     return create
 
 
+def _pinned_anthropic_factory(factory: Callable[..., Any], endpoint: str, auth_mode: str) -> Callable[..., Any]:
+    def create(*, api_key: str, **kwargs: Any) -> Any:
+        from anthropic import omit
+
+        options = dict(kwargs)
+        # New SDKs admit only one explicit credential. Older SDKs may read the
+        # alternate environment value for None, so explicitly omit its wire
+        # header below rather than sending either an ambient or empty header.
+        options["api_key"] = api_key if auth_mode == "x-api-key" else None
+        options["auth_token"] = api_key if auth_mode == "bearer" else None
+        headers = {key: value for key, value in dict(options.get("default_headers") or {}).items()
+                   if key.lower() not in {"authorization", "x-api-key"}}
+        # SDK releases differ in api_key's default wire header. The fixed
+        # profile, rather than that SDK default, owns both authentication keys.
+        headers["Authorization" if auth_mode == "bearer" else "X-Api-Key"] = (
+            f"Bearer {api_key}" if auth_mode == "bearer" else api_key)
+        headers["X-Api-Key" if auth_mode == "bearer" else "Authorization"] = omit
+        options["default_headers"] = headers
+        options["base_url"] = endpoint
+        options["max_retries"] = 0
+        return factory(**options)
+    return create
+
+
 def _pinned_ollama_stream(
     stream_factory: Callable[..., Any], endpoint: str, credential: str | None
 ) -> Callable[..., Any]:
@@ -233,6 +257,7 @@ def bind_kernel_profile(
     admitted = _config_snapshot(config)
     profile = _resolve_profile(admitted, profile_resolver)
     transport = _transport_for(profile)
+    auth_mode = effective_kernel_auth_mode(profile)
     if not callable(credential_resolver):
         raise TypeError("credential_resolver must be callable")
     if client_factories is not None and type(client_factories) is not dict:
@@ -246,7 +271,9 @@ def bind_kernel_profile(
             raise TypeError("client factory must be callable")
 
     raw_credential = credential_resolver(profile["credential_ref"])
-    if transport == "ollama" and raw_credential is None:
+    if profile.get("auth_mode") == "none" and raw_credential is not None:
+        raise ValueError("credential-free profile cannot supply a credential")
+    if transport == "ollama" and auth_mode == "none" and raw_credential is None:
         credential: str | None = None
     elif isinstance(raw_credential, str) and raw_credential.strip():
         credential = raw_credential
@@ -281,8 +308,8 @@ def bind_kernel_profile(
 
         model_io = AnthropicModelIO(
             model=profile["model"], api_key=credential,
-            client_factory=_pinned_sdk_factory(
-                factory if callable(factory) else anthropic.Anthropic, endpoint
+            client_factory=_pinned_anthropic_factory(
+                factory if callable(factory) else anthropic.Anthropic, endpoint, auth_mode
             ),
             default_payloads=defaults, model_capabilities=capabilities,
         )
@@ -292,8 +319,8 @@ def bind_kernel_profile(
 
         model_io = HyperspaceModelIO(
             model=profile["model"], api_key=credential, base_url=endpoint,
-            client_factory=_pinned_sdk_factory(
-                factory if callable(factory) else anthropic.Anthropic, endpoint
+            client_factory=_pinned_anthropic_factory(
+                factory if callable(factory) else anthropic.Anthropic, endpoint, auth_mode
             ),
             default_payloads=defaults, model_capabilities=capabilities,
         )

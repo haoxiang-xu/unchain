@@ -318,7 +318,7 @@ _PROTOCOLS = (
     RuntimeProtocol(
         id="skeleton_execution",
         major=1,
-        minor=4,
+        minor=6,
         features=(
             "code_python_v1",
             "draft_diagnostics_v1",
@@ -329,6 +329,7 @@ _PROTOCOLS = (
             "hook_enable_v1",
             "hook_phase_receipts_v1",
             "hook_tool_set_v1",
+            "kernel_profile_auth_v1",
             "kernel_profiles_v1",
             "legacy_conversion_v1",
             "non_llm_workflow_v1",
@@ -337,6 +338,7 @@ _PROTOCOLS = (
             "skill_read_v1",
             "structured_output_v1",
             "subagent_graphs_v1",
+            "subagent_tool_settlement_projection_v1",
             "tool_call_v1",
         ),
     ),

@@ -8,6 +8,20 @@ from .errors import SkeletonValidationError
 from .io import _closed_object, _validate_json
 
 
+_AUTH_MODES = {
+    "openai-responses": ("bearer",),
+    "anthropic": ("x-api-key", "bearer"),
+    "gemini": ("api-key",),
+    "ollama": ("none", "bearer"),
+}
+_NATIVE_AUTH = {"openai": "bearer", "anthropic": "x-api-key", "gemini": "api-key", "ollama": "none", "hyperspace": "x-api-key"}
+
+
+def effective_kernel_auth_mode(profile):
+    """Read an already-validated profile; absence preserves its old default."""
+    return profile.get("auth_mode", _AUTH_MODES[profile["protocol"]][0])
+
+
 def validate_kernel_config(value, path=("kernel",)):
     _validate_json(value, path)
     config = _closed_object(value, path, {
@@ -21,12 +35,18 @@ def validate_kernel_config(value, path=("kernel",)):
     profile = _closed_object(config["profile"], path + ("profile",), {
         "id", "provider", "model", "protocol", "endpoint", "credential_ref",
         "context_window", "output_limit", "capabilities",
-    })
+    }, {"auth_mode"})
     for key in ("id", "provider", "model", "protocol", "endpoint", "credential_ref"):
         if type(profile[key]) is not str or not profile[key].strip() or profile[key] != profile[key].strip():
             reject("invalid_value", ("profile", key))
     if profile["protocol"] not in {"openai-responses", "anthropic", "gemini", "ollama"}:
         reject("unsupported_capability", ("profile", "protocol"))
+    if "auth_mode" in profile:
+        mode = profile["auth_mode"]
+        if (type(mode) is not str or mode not in _AUTH_MODES[profile["protocol"]]
+                or (profile["provider"].lower() in _NATIVE_AUTH
+                    and mode != _NATIVE_AUTH[profile["provider"].lower()])):
+            reject("unsupported_capability", ("profile", "auth_mode"))
     try:
         endpoint = urlsplit(profile["endpoint"])
         if (endpoint.scheme not in {"https", "http"} or not endpoint.hostname

@@ -973,13 +973,25 @@ class SkeletonKernelHandler:
             message_index=message_index,
         ))
         if parent_tool_call is not None:
-            self._persist_child_tool_settlement(
+            settlement = self._persist_child_tool_settlement(
                 bundle,
                 source_attempt=source_attempt,
                 completion=completion,
                 parent_tool_call=parent_tool_call,
                 receipt=receipt,
             )
+            if self.callback is not None:
+                from unchain.events.subagent_settlement import build_subagent_settlement_projection
+                context.assert_current()
+                self.callback({
+                    "type": "subagent_tool_settled",
+                    "run_id": bundle.attempt.attempt_id,
+                    "node_id": context.node_id,
+                    "parent_run_id": self.store.attempt.attempt_id,
+                    "settlement": build_subagent_settlement_projection(
+                        settlement, full_output=full_output,
+                    ),
+                })
 
     def _verify_child_terminal_completion(self, *, source_attempt, terminal_event, completion):
         """Bind a parent handoff to the child's committed End receipt."""
@@ -1105,6 +1117,7 @@ class SkeletonKernelHandler:
             or event.resource_refs != request.resource_refs
         ):
             raise ValueError("child tool settlement durable receipt changed")
+        return event
 
     @staticmethod
     def _verified_child_settlement_output(bundle, *, source_attempt, completion, receipt):

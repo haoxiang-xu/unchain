@@ -1,0 +1,54 @@
+{
+  "source_file": "/Users/red/.codex/artifacts/pupu-357/cold-child-settlement-host-01-20261026/out/red-producer.json",
+  "source_sha256": "138fd39470c8ef91e58b73aaece052d7f3bb9e8df8bf31a1b5758161373d93cd",
+  "execution_id": "cold-settlement-stream",
+  "root_run_id": "skeleton-host-root",
+  "settlement_event": {
+    "event_id": "event.skeleton.subagent-tool-settlement.dec0bf1cc09ee36021185f38b703770eb0308c095c47c149d4f13dd456bcc61b",
+    "store_seq": 63,
+    "payload": {
+      "call_id": "subagent-call-cold-delegate",
+      "consumer_attempt": {
+        "attempt_id": "node-attempt.5a74caf13341f98996787b37c61d3ad0cb46bea3bddd4ee682633e0a88a698cc",
+        "generation": {
+          "execution_id": "cold-settlement-stream",
+          "generation_id": "pupu-bootstrap-generation-f1c73ad35a71d2de3ee17e1feb55a9db91ac031ba127fa3b389881a316cf131d",
+          "schema": "unchain.generation_ref.v1"
+        },
+        "schema": "unchain.attempt_ref.v1"
+      },
+      "error": "",
+      "full_output_ref": {
+        "fragment": "",
+        "id": "artifact-95d5c80460c3748f4d3293484157f4cbe93458d6c4d03f2435631111ffb82d77",
+        "kind": "artifact",
+        "revision": 1,
+        "schema": "unchain.resource_ref.v1"
+      },
+      "handoff_cursor": {
+        "event_id": "event-50b2038e24a029413e3b6dd686ddb632e9cdc4efb9c3f3a902ec10e2f8db2ddb",
+        "schema": "unchain.event_cursor.v1",
+        "store_seq": 61
+      },
+      "outputs": {
+        "evidence": "actual child End",
+        "message": "{\"answer\":\"child ready\"}"
+      },
+      "result_bytes": 205,
+      "result_sha256": "e7a6738467116267377903b7c6f99fbedb3649ad21f696aa95c51c9950252c27",
+      "schema": "unchain.skeleton_subagent_tool_settlement.v2",
+      "source_attempt": {
+        "attempt_id": "cold-settlement-stream:model.reviewer.1:9e1f67f4-5784-5527-a650-e97d2194a410",
+        "generation": {
+          "execution_id": "cold-settlement-stream",
+          "generation_id": "pupu-bootstrap-generation-f1c73ad35a71d2de3ee17e1feb55a9db91ac031ba127fa3b389881a316cf131d",
+          "schema": "unchain.generation_ref.v1"
+        },
+        "schema": "unchain.attempt_ref.v1"
+      },
+      "status": "completed",
+      "summary": "{\"answer\":\"child ready\"}",
+      "tool_name": "delegate_to_subagent"
+    }
+  }
+}

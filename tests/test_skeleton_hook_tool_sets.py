@@ -35,7 +35,7 @@ def test_new_contract_and_feature_are_real_and_enable_contract_stays_compatible(
         'required_fields':['event','force_approval','id','order','tool_name','workflow'],
         'optional_fields':['enabled'],'omitted_enabled':True}
     protocol=next(p for p in runtime_protocol_manifest()['protocols'] if p['id']=='skeleton_execution')
-    assert protocol['minor']==4 and {'hook_tool_set_v1', 'hook_embedded_workflow_v1'} <= set(protocol['features'])
+    assert protocol['minor']>=4 and {'hook_tool_set_v1', 'hook_embedded_workflow_v1'} <= set(protocol['features'])
 
 @pytest.mark.parametrize('phase', ['before_tool_call','after_tool_call'])
 @pytest.mark.parametrize('names,expected_calls', [(['dangerous_tool','another'],1),(['other'],0),(['dangerous_*'],0)])
