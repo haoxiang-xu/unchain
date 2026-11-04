@@ -772,13 +772,13 @@ class SubagentToolPlugin(ToolRuntimePlugin):
         captured_state = SubagentState()
         captured_item_ids: set[str] = set()
 
-        def _child_callback(event: dict[str, Any]) -> None:
+        def _observe_child_event(event: dict[str, Any]) -> bool:
             _assert_batch_active(batch_failure_event)
             if execution_guard is not None:
                 execution_guard.assert_active()
             if isinstance(event, dict):
                 if event.get("type") == "human_input_requested":
-                    return None
+                    return False
                 result_payload = event.get("result")
                 if (
                     event.get("type") == "tool_result"
@@ -795,6 +795,11 @@ class SubagentToolPlugin(ToolRuntimePlugin):
                             captured_item_ids.add(item_id)
                         board_id = str(item.get("board_id") or "default")
                         captured_state.blackboards.setdefault(board_id, []).append(item)
+            return True
+
+        def _child_callback(event: dict[str, Any]) -> None:
+            if not _observe_child_event(event):
+                return None
             if callable(callback):
                 callback(event)
 
@@ -887,6 +892,10 @@ class SubagentToolPlugin(ToolRuntimePlugin):
             if accepts_keyword("_execution_guard"):
                 guarded_run_kwargs["_execution_guard"] = child_execution_guard
             child_execution_guard.assert_active()
+        from ..skeleton.subagent_runtime import SkeletonSubagentAgent
+
+        if type(agent) is SkeletonSubagentAgent:
+            guarded_run_kwargs["_native_observation_gate"] = _observe_child_event
         try:
             result = agent.run(
                 input_messages,

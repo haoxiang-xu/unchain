@@ -70,7 +70,12 @@ class SkeletonSubagentAgent:
         )
 
     def run(self, messages, **kwargs):
-        return self.run_child(self, deepcopy(messages), dict(kwargs))
+        forwarded_kwargs = dict(kwargs)
+        if "_native_observation_gate" in forwarded_kwargs:
+            observation_gate = forwarded_kwargs["_native_observation_gate"]
+            if not callable(observation_gate):
+                raise TypeError("native observation gate must be callable")
+        return self.run_child(self, deepcopy(messages), forwarded_kwargs)
 
 
 class SkeletonSubagentRuntime:
