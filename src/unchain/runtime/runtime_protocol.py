@@ -318,7 +318,7 @@ _PROTOCOLS = (
     RuntimeProtocol(
         id="skeleton_execution",
         major=1,
-        minor=6,
+        minor=7,
         features=(
             "code_python_v1",
             "draft_diagnostics_v1",
@@ -338,6 +338,7 @@ _PROTOCOLS = (
             "skill_read_v1",
             "structured_output_v1",
             "subagent_graphs_v1",
+            "subagent_native_observation_v1",
             "subagent_tool_settlement_projection_v1",
             "tool_call_v1",
         ),
