@@ -88,6 +88,34 @@ def validate_json_resource(
             reject("bytes", limits.max_bytes, byte_count)
 
     def string_bytes(text: str) -> int:
+        if type(text) is str:
+            if not text:
+                return 2
+
+            if len(text) <= 4096:
+                try:
+                    size = len(json.encoder.encode_basestring(text).encode("utf-8"))
+                except UnicodeEncodeError:
+                    pass
+                else:
+                    if byte_count + size > limits.max_bytes:
+                        return limits.max_bytes + 1
+                    return size
+            else:
+                size = 2
+                try:
+                    for offset in range(0, len(text), 4096):
+                        encoded = json.encoder.encode_basestring(
+                            text[offset : offset + 4096]
+                        ).encode("utf-8")
+                        size += len(encoded) - 2
+                        if byte_count + size > limits.max_bytes:
+                            return limits.max_bytes + 1
+                except UnicodeEncodeError:
+                    pass
+                else:
+                    return size
+
         size = 2
         for character in text:
             codepoint = ord(character)
