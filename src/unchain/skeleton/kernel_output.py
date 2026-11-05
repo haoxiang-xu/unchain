@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from copy import deepcopy
 import json
 import math
+from threading import Lock
 from typing import Any
 
 from jsonschema import Draft202012Validator
@@ -43,6 +45,82 @@ _RESERVED_ROOT_PROPERTIES = frozenset({"message", "context"})
 # This matches the Skeleton JSON content limit without coupling output admission
 # to the durable execution protocol module.
 _MAX_JSON_BYTES = 8 * 1024 * 1024
+# Cache only successful native metaschema checks; admission still runs per call.
+_SCHEMA_META_CACHE_LIMIT = 64
+_SCHEMA_META_CACHE_MAX_BYTES = 16 * 1024
+_SCHEMA_META_CACHE: OrderedDict[bytes, None] = OrderedDict()
+_SCHEMA_META_CACHE_LOCK = Lock()
+_SCHEMA_META_CHECKER = Draft202012Validator.check_schema
+_SCHEMA_META_CLASS = Draft202012Validator
+_SCHEMA_META_SCHEMA = Draft202012Validator.META_SCHEMA
+_SCHEMA_META_FORMAT_CHECKER = Draft202012Validator.FORMAT_CHECKER
+_SCHEMA_META_SCHEMA_BYTES = json.dumps(
+    _SCHEMA_META_SCHEMA, ensure_ascii=False, allow_nan=False, separators=(",", ":")
+).encode("utf-8", "surrogatepass")
+_SCHEMA_META_FORMAT_CHECKS = {
+    name: (checker, type(raises), tuple(raises) if type(raises) is tuple else (raises,))
+    for name, (checker, raises) in _SCHEMA_META_FORMAT_CHECKER.checkers.items()
+}
+
+
+def _native_meta_configuration_matches() -> bool:
+    try:
+        encoded = json.dumps(
+            Draft202012Validator.META_SCHEMA,
+            ensure_ascii=False, allow_nan=False, separators=(",", ":"),
+        ).encode("utf-8", "surrogatepass")
+        if encoded != _SCHEMA_META_SCHEMA_BYTES:
+            return False
+        current = Draft202012Validator.FORMAT_CHECKER.checkers
+        if current.keys() != _SCHEMA_META_FORMAT_CHECKS.keys():
+            return False
+        for name, (checker, raises_type, exceptions) in _SCHEMA_META_FORMAT_CHECKS.items():
+            current_checker, raises = current[name]
+            if current_checker is not checker or type(raises) is not raises_type:
+                return False
+            current_exceptions = raises if type(raises) is tuple else (raises,)
+            if len(current_exceptions) != len(exceptions):
+                return False
+            if any(current is not expected for current, expected in zip(current_exceptions, exceptions)):
+                return False
+        return True
+    except (RecursionError, TypeError, ValueError, UnicodeError, AttributeError, KeyError):
+        # Configuration which cannot be snapshotted must use the native checker.
+        return False
+
+
+def _check_schema_meta(root: dict[str, Any], encoded: bytes) -> None:
+    checker = Draft202012Validator.check_schema
+    baseline = (
+        Draft202012Validator is _SCHEMA_META_CLASS
+        and Draft202012Validator.META_SCHEMA is _SCHEMA_META_SCHEMA
+        and Draft202012Validator.FORMAT_CHECKER is _SCHEMA_META_FORMAT_CHECKER
+        and getattr(checker, "__self__", None) is _SCHEMA_META_CLASS
+        and getattr(checker, "__func__", None) is _SCHEMA_META_CHECKER.__func__
+    )
+    if (not baseline or len(encoded) > _SCHEMA_META_CACHE_MAX_BYTES
+            or not _native_meta_configuration_matches()):
+        checker(root)
+        return
+    with _SCHEMA_META_CACHE_LOCK:
+        if encoded in _SCHEMA_META_CACHE:
+            _SCHEMA_META_CACHE.move_to_end(encoded)
+            return
+    # Concurrent misses may validate redundantly; do not serialize validation.
+    checker(root)
+    current = Draft202012Validator.check_schema
+    if (Draft202012Validator is not _SCHEMA_META_CLASS
+            or Draft202012Validator.META_SCHEMA is not _SCHEMA_META_SCHEMA
+            or Draft202012Validator.FORMAT_CHECKER is not _SCHEMA_META_FORMAT_CHECKER
+            or getattr(current, "__self__", None) is not _SCHEMA_META_CLASS
+            or getattr(current, "__func__", None) is not _SCHEMA_META_CHECKER.__func__
+            or not _native_meta_configuration_matches()):
+        return
+    with _SCHEMA_META_CACHE_LOCK:
+        _SCHEMA_META_CACHE[encoded] = None
+        _SCHEMA_META_CACHE.move_to_end(encoded)
+        while len(_SCHEMA_META_CACHE) > _SCHEMA_META_CACHE_LIMIT:
+            _SCHEMA_META_CACHE.popitem(last=False)
 
 
 def _fail(code: str, path: tuple[str | int, ...], message: str) -> None:
@@ -297,7 +375,7 @@ class _SchemaWalker:
         visit(self.root)
 
 
-def _enforce_schema_size(schema: Any) -> None:
+def _enforce_schema_size(schema: Any) -> bytes:
     try:
         encoded = json.dumps(
             schema,
@@ -311,12 +389,13 @@ def _enforce_schema_size(schema: Any) -> None:
         ) from exc
     if len(encoded) > _MAX_JSON_BYTES:
         _fail("limit_bytes", ("schema",), "schema exceeds eight MiB")
+    return encoded
 
 
 def validate_output_schema(schema: Any) -> dict[str, Any]:
     """Validate and detach the bounded Draft 2020-12 output-schema subset."""
     _validate_json_tree(schema, ("schema",))
-    _enforce_schema_size(schema)
+    encoded = _enforce_schema_size(schema)
     root = _require_object(schema, ("schema",))
     walker = _SchemaWalker(root)
     walker.walk(root, ("schema",), root=True)
@@ -325,7 +404,7 @@ def validate_output_schema(schema: Any) -> dict[str, Any]:
     walker.resolve_references()
     walker.reject_effective_root_reservations()
     try:
-        Draft202012Validator.check_schema(root)
+        _check_schema_meta(root, encoded)
     except (SchemaError, TypeError, ValueError, RecursionError) as exc:
         raise SkeletonValidationError(
             "invalid_schema", ("schema",), "schema is not valid Draft 2020-12"
