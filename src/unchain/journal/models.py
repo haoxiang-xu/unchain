@@ -11,6 +11,7 @@ from typing import Any, ClassVar
 
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
+_CONTROL_RE = re.compile(r"[\x00-\x1f]")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _PLAINTEXT_SECRET_FIELDS = frozenset(
     {
@@ -247,7 +248,8 @@ def _required_text(
     normalized = unicodedata.normalize("NFC", value.strip())
     if not normalized or len(normalized) > maximum or "\x00" in normalized:
         raise ModelValidationError(f"{field_name} is invalid")
-    if any(ord(character) < 32 for character in normalized):
+    if (_CONTROL_RE.search(normalized) is not None if type(normalized) is str
+            else any(ord(character) < 32 for character in normalized)):
         raise ModelValidationError(f"{field_name} contains control characters")
     if identifier and _IDENTIFIER_RE.fullmatch(normalized) is None:
         raise ModelValidationError(f"{field_name} is not a valid identifier")

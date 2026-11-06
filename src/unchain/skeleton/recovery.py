@@ -63,6 +63,11 @@ def _integer_decimal(value: int) -> bytes:
 
 
 def _string_json(value: str) -> bytes:
+    if type(value) is str:
+        try:
+            return json.encoder.encode_basestring(value).encode("utf-8")
+        except UnicodeEncodeError:
+            pass
     encoded = bytearray(b'"')
     escapes = {
         '"': b'\\"',
