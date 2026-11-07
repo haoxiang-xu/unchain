@@ -318,7 +318,7 @@ _PROTOCOLS = (
     RuntimeProtocol(
         id="skeleton_execution",
         major=1,
-        minor=7,
+        minor=8,
         features=(
             "code_python_v1",
             "draft_diagnostics_v1",
@@ -332,6 +332,7 @@ _PROTOCOLS = (
             "kernel_profile_auth_v1",
             "kernel_profiles_v1",
             "legacy_conversion_v1",
+            "node_display_label_v1",
             "non_llm_workflow_v1",
             "pinned_workflow_calls_v1",
             "production_host_bindings_v1",
