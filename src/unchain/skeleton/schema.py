@@ -56,7 +56,12 @@ def validate_skeleton_document(document: Any) -> dict[str, Any]:
     node_ids: set[str] = set()
     for index, node in enumerate(root["nodes"]):
         path = ("document", "nodes", index)
-        obj = _closed_object(node, path, {"id", "type", "config"})
+        obj = _closed_object(node, path, {"id", "type", "config"}, {"label"})
+        if "label" in obj:
+            if type(obj["label"]) is not str:
+                _error("invalid_type", path + ("label",), "node label must be a string")
+            if not obj["label"].strip():
+                _error("invalid_value", path + ("label",), "node label must be non-blank")
         _nonempty_string(obj["id"], path + ("id",), "node id")
         if obj["id"] in node_ids:
             _error("duplicate_name", path + ("id",), "node id is duplicated")
