@@ -227,7 +227,7 @@ def decode_context_content_ref(
                 or re.fullmatch(r"event/[1-9][0-9]*", ref.fragment) is not None
             )
         )
-        or (ref.kind == "context_event" and ref.fragment == "content")
+        or (ref.kind == "context_event" and ref.fragment in {"", "content"})
     )
     if not valid:
         raise MemoryToolkitError(error)
