@@ -269,7 +269,9 @@ def test_public_native_facade_gate_argument_compatibility():
 def test_manifest_advertises_native_observation_feature_at_minor_seven():
     protocols = runtime_protocol_manifest()["protocols"]
     skeleton = next(item for item in protocols if item["id"] == "skeleton_execution")
-    assert skeleton["minor"] == 7
+    # Native observation was introduced at minor 7 and remains in minor 8.
+    assert skeleton["minor"] == 8
     assert "subagent_native_observation_v1" in skeleton["features"]
+    assert "node_display_label_v1" in skeleton["features"]
     assert skeleton["features"] == sorted(set(skeleton["features"]))
-    assert len(skeleton["features"]) == 21
+    assert len(skeleton["features"]) == 22
