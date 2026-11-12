@@ -18,6 +18,8 @@ class PreparedAgentPlan(PreparedWorkflowPlan):
 
 def prepare_agent_graph(document, *, _subagent_depth=0):
     snapshot = validate_skeleton_for_execution(document)
+    # Presentation is display-only: it never enters a plan or its digest.
+    snapshot.pop("presentation", None)
     if snapshot["kind"] != "agent":
         raise SkeletonValidationError("wrong_kind", ("document", "kind"), "Agent preparation requires agent kind")
     if type(_subagent_depth) is not int or _subagent_depth < 0 or _subagent_depth > 6:

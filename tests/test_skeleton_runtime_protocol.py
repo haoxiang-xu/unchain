@@ -15,6 +15,7 @@ MANIFEST_SCHEMA = "unchain.runtime_protocol_manifest.v1"
 DIGEST_DOMAIN = b"unchain.runtime_protocol_manifest.v1\\u0000"
 SKELETON_FEATURES = [
     "code_python_v1",
+    "document_presentation_v1",
     "draft_diagnostics_v1",
     "durable_exclusive_dag_v2",
     "end_only_root_completion_v1",
@@ -94,7 +95,7 @@ def _expected_skeleton_protocol():
         "features": SKELETON_FEATURES,
         "id": "skeleton_execution",
         "major": 1,
-        "minor": 8,
+        "minor": 9,
     }
 
 
@@ -105,7 +106,7 @@ def test_actual_runtime_advertises_exact_closed_skeleton_execution_v1():
     assert protocol == _expected_skeleton_protocol()
     assert type(protocol["major"]) is int
     assert type(protocol["minor"]) is int
-    assert len(protocol["features"]) == len(set(protocol["features"])) == 22
+    assert len(protocol["features"]) == len(set(protocol["features"])) == 23
     assert protocol["features"] == sorted(
         protocol["features"], key=lambda item: item.encode("utf-8"),
     )

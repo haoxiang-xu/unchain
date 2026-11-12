@@ -49,6 +49,8 @@ class PreparedWorkflowPlan:
 def prepare_workflow(document: Any) -> PreparedWorkflowPlan:
     """Preflight and encode a Workflow without importing model infrastructure."""
     snapshot = validate_skeleton_for_execution(document)
+    # Presentation is display-only: it never enters a plan or its digest.
+    snapshot.pop("presentation", None)
     if snapshot["kind"] != "workflow":
         raise SkeletonValidationError("wrong_kind", ("document", "kind"), "preparation requires workflow kind")
     node_ids = tuple(node["id"] for node in snapshot["nodes"])
