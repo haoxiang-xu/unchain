@@ -94,11 +94,11 @@ def test_label_does_not_replace_required_node_fields(missing):
 
 
 def test_manifest_advertises_label_in_minor_eight_without_losing_old_features():
-    # Labels were introduced at minor 8 and remain in minor 9 (presentation).
+    # Labels were introduced at minor 8 and remain in minor 10 (presentation 9, layout 10).
     protocol = next(item for item in runtime_protocol_manifest()["protocols"] if item["id"] == "skeleton_execution")
-    assert (protocol["major"], protocol["minor"]) == (1, 9)
+    assert (protocol["major"], protocol["minor"]) == (1, 10)
     assert set(protocol["features"]) == {
-        "code_python_v1", "document_presentation_v1", "draft_diagnostics_v1", "durable_exclusive_dag_v2",
+        "code_python_v1", "document_layout_v1", "document_presentation_v1", "draft_diagnostics_v1", "durable_exclusive_dag_v2",
         "end_only_root_completion_v1", "explicit_bindings_v1", "hook_embedded_workflow_v1",
         "hook_enable_v1", "hook_phase_receipts_v1", "hook_tool_set_v1",
         "kernel_profile_auth_v1", "kernel_profiles_v1", "legacy_conversion_v1",

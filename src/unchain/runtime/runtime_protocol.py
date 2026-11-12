@@ -318,9 +318,10 @@ _PROTOCOLS = (
     RuntimeProtocol(
         id="skeleton_execution",
         major=1,
-        minor=9,
+        minor=10,
         features=(
             "code_python_v1",
+            "document_layout_v1",
             "document_presentation_v1",
             "draft_diagnostics_v1",
             "durable_exclusive_dag_v2",

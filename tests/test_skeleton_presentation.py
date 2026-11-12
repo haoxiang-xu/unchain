@@ -209,7 +209,7 @@ def test_draft_diagnostics_report_invalid_presentation():
 
 def test_manifest_advertises_presentation_in_minor_nine_without_losing_old_features():
     protocol = next(item for item in runtime_protocol_manifest()["protocols"] if item["id"] == "skeleton_execution")
-    assert (protocol["major"], protocol["minor"]) == (1, 9)
+    assert (protocol["major"], protocol["minor"]) == (1, 10)
     assert "document_presentation_v1" in protocol["features"]
     assert "node_display_label_v1" in protocol["features"]
-    assert len(protocol["features"]) == 23
+    assert len(protocol["features"]) == 24

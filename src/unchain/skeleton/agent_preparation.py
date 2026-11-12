@@ -8,6 +8,7 @@ from .errors import SkeletonValidationError
 from .kernel_config import validate_kernel_config
 from .preparation import PreparedWorkflowPlan, PreparedFlowEdge, _freeze
 from .recovery import _checked_plan, _canonical, workflow_definition_digest
+from .schema import without_display_layout
 from .validation import validate_skeleton_for_execution
 
 
@@ -49,6 +50,9 @@ def prepare_agent_graph(document, *, _subagent_depth=0):
                 node["config"],
                 ("document", "nodes", index, "config"),
             )
+    # Layout is display-only too, here and inside every embedded child. It is
+    # removed only after each embedded child has been validated with its own.
+    without_display_layout(snapshot)
     node_ids = tuple(node["id"] for node in snapshot["nodes"])
     order = {node_id: index for index, node_id in enumerate(node_ids)}
     flow = [edge for edge in snapshot["edges"] if edge["kind"] == "flow"]
