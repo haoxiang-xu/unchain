@@ -94,9 +94,9 @@ def test_label_does_not_replace_required_node_fields(missing):
 
 
 def test_manifest_advertises_label_in_minor_eight_without_losing_old_features():
-    # Labels were introduced at minor 8 and remain in minor 10 (presentation 9, layout 10).
+    # Labels remain in minor 11 (presentation 9, layout 10, Workflow parameters 11).
     protocol = next(item for item in runtime_protocol_manifest()["protocols"] if item["id"] == "skeleton_execution")
-    assert (protocol["major"], protocol["minor"]) == (1, 10)
+    assert (protocol["major"], protocol["minor"]) == (1, 11)
     assert set(protocol["features"]) == {
         "code_python_v1", "document_layout_v1", "document_presentation_v1", "draft_diagnostics_v1", "durable_exclusive_dag_v2",
         "end_only_root_completion_v1", "explicit_bindings_v1", "hook_embedded_workflow_v1",
@@ -105,5 +105,5 @@ def test_manifest_advertises_label_in_minor_eight_without_losing_old_features():
         "node_display_label_v1", "non_llm_workflow_v1", "pinned_workflow_calls_v1",
         "production_host_bindings_v1", "skill_read_v1", "structured_output_v1",
         "subagent_graphs_v1", "subagent_native_observation_v1",
-        "subagent_tool_settlement_projection_v1", "tool_call_v1",
+        "subagent_tool_settlement_projection_v1", "tool_call_v1", "workflow_parameters_v1",
     }

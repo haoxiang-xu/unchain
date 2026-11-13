@@ -100,7 +100,7 @@ def validate_skeleton_document(document: Any) -> dict[str, Any]:
         document,
         ("document",),
         {"schema_version", "kind", "id", "name", "nodes", "edges"},
-        {"description", "presentation", "layout"},
+        {"description", "presentation", "layout", "input_schema"},
     )
     if type(root["schema_version"]) is not int or root["schema_version"] != 1:
         _error("invalid_value", ("document", "schema_version"), "schema_version must be integer 1")
@@ -108,6 +108,8 @@ def validate_skeleton_document(document: Any) -> dict[str, Any]:
         _error("invalid_type", ("document", "kind"), "kind must be a string")
     if root["kind"] not in {"agent", "workflow"}:
         _error("unknown_variant", ("document", "kind"), "kind must be agent or workflow")
+    if "input_schema" in root and root["kind"] != "workflow":
+        _error("invalid_value", ("document", "input_schema"), "only a Workflow can declare parameters")
     _nonempty_string(root["id"], ("document", "id"), "id")
     _nonempty_string(root["name"], ("document", "name"), "name")
     if "description" in root and type(root["description"]) is not str:

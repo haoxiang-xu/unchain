@@ -33,6 +33,12 @@ def _diagnose(document: Any) -> tuple[dict[str, Any], tuple[SkeletonDiagnostic, 
     nodes = skeleton["nodes"]
     edges = skeleton["edges"]
     diagnostics: list[SkeletonDiagnostic] = []
+    if "input_schema" in skeleton:
+        from .workflow_inputs import workflow_input_schema
+        try:
+            workflow_input_schema(skeleton)
+        except SkeletonValidationError as exc:
+            _diagnostic(diagnostics, exc.code, exc.path, str(exc))
     node_diagnostics: list[list[SkeletonDiagnostic]] = [[] for _ in nodes]
     edge_diagnostics: list[list[SkeletonDiagnostic]] = [[] for _ in edges]
     node_by_id = {node["id"]: (index, node) for index, node in enumerate(nodes)}

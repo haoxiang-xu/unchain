@@ -163,6 +163,8 @@ def _validate_outputs(value: Any, path: tuple[str | int, ...]) -> None:
 
 
 def _validate_all(snapshot: dict[str, Any], *, agent_graph: bool = False) -> dict[str, dict[str, Any]]:
+    from .workflow_inputs import workflow_input_schema
+    workflow_input_schema(snapshot)
     configs: dict[str, dict[str, Any]] = {}
     for index, node in enumerate(snapshot["nodes"]):
         path = ("document", "nodes", index)
@@ -248,6 +250,8 @@ def run_workflow(plan: PreparedWorkflowPlan, inputs: Any, handlers: Any) -> Work
         if type(inputs) is not dict: _fail("invalid_type", ("inputs",), "inputs must be an object")
         if type(handlers) is not dict: _fail("invalid_type", ("handlers",), "handlers must be an object")
         snapshot = checked.snapshot(); configs = _validate_all(snapshot)
+        from .workflow_inputs import bind_workflow_inputs
+        inputs = bind_workflow_inputs(snapshot, inputs)
         nodes = {node["id"]: node for node in snapshot["nodes"]}
         node_positions = {node["id"]: index for index, node in enumerate(snapshot["nodes"])}
         start = next(node["id"] for node in snapshot["nodes"] if node["type"] == "start")
