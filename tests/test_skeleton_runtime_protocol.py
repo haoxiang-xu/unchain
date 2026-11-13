@@ -38,6 +38,7 @@ SKELETON_FEATURES = [
     "subagent_native_observation_v1",
     "subagent_tool_settlement_projection_v1",
     "tool_call_v1",
+    "workflow_parameters_v1",
 ]
 # Frozen from dev d2aa98f5's actual producer before integrating BC-019. These
 # independent expected wire values retain the newer dev features as well.
@@ -96,7 +97,7 @@ def _expected_skeleton_protocol():
         "features": SKELETON_FEATURES,
         "id": "skeleton_execution",
         "major": 1,
-        "minor": 10,
+        "minor": 11,
     }
 
 
@@ -107,7 +108,7 @@ def test_actual_runtime_advertises_exact_closed_skeleton_execution_v1():
     assert protocol == _expected_skeleton_protocol()
     assert type(protocol["major"]) is int
     assert type(protocol["minor"]) is int
-    assert len(protocol["features"]) == len(set(protocol["features"])) == 24
+    assert len(protocol["features"]) == len(set(protocol["features"])) == 25
     assert protocol["features"] == sorted(
         protocol["features"], key=lambda item: item.encode("utf-8"),
     )

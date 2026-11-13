@@ -141,6 +141,8 @@ class DurableWorkflowRunner:
         _validate_json(inputs, ("inputs",))
         if type(inputs) is not dict:
             fail("invalid_type", ("inputs",), "root inputs must be an object")
+        from .workflow_inputs import bind_workflow_inputs
+        inputs = bind_workflow_inputs(self.document, inputs)
         attachments = {} if attachments is None else attachments
         if type(attachments) is not dict:
             fail("invalid_type", ("attachments",), "attachments must be an object")

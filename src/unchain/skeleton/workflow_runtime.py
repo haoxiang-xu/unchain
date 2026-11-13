@@ -128,6 +128,8 @@ class SkeletonWorkflowCallRuntime:
     def preflight_inputs(self, node_id: str, _inputs: dict[str, Any]) -> None:
         """Resolve before the parent records an external-effect intent."""
         published, plan = self._resolve(node_id)
+        from .workflow_inputs import bind_workflow_inputs
+        bind_workflow_inputs(plan.snapshot(), _inputs)
         record = self.store.load()
         if record is None:
             _fail("missing_value", ("execution",), "parent execution is unavailable")

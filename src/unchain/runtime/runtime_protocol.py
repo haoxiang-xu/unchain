@@ -318,7 +318,7 @@ _PROTOCOLS = (
     RuntimeProtocol(
         id="skeleton_execution",
         major=1,
-        minor=10,
+        minor=11,
         features=(
             "code_python_v1",
             "document_layout_v1",
@@ -344,6 +344,7 @@ _PROTOCOLS = (
             "subagent_native_observation_v1",
             "subagent_tool_settlement_projection_v1",
             "tool_call_v1",
+            "workflow_parameters_v1",
         ),
     ),
     RuntimeProtocol(
