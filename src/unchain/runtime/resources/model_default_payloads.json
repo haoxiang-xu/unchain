@@ -83,6 +83,26 @@
       "effort": "medium"
     }
   },
+  "gpt-6.1-sol": {
+    "instructions": "",
+    "max_output_tokens": 128000,
+    "truncation": "auto",
+    "store": false,
+    "include": [],
+    "reasoning": {
+      "effort": "medium"
+    }
+  },
+  "gpt-6.1-terra": {
+    "instructions": "",
+    "max_output_tokens": 128000,
+    "truncation": "auto",
+    "store": false,
+    "include": [],
+    "reasoning": {
+      "effort": "medium"
+    }
+  },
   "gpt-6-sol": {
     "instructions": "",
     "max_output_tokens": 128000,
@@ -134,6 +154,24 @@
     "max_tokens": 128000,
     "output_config": {
       "effort": "medium"
+    }
+  },
+  "claude-sonnet-5-5": {
+    "max_tokens": 128000,
+    "output_config": {
+      "effort": "high"
+    }
+  },
+  "claude-haiku-5-5": {
+    "max_tokens": 128000,
+    "output_config": {
+      "effort": "medium"
+    }
+  },
+  "claude-fable-5-2": {
+    "max_tokens": 128000,
+    "output_config": {
+      "effort": "high"
     }
   },
   "claude-sonnet-5": {

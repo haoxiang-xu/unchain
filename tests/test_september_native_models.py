@@ -130,9 +130,11 @@ def test_new_openai_models_prepare_exact_responses_payload_without_sampling(mode
         "reasoning",
         "stream",
     }
-    if effort == "max":
-        # This environment's OpenAI SDK Literal lags the official model docs.
-        assert sdk_wire["reasoning"]["effort"] == "max"
+    if effort in {"none", "xhigh", "max"}:
+        # PuPu pins SDK 2.7.1, whose typing Literal predates these documented
+        # levels. The exact payload above and strict transport tests cover the
+        # wire contract; this SDK still serializes all three values unchanged.
+        assert sdk_wire["reasoning"]["effort"] == effort
     else:
         TypeAdapter(ResponseCreateParamsStreaming).validate_python(sdk_wire)
 
