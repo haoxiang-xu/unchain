@@ -7,6 +7,10 @@ Journal with the strict existing offline SDK client.
 from copy import deepcopy
 import json
 from types import SimpleNamespace
+from pathlib import Path
+import hashlib
+import os
+import sys
 
 import pytest
 
@@ -26,7 +30,21 @@ ARGS = {
 }
 
 
-def test_direct_human_input_is_retained_and_resumes_on_a_rebuilt_stack(tmp_path):
+def test_direct_human_input_is_retained_and_resumes_on_a_rebuilt_stack(tmp_path, capfd):
+    import unchain
+    import unchain.runtime.runtime_protocol as protocol
+    import unchain.skeleton.kernel_runtime as kernel
+    expected = Path(__file__).resolve().parents[1] / "src"
+    modules = {name: {"file": str(Path(module.__file__).resolve()),
+        "sha256": hashlib.sha256(Path(module.__file__).read_bytes()).hexdigest()}
+        for name, module in (("unchain", unchain),
+            ("unchain.runtime.runtime_protocol", protocol),
+            ("unchain.skeleton.kernel_runtime", kernel))}
+    assert all(Path(row["file"]).is_relative_to(expected) for row in modules.values())
+    with capfd.disabled():
+        print("UNCHAIN_HUMAN_WAIT_CONSUMER " + json.dumps({"pid": os.getpid(),
+            "argv": sys.argv, "modules": modules,
+            "manifest_digest": protocol.runtime_protocol_manifest()["manifest_digest"]}), flush=True)
     sessions = JsonFileSessionStore(tmp_path / "sessions")
     first = _StrictOpenAIClient([SimpleNamespace(
         id="human-turn", output=[{"type": "function_call", "call_id": "human-call",
