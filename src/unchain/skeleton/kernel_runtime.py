@@ -494,7 +494,8 @@ class SkeletonKernelHandler:
         from unchain.interaction.runtime import DurableInteractionRuntime
         session = self._runtime_session_id(self.store.attempt)
         checkpoint = self.durability_runtime.load_execution_checkpoint(session)
-        if not isinstance(checkpoint, dict) or checkpoint.get("status") != "awaiting_interaction":
+        if (not isinstance(checkpoint, dict)
+                or checkpoint.get("status") not in {"awaiting_interaction", "awaiting_human_input"}):
             return None
         continuation = checkpoint.get("continuation")
         interaction_ref = checkpoint.get("interaction_ref")
@@ -517,6 +518,8 @@ class SkeletonKernelHandler:
         pending = DurableInteractionRuntime(self.durability_runtime).load(
             session, interaction_id=interaction_id, require_active=True)
         request = pending.request
+        if checkpoint["status"] == "awaiting_human_input" and request.kind != "human_input":
+            raise ValueError("Human input checkpoint changed interaction kind")
         subject = request.subject
         from unchain.interaction.durable import strict_json_digest
         transcript = checkpoint.get("transcript")
@@ -867,6 +870,14 @@ class SkeletonKernelHandler:
                 if marker[2] is not None:
                     request = self._request_with_parent_tool_call(request, marker[2])
                 return WorkflowNodeWaiting("child", marker[0], request)
+            # A direct question uses the same durable interaction contract as
+            # tool approval; it is not a subagent handoff marker.
+            if result.interaction_request is not None:
+                from unchain.interaction.durable import InteractionRequest
+                request = InteractionRequest.from_dict(result.interaction_request)
+                if request.kind != "human_input":
+                    raise ValueError("Human input result requires a human-input interaction")
+                return WorkflowNodeWaiting("interaction", request.interaction_id, request.to_dict())
         if result.status != "completed":
             raise SkeletonValidationError("kernel_incomplete", ("kernel",), "Kernel requires a durable continuation")
         message = next((m.get("content") for m in reversed(result.messages) if m.get("role") == "assistant"), None)
