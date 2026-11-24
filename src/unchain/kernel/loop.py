@@ -2579,7 +2579,7 @@ class KernelLoop:
                     execution_guard=execution_guard,
                 )
                 if plan.state.run_status == "awaiting_interaction":
-                    return finish_awaiting_interaction_run(
+                    suspended = finish_awaiting_interaction_run(
                         plan.state,
                         callback=callback,
                         run_id=plan.run_id,
@@ -2588,6 +2588,21 @@ class KernelLoop:
                             execution_guard=execution_guard,
                         ),
                     )
+                    # The resumed batch opened its next approval (another
+                    # call of the same model turn). Announce it as the live
+                    # loop does, so hosts record the canonical request their
+                    # receipts are checked against.
+                    if isinstance(suspended.interaction_request, dict):
+                        self.emit_event(
+                            callback,
+                            "interaction_requested",
+                            plan.run_id,
+                            iteration=max(0, int(plan.state.iteration) - 1),
+                            interaction_request=copy.deepcopy(
+                                suspended.interaction_request
+                            ),
+                        )
+                    return suspended
                 self.emit_event(
                     callback,
                     "iteration_completed",

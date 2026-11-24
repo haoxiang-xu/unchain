@@ -762,3 +762,63 @@ def test_deferred_tool_plugin_cannot_bypass_durable_approval() -> None:
     assert resumed.status == "completed"
     assert dangerous_calls == []
     assert len(resume_model.requests) == 1
+
+
+def test_resume_announces_next_approval_in_same_batch() -> None:
+    """A batch with two approvals: resuming the first must announce the second.
+
+    The live loop emits ``interaction_requested`` for every wait it opens;
+    the resume path opened the second wait silently, so a host whose
+    receipts require the canonical request (PuPu Skeleton) could never
+    accept that approval.
+    """
+    session_id = "durable-tool-approval-batch"
+    store = InMemorySessionStore()
+    safe_calls: list[int] = []
+    dangerous_calls: list[str] = []
+    toolkit = _toolkit(safe_calls, dangerous_calls)
+    first_loop = build_runtime_loop(
+        model_io=_QueueModelIO([
+            _tool_turn(
+                ToolCall(call_id="danger-1", name="dangerous_tool", arguments={"value": "one"}),
+                ToolCall(call_id="danger-2", name="dangerous_tool", arguments={"value": "two"}),
+            )
+        ]),
+        memory_runtime=KernelMemoryRuntime.from_config(store=store),
+    )
+    first_events: list[dict] = []
+    suspended = first_loop.run(
+        [{"role": "user", "content": "run both"}],
+        session_id=session_id,
+        provider="openai",
+        model="gpt-5",
+        toolkit=toolkit,
+        max_iterations=3,
+        callback=first_events.append,
+    )
+    assert suspended.status == "awaiting_interaction"
+    first_id = suspended.interaction_request["interaction_id"]
+    assert [e["interaction_request"]["interaction_id"] for e in first_events
+        if e.get("type") == "interaction_requested"] == [first_id]
+
+    interaction = DurableInteractionRuntime(KernelMemoryRuntime.from_config(store=store), clock_ms=lambda: 100)
+    pending = interaction.load_active(session_id)
+    interaction.record_receipt(session_id, interaction_id=first_id, response={"approved": True},
+        submitted_by="ui:test", expected_revision=pending.session_snapshot.revision)
+
+    resume_events: list[dict] = []
+    resume_model = _QueueModelIO([])
+    resumed = build_runtime_loop(
+        model_io=resume_model,
+        memory_runtime=KernelMemoryRuntime.from_config(store=store),
+    ).resume_interaction(session_id=session_id, response=None, toolkit=toolkit,
+        callback=resume_events.append)
+
+    assert resumed.status == "awaiting_interaction"
+    second_id = resumed.interaction_request["interaction_id"]
+    assert second_id != first_id
+    assert dangerous_calls == ["one"]
+    assert resume_model.requests == []
+    announced = [e for e in resume_events if e.get("type") == "interaction_requested"]
+    assert [e["interaction_request"]["interaction_id"] for e in announced] == [second_id]
+    assert announced[0]["interaction_request"] == resumed.interaction_request
