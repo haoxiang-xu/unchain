@@ -16,6 +16,7 @@ dependencies = [
     "mcp>=1.30.0,<2.0.0",
     "openai>=2.7.1",
     "platformdirs>=4.4.0",
+    "referencing>=0.28.4",
     "tree-sitter>=0.21.3,<0.22",
     "tree-sitter-languages>=1.10.2,<2",
     # Security floors also apply to pip/editable installs, which do not read uv.lock.

@@ -196,6 +196,54 @@ def test_authenticated_invalid_return_is_known_failure_and_never_retried(tmp_pat
     assert run.run() == result
 
 
+@pytest.mark.parametrize("reference", (
+    "https://schema.invalid/result.json",
+    "file:///not-an-authorized-code-artifact.json",
+))
+def test_imported_result_schema_never_retrieves_external_references(tmp_path, monkeypatch, reference):
+    import urllib.request
+
+    source = tmp_path / "source"
+    _write(source, "def main(input, context): return {'answer':'safe local code'}")
+    imported = json.loads(json.dumps(_document(result_schema={
+        "type": "object", "properties": {"answer": {"$ref": reference}},
+    })))
+    requests = []
+
+    def forbidden_retrieval(request, *args, **kwargs):
+        requests.append(request.full_url)
+        raise AssertionError("validating Code output must not read external resources")
+
+    monkeypatch.setattr(urllib.request, "urlopen", forbidden_retrieval)
+    run, _ = _runner(tmp_path, source, document=imported)
+    run.create({"text": "x"})
+    result = run.run()
+    assert requests == []
+    assert result.status != "completed"
+    assert run.run() == result
+
+
+@pytest.mark.parametrize("reference", ("#/$defs/answer", "answer.json"))
+@pytest.mark.parametrize("answer, expected", (("local", "completed"), (1, "failed")))
+def test_code_result_schema_retains_local_reference_validation(tmp_path, reference, answer, expected):
+    source = tmp_path / "source"
+    _write(source, "def main(input, context): return " + repr({"answer": answer}))
+    schema = {
+        "$id": "https://schema.invalid/result.json", "type": "object",
+        "properties": {"answer": {"$ref": reference}},
+        "$defs": {"answer": {"$id": "answer.json", "type": "string"}},
+        "required": ["answer"], "additionalProperties": False,
+    }
+    run, _ = _runner(tmp_path, source, document=_document(result_schema=schema))
+    run.create({"text": "x"})
+    result = run.run()
+    assert result.status == expected
+    if expected == "completed":
+        assert result.outputs == {"answer": "local"}
+    else:
+        assert result.error["code"] == "output_invalid"
+
+
 def test_source_is_snapshotted_and_staged_file_mutation_never_changes_original(tmp_path):
     source = tmp_path / "source"; marker = tmp_path / "continue"
     _write(source, "from pathlib import Path\nimport time\ndef main(input, context):\n p=Path(input['text'])\n while not p.exists(): time.sleep(.01)\n Path(__file__).write_text('staged-only')\n return {'answer':'original'}\n")

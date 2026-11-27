@@ -27,6 +27,13 @@ the source follow-up only.
 - **AC-004:** PuPu must consume one retained wheel from the selected fixed Core
   source and verify actual consuming imports/bytes and runtime manifest before
   a dependent runtime PASS. Source tests are not package qualification.
+- **BC-003 / AC-005:** imported Code result schemas are data, independently of
+  the selected Python source. Use an explicit empty referencing registry so
+  result validation cannot automatically fetch HTTP or file references in the
+  host. Offline regressions capture the original attempted reads and require
+  zero reads after the fix. Local definitions and document-local relative-ID
+  references still validate; invalid Code results remain failed and replay does
+  not rerun their subprocess.
 
 ## Outstanding compatibility/security blocker
 

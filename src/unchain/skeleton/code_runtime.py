@@ -18,6 +18,7 @@ from typing import Any, Callable, Sequence
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
+from referencing import Registry
 
 from .durable_execution import DurableNodeContext
 from .errors import SkeletonValidationError
@@ -427,7 +428,10 @@ class SkeletonCodeRuntime:
                 _validate_json(result, ("code", "result"))
                 if type(result) is not dict:
                     _fail("invalid_type", ("code", "result"), "Code result must be an object")
-                if next(Draft202012Validator(binding.result_schema).iter_errors(result), None) is not None:
+                # Authored schemas may reference their own local definitions,
+                # never fetch a network or filesystem resource in the host.
+                validator = Draft202012Validator(binding.result_schema, registry=Registry())
+                if next(validator.iter_errors(result), None) is not None:
                     public["error"] = {"code": "output_invalid"}
                 else:
                     public["result"] = deepcopy(result)
