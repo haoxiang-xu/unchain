@@ -1,29 +1,28 @@
 """Test that execute_confirmable_tool_call propagates policy interact fields."""
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
+from unchain.kernel.types import ToolCall
 from unchain.tools.confirmation import execute_confirmable_tool_call
 from unchain.tools.models import ToolConfirmationPolicy, ToolConfirmationRequest
-from unchain.tools import Tool
+from unchain.tools import Tool, Toolkit
 
 
 def _make_tool_call(name: str = "write", args: dict | None = None, call_id: str = "c-1"):
-    tool_call = MagicMock()
-    tool_call.name = name
-    tool_call.call_id = call_id
-    tool_call.arguments = args if args is not None else {"path": "foo.py", "content": "x"}
-    return tool_call
+    return ToolCall(
+        name=name,
+        call_id=call_id,
+        arguments=args if args is not None else {"path": "foo.py", "content": "x"},
+    )
 
 
 def _make_tool_obj(resolver_return):
-    tool_obj = Tool.from_callable(lambda path, content: {"ok": True}, name="write")
-    tool_obj.requires_confirmation = True
-    tool_obj.observe = False
-    tool_obj.description = "write"
-    tool_obj.render_component = None
-    tool_obj.confirmation_resolver = MagicMock(return_value=resolver_return)
-    return tool_obj
+    return Tool.from_callable(
+        lambda path, content: {"ok": True},
+        name="write",
+        description="write",
+        requires_confirmation=True,
+        confirmation_resolver=lambda _arguments, _context: resolver_return,
+    )
 
 
 def test_policy_interact_fields_reach_request():
@@ -48,9 +47,7 @@ def test_policy_interact_fields_reach_request():
             "fallback_description": "edit foo.py (+1 -1)",
         },
     )
-    toolkit = MagicMock()
-    toolkit.get.return_value = _make_tool_obj(policy)
-    toolkit.execute.return_value = {"ok": True}
+    toolkit = Toolkit({"write": _make_tool_obj(policy)})
 
     outcome = execute_confirmable_tool_call(
         toolkit=toolkit,
@@ -63,6 +60,7 @@ def test_policy_interact_fields_reach_request():
     )
 
     assert outcome.denied is False
+    assert outcome.tool_result == {"ok": True}
     req = captured["req"]
     assert req.interact_type == "code_diff"
     assert req.interact_config == policy.interact_config
@@ -75,9 +73,7 @@ def test_default_policy_keeps_request_defaults():
         captured["req"] = req
         return {"approved": True, "modified_arguments": None}
 
-    toolkit = MagicMock()
-    toolkit.get.return_value = _make_tool_obj(ToolConfirmationPolicy())
-    toolkit.execute.return_value = {"ok": True}
+    toolkit = Toolkit({"write": _make_tool_obj(ToolConfirmationPolicy())})
 
     execute_confirmable_tool_call(
         toolkit=toolkit,

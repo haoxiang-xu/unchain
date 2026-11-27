@@ -1,0 +1,102 @@
+{
+  "compression_import_path": "/Users/red/.codex/artifacts/compact-tickets-63-457-20261023/candidate-2/wheel-install/unchain/context/compression.py",
+  "runtime_manifest": {
+    "manifest_digest": "sha256:f96b620fca6dc3e26f84cac47c4bbd8ce5e5d43505bf63759b88a15ec5234077",
+    "protocols": [
+      {
+        "features": [
+          "artifact_handoff",
+          "canonical_journal",
+          "chat_deletion_sqlite_scope_closure",
+          "context_compiler",
+          "context_content_paging_v1",
+          "context_content_paging_v2",
+          "context_content_read_recovery_v1",
+          "context_contribution_manifest_v1",
+          "durable_interaction_settlement_fence_v1",
+          "generation_rebase_live_interaction_cycles",
+          "graph_failure_terminals_v1",
+          "historical_evidence_guidance_v1",
+          "interaction_resolution_compat",
+          "long_term_promotion",
+          "memory_curator",
+          "memory_toolkit",
+          "memory_workspace",
+          "provider_context_limit_recovery_v1",
+          "small_tool_output_inline_v1",
+          "tool_output_management_v1"
+        ],
+        "id": "context_memory",
+        "major": 1,
+        "minor": 0
+      },
+      {
+        "features": [
+          "cancel_pending",
+          "expected_interaction_id_cas",
+          "fresh_run_lineage",
+          "graph_interaction_lineage_preflight_v1",
+          "host_controlled_resume",
+          "interaction_resolution_atomic_acceptance_v1"
+        ],
+        "id": "durable_interaction",
+        "major": 1,
+        "minor": 0
+      },
+      {
+        "features": [
+          "atomic_receipt_cas",
+          "auxiliary_calls",
+          "enforce_mode",
+          "graph_runs",
+          "memory_off",
+          "ollama_reasoning_preview_v1",
+          "provider_response_outcomes_v1",
+          "provider_uncertainty_diagnostics_v1",
+          "subagent_runs"
+        ],
+        "id": "provider_turn_ownership",
+        "major": 1,
+        "minor": 0
+      },
+      {
+        "features": [
+          "canonical_metrics",
+          "completion_diagnostics_ref",
+          "context_composition_ref_v1",
+          "continuation_claim",
+          "immutable_pricing_snapshot",
+          "provider_call_set_union",
+          "provider_call_usage_v1",
+          "run_bundle_v1",
+          "run_bundle_v2"
+        ],
+        "id": "run_bundle",
+        "major": 1,
+        "minor": 0
+      },
+      {
+        "features": [
+          "active_skills_snapshot_v1",
+          "catalog_v1",
+          "skill_md_registry_v1",
+          "skill_tool_v1",
+          "toolkit_embedded_skills_v1",
+          "user_invocation_v1"
+        ],
+        "id": "skills",
+        "major": 1,
+        "minor": 0
+      }
+    ],
+    "runtime": "unchain",
+    "schema": "unchain.runtime_protocol_manifest.v1"
+  },
+  "wheel_sha256": "6088d92b59bbd9f7a4d26ea55b3ea86b7a462771270cabe71b9444c5c285206f",
+  "source_parity": {
+    "compression.py": true,
+    "compiler.py": true,
+    "suffix_cost.py": true,
+    "__init__.py": true
+  }
+}

@@ -193,6 +193,22 @@ def _canonical_terminal_updates():
     }
 
 
+def _child_wait_updates():
+    marker = json.dumps({
+        "schema": "unchain.skeleton_subagent_wait_marker.v1",
+        "wait_id": "subagent.wait-1",
+        "request": {"schema": "pupu.skeleton_subagent_wait.v1"},
+    }, sort_keys=True, separators=(",", ":"))
+    return {
+        **_terminal_updates(),
+        "transcript": [
+            {"role": "user", "content": "investigate"},
+            {"role": "assistant", "content": marker},
+        ],
+        "run_status": "awaiting_human_input",
+    }
+
+
 def test_terminal_handoff_manifest_builds_one_exact_typed_transition() -> None:
     draft = build_declared_tool_state_transition(
         completion_contract=_terminal_contract(),
@@ -205,6 +221,27 @@ def test_terminal_handoff_manifest_builds_one_exact_typed_transition() -> None:
     assert draft.base_state == _canonical_terminal_base_state()
     assert draft.next_state == _canonical_terminal_updates()
     assert draft.handoff_refs == ()
+
+
+def test_terminal_handoff_manifest_accepts_only_the_internal_child_wait_marker() -> None:
+    draft = build_declared_tool_state_transition(
+        completion_contract=_terminal_contract(),
+        state_updates=_child_wait_updates(),
+        base_state=_terminal_base_state(),
+    )
+
+    assert draft is not None
+    assert draft.next_state["run_status"] == "awaiting_human_input"
+    assert json.loads(draft.next_state["transcript"][-1]["content"])["wait_id"] == "subagent.wait-1"
+
+    forged = _child_wait_updates()
+    forged["transcript"][-1]["content"] = '{"schema":"unknown"}'
+    with pytest.raises(DurableToolExecutorContractError, match="run status"):
+        build_declared_tool_state_transition(
+            completion_contract=_terminal_contract(),
+            state_updates=forged,
+            base_state=_terminal_base_state(),
+        )
 
 
 @pytest.mark.parametrize(

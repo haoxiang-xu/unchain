@@ -514,13 +514,17 @@ class OllamaExactRouteTransport(_BufferedExactRouteTransport):
         )
         try:
             return self._model_io._fetch_turn_streaming(request_body, request)
-        except BaseException:
+        except BaseException as error:
             try:
                 self.discard_buffered_events()
             except Exception:
                 # A closed/cancelled host stream may reject its preview reset.
                 # Preserve the provider failure and still clear local buffers.
                 pass
+            from .context_limit import classify_context_limit
+
+            if classify_context_limit(error) is not None:
+                raise ExactProviderRouteFailure(ExactProviderRouteFailureKind.TERMINAL, error) from None
             raise
 
 

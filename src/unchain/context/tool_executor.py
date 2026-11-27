@@ -894,11 +894,15 @@ class DurableToolExecutor:
         artifacts: ArtifactService,
         execution_guard: ExecutionGuard,
         expected_guard_chain: tuple[tuple[Any, ...], ...] | None = None,
+        bootstrap_binding: Any | None = None,
+        completion_policy: Any | None = None,
     ) -> None:
         if type(boundary) is not DurableToolBoundary:
             raise TypeError("boundary must be the official DurableToolBoundary")
         if type(artifacts) is not ArtifactService:
             raise TypeError("artifacts must be the official ArtifactService")
+        if completion_policy is not None and not callable(completion_policy):
+            raise TypeError("completion_policy must be callable")
         if boundary.projector.artifacts is not artifacts:
             raise DurableToolExecutorContractError(
                 "executor boundary and artifacts do not share one service"
@@ -906,7 +910,36 @@ class DurableToolExecutor:
         lease, root_guard, guard_chain = _resolve_official_execution_guard(
             execution_guard
         )
-        if lease.execution_id != boundary.attempt.generation.execution_id:
+        if bootstrap_binding is not None:
+            from .runtime import (
+                _BoundExecutionGuard,
+                _CONTEXT_EXECUTION_BINDING_AUTHORITY,
+            )
+
+            if (
+                type(bootstrap_binding) is not _BoundExecutionGuard
+                or bootstrap_binding._authority
+                is not _CONTEXT_EXECUTION_BINDING_AUTHORITY
+                or bootstrap_binding.attempt != boundary.attempt
+                or bootstrap_binding.guard is not execution_guard
+                or bootstrap_binding.root_guard is not root_guard
+                or bootstrap_binding.execution_id != lease.execution_id
+                or bootstrap_binding.root_execution_id
+                != root_guard.lease.execution_id
+                or bootstrap_binding.owner_id != lease.owner_id
+                or lease.fencing_token < bootstrap_binding.fencing_token
+                or not _same_execution_guard_chain(
+                    bootstrap_binding.chain, guard_chain
+                )
+            ):
+                raise DurableToolExecutorContractError(
+                    "execution guard does not match its bootstrap binding"
+                )
+        if lease.execution_id != boundary.attempt.generation.execution_id and (
+            bootstrap_binding is None
+            or root_guard.lease.execution_id
+            != boundary.attempt.generation.execution_id
+        ):
             raise DurableToolExecutorContractError(
                 "execution guard does not match the durable attempt"
             )
@@ -917,11 +950,14 @@ class DurableToolExecutor:
             raise DurableToolExecutorContractError(
                 "execution guard chain changed after bootstrap binding"
             )
+        if lease.execution_id != boundary.attempt.generation.execution_id:
+            boundary._bind_projected_execution(bootstrap_binding)
         self._boundary = boundary
         self._artifacts = artifacts
         self._execution_guard = execution_guard
         self._root_execution_guard = root_guard
         self._execution_guard_chain = guard_chain
+        self._completion_policy = completion_policy
         self._execution_lock = threading.RLock()
         self._invocation_authority = object()
         self._invocation_binding_lock = threading.Lock()
@@ -1101,10 +1137,28 @@ class DurableToolExecutor:
             raise DurableToolExecutorContractError(
                 "tool invocation must return a typed completion draft"
             )
+        if self._completion_policy is not None:
+            raw_draft = self._completion_policy(
+                request=request,
+                raw_draft=raw_draft,
+                effective_arguments=_thaw_json(bound_invocation.effective_arguments),
+                artifacts=self._artifacts,
+            )
+            if type(raw_draft) is not DurableToolCompletionDraft:
+                raise DurableToolExecutorContractError(
+                    "tool completion policy must return a typed completion draft"
+                )
+        return self._persist_completed_draft(
+            request=request, authorization=authorization, raw_draft=raw_draft,
+            reused=False,
+        )
+
+    def _persist_completed_draft(self, *, request, authorization, raw_draft, reused):
+        completion_subject = authorization.execution_subject
         self._assert_live_guard(request)
         result_artifactization = self._artifacts.artifactize_tool_result(
             _thaw_json(raw_draft.result),
-            operation_id="artifact.tool-result." + request.subject.sha256,
+            operation_id="artifact.tool-result." + completion_subject.sha256,
         )
         result_artifactization = (
             ArtifactService.verify_tool_result_artifactization(
@@ -1123,22 +1177,22 @@ class DurableToolExecutor:
             next_state_artifact = self._artifacts.persist_exact_json(
                 transition_draft.next_state,
                 operation_id=(
-                    "artifact.tool-next-state." + request.subject.sha256
+                    "artifact.tool-next-state." + completion_subject.sha256
                 ),
                 operation_binding={
                     "kind": "durable_tool_next_state",
                     "attempt": self._boundary.attempt.to_dict(),
                     "call_id": request.call_id,
-                    "execution_subject_sha256": request.subject.sha256,
+                    "execution_subject_sha256": completion_subject.sha256,
                 },
             )
             transition = DurableToolStateTransitionEnvelope(
                 parent_attempt=self._boundary.attempt,
                 call_id=request.call_id,
-                execution_subject_sha256=request.subject.sha256,
+                execution_subject_sha256=completion_subject.sha256,
                 operation_id=(
                     "transition.subagent-completion."
-                    + request.subject.sha256
+                    + completion_subject.sha256
                 ),
                 kind=transition_draft.kind,
                 base_state_sha256=canonical_state_sha256(
@@ -1155,8 +1209,8 @@ class DurableToolExecutor:
             tool_name=request.tool_name,
             call_id=request.call_id,
             iteration=request.iteration,
-            execution_subject=request.subject,
-            execution_subject_sha256=request.subject.sha256,
+            execution_subject=completion_subject,
+            execution_subject_sha256=completion_subject.sha256,
             result_artifact=result_artifactization.artifact,
             visible_result=result_artifactization.visible_result,
             should_observe=raw_draft.should_observe,
@@ -1166,7 +1220,7 @@ class DurableToolExecutor:
             self._artifacts.artifactize_tool_completion(
                 envelope.to_dict(),
                 operation_id=(
-                    "artifact.tool-completion." + request.subject.sha256
+                    "artifact.tool-completion." + completion_subject.sha256
                 ),
             )
         )
@@ -1186,7 +1240,8 @@ class DurableToolExecutor:
                 "tool completion sanitizer changed protected semantics"
             )
         self._assert_live_guard(request)
-        if persisted_envelope.transition is not None:
+        if (persisted_envelope.transition is not None
+                and self._boundary.sink.recover_tool_side_effect(request.call_id).sealed_event is None):
             self._boundary.persist_sealed_completion(
                 authorization,
                 result_artifact=result_artifactization.artifact,
@@ -1231,7 +1286,7 @@ class DurableToolExecutor:
             cursor=result_receipt.cursor,
             model_projection=result_receipt.model_projection,
             current_fence=current_fence,
-            reused=False,
+            reused=reused,
         )
 
     def _validate_invocation(
@@ -1512,6 +1567,8 @@ class DurableToolExecutor:
             raise DurableToolExecutorContractError(
                 "execution guard chain changed after bootstrap binding"
             )
+        # A descendant session borrows the root lease; the subject fence stays
+        # scoped to that child even when its journal attempt uses the root ID.
         live_fence = lease.fence
         if live_fence != request.subject.execution_fence:
             raise DurableToolExecutorContractError(
@@ -1593,6 +1650,37 @@ class DurableToolExecutor:
         authorization: DurableToolAuthorization,
         current_fence: ExecutionFence,
     ) -> DurableToolCompletionReceipt:
+        from ..skeleton.hook_raw_seal import EVENT_TYPE, verify_hook_raw_event
+
+        recovery = self._boundary.sink.recover_tool_side_effect(request.call_id)
+        if recovery.sealed_event is not None and recovery.sealed_event.event_type == EVENT_TYPE:
+            if self._completion_policy is None:
+                raise DurableToolExecutorContractError(
+                    "sealed Hook Tool result has no admitted completion policy"
+                )
+            _payload, raw_artifact, raw_draft, effective_arguments = verify_hook_raw_event(
+                recovery.sealed_event, self._artifacts,
+                attempt=self._boundary.attempt, tool_name=request.tool_name,
+                call_id=request.call_id, iteration=request.iteration,
+                recorded_subject=authorization.execution_subject,
+            )
+            if raw_artifact != authorization.result_artifact:
+                raise DurableToolExecutorContractError(
+                    "sealed Hook Tool artifact changed during finalization"
+                )
+            self._assert_live_guard(request)
+            final_draft = self._completion_policy(
+                request=request, raw_draft=raw_draft,
+                effective_arguments=effective_arguments, artifacts=self._artifacts,
+            )
+            if type(final_draft) is not DurableToolCompletionDraft:
+                raise DurableToolExecutorContractError(
+                    "Hook completion policy must return a typed draft"
+                )
+            return self._persist_completed_draft(
+                request=request, authorization=authorization,
+                raw_draft=final_draft, reused=True,
+            )
         result_artifact = authorization.result_artifact
         completion_artifact = authorization.completion_artifact
         if result_artifact is None or completion_artifact is None:

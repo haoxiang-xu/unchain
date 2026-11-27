@@ -228,7 +228,7 @@ def test_historical_context_pages_compact_while_the_verified_pending_page_stays_
         )
     )
 
-    history = _marker_payload(result.messages, "MEMORY_V2_UNTRUSTED_HISTORY")
+    history = _marker_payload(result.messages, "MEMORY_V2_EVIDENCE_HISTORY")
     exchanges = {exchange["call_id"]: exchange for exchange in history["tool_exchanges"]}
     assert "page-1" not in exchanges
     assert exchanges["page-2"]["result"] == {
@@ -320,7 +320,7 @@ def test_historical_context_pages_stay_bounded_for_a_long_single_source() -> Non
         )
     )
 
-    history = _marker_payload(compiled.messages, "MEMORY_V2_UNTRUSTED_HISTORY")
+    history = _marker_payload(compiled.messages, "MEMORY_V2_EVIDENCE_HISTORY")
     exchanges = {exchange["call_id"]: exchange for exchange in history["tool_exchanges"]}
     assert set(exchanges) == {"long-page-38", "long-page-39"}
     assert exchanges["long-page-38"]["result"]["memory_v2_compacted"] is True
@@ -374,7 +374,7 @@ def test_historical_context_pages_keep_a_reread_cursor_for_every_source() -> Non
             window=65_536,
         )
     )
-    history = _marker_payload(compiled.messages, "MEMORY_V2_UNTRUSTED_HISTORY")
+    history = _marker_payload(compiled.messages, "MEMORY_V2_EVIDENCE_HISTORY")
     exchanges = {exchange["call_id"]: exchange for exchange in history["tool_exchanges"]}
 
     assert set(exchanges) == {f"source-page-{index}" for index in range(9)}
@@ -425,7 +425,7 @@ def test_ordinary_tool_result_cannot_claim_context_page_history_provenance() -> 
             window=65_536,
         )
     )
-    history = _marker_payload(compiled.messages, "MEMORY_V2_UNTRUSTED_HISTORY")
+    history = _marker_payload(compiled.messages, "MEMORY_V2_EVIDENCE_HISTORY")
 
     assert [exchange["call_id"] for exchange in history["tool_exchanges"]] == [
         "ordinary-call-0",
@@ -492,7 +492,7 @@ def test_valid_page_shaped_ordinary_results_keep_both_exchanges(
     )
 
     assert events == original
-    history = _marker_payload(compiled.messages, "MEMORY_V2_UNTRUSTED_HISTORY")
+    history = _marker_payload(compiled.messages, "MEMORY_V2_EVIDENCE_HISTORY")
     assert [exchange["call_id"] for exchange in history["tool_exchanges"]] == [
         "ordinary-page-0",
         "ordinary-page-1",
@@ -566,7 +566,7 @@ def test_page_history_requires_matching_official_tool_identity(
             window=65_536,
         )
     )
-    history = _marker_payload(compiled.messages, "MEMORY_V2_UNTRUSTED_HISTORY")
+    history = _marker_payload(compiled.messages, "MEMORY_V2_EVIDENCE_HISTORY")
 
     assert [exchange["call_id"] for exchange in history["tool_exchanges"]] == [
         "mismatched-page-0",
@@ -632,7 +632,7 @@ def test_managed_page_history_requires_context_page_policy() -> None:
             window=65_536,
         )
     )
-    history = _marker_payload(compiled.messages, "MEMORY_V2_UNTRUSTED_HISTORY")
+    history = _marker_payload(compiled.messages, "MEMORY_V2_EVIDENCE_HISTORY")
 
     assert [exchange["call_id"] for exchange in history["tool_exchanges"]] == [
         "wrong-policy-page-0",
@@ -660,7 +660,7 @@ def test_compact_ref_preserves_a_valid_fragment() -> None:
 
     compiled = ContextCompiler().compile(request)
 
-    pinned = _marker_payload(compiled.messages, "MEMORY_V2_UNTRUSTED_PINNED_CONTEXT")
+    pinned = _marker_payload(compiled.messages, "MEMORY_V2_EVIDENCE_PINNED_CONTEXT")
     assert pinned["pending_task_inputs"][0]["content_ref"]["fragment"] == "event/7"
 
 
@@ -957,8 +957,8 @@ def test_closed_tool_exchange_and_open_call_are_neutral_and_atomic() -> None:
         )
     )
 
-    history = _marker_payload(result.messages, "MEMORY_V2_UNTRUSTED_HISTORY")
-    pinned = _marker_payload(result.messages, "MEMORY_V2_UNTRUSTED_PINNED_CONTEXT")
+    history = _marker_payload(result.messages, "MEMORY_V2_EVIDENCE_HISTORY")
+    pinned = _marker_payload(result.messages, "MEMORY_V2_EVIDENCE_PINNED_CONTEXT")
     assert history["tool_exchanges"][0]["call_id"] == "call-closed"
     assert history["tool_exchanges"][0]["full_output_ref"]["id"] == "artifact-1"
     assert pinned["unfinished_tool_pairs"][0]["call_id"] == "call-open"
@@ -1015,7 +1015,7 @@ def test_closed_tool_exchanges_follow_durable_completion_order() -> None:
         )
     )
 
-    history = _marker_payload(result.messages, "MEMORY_V2_UNTRUSTED_HISTORY")
+    history = _marker_payload(result.messages, "MEMORY_V2_EVIDENCE_HISTORY")
     assert [item["call_id"] for item in history["tool_exchanges"]] == [
         "call-b",
         "call-a",
@@ -1095,7 +1095,7 @@ def test_checkpoint_covered_tool_exchange_is_not_reinjected() -> None:
     )
 
     assert not any(
-        "MEMORY_V2_UNTRUSTED_HISTORY" in str(message.get("content") or "")
+        "MEMORY_V2_EVIDENCE_HISTORY" in str(message.get("content") or "")
         for message in result.messages
     )
 
@@ -1179,7 +1179,7 @@ def test_completed_tool_exchange_remains_until_checkpoint_coverage() -> None:
         )
     )
 
-    history = _marker_payload(result.messages, "MEMORY_V2_UNTRUSTED_HISTORY")
+    history = _marker_payload(result.messages, "MEMORY_V2_EVIDENCE_HISTORY")
     assert [item["call_id"] for item in history["tool_exchanges"]] == [
         "old-call",
         "current-call",
@@ -1288,12 +1288,12 @@ def test_current_pending_tool_result_is_injected_as_a_native_provider_pair(
         call_index
     )
     assert not any(
-        "MEMORY_V2_UNTRUSTED_HISTORY" in str(message.get("content") or "")
+        "MEMORY_V2_EVIDENCE_HISTORY" in str(message.get("content") or "")
         and "call-1" in str(message.get("content") or "")
         for message in messages
     )
 
-    pinned = _marker_payload(result.messages, "MEMORY_V2_UNTRUSTED_PINNED_CONTEXT")
+    pinned = _marker_payload(result.messages, "MEMORY_V2_EVIDENCE_PINNED_CONTEXT")
     pending = pinned["pending_task_inputs"][0]
     assert pending["content_ref"] == {
         "kind": "artifact",
@@ -1347,9 +1347,9 @@ def test_cross_provider_pending_tool_result_remains_neutral() -> None:
         message.get("type") in {"function_call", "function_call_output"}
         for message in result.messages
     )
-    history = _marker_payload(result.messages, "MEMORY_V2_UNTRUSTED_HISTORY")
+    history = _marker_payload(result.messages, "MEMORY_V2_EVIDENCE_HISTORY")
     assert [item["call_id"] for item in history["tool_exchanges"]] == ["call-1"]
-    pinned = _marker_payload(result.messages, "MEMORY_V2_UNTRUSTED_PINNED_CONTEXT")
+    pinned = _marker_payload(result.messages, "MEMORY_V2_EVIDENCE_PINNED_CONTEXT")
     pending = pinned["pending_task_inputs"][0]
     assert pending["preview"] == "result preview that must not be duplicated"
     assert "delivered_as_native_current_tool_result" not in pending
@@ -1426,7 +1426,7 @@ def test_cross_provider_current_context_page_batch_stays_inline(
         )
     )
 
-    history = _marker_payload(compiled.messages, "MEMORY_V2_UNTRUSTED_HISTORY")
+    history = _marker_payload(compiled.messages, "MEMORY_V2_EVIDENCE_HISTORY")
     exchanges = {exchange["call_id"]: exchange for exchange in history["tool_exchanges"]}
     assert exchanges["read-one"]["result"] == pages["read-one"]
     assert exchanges["read-two"]["result"] == pages["read-two"]
@@ -1449,9 +1449,9 @@ def test_incomplete_parallel_iteration_never_partially_injects_native_history() 
         )
         for message in result.messages
     )
-    history = _marker_payload(result.messages, "MEMORY_V2_UNTRUSTED_HISTORY")
+    history = _marker_payload(result.messages, "MEMORY_V2_EVIDENCE_HISTORY")
     assert [item["call_id"] for item in history["tool_exchanges"]] == ["call-1"]
-    pinned = _marker_payload(result.messages, "MEMORY_V2_UNTRUSTED_PINNED_CONTEXT")
+    pinned = _marker_payload(result.messages, "MEMORY_V2_EVIDENCE_PINNED_CONTEXT")
     assert [item["call_id"] for item in pinned["unfinished_tool_pairs"]] == ["call-2"]
 
 
@@ -1594,8 +1594,8 @@ def test_pinned_task_state_and_uncovered_inputs_are_always_injected_as_untrusted
         )
     )
 
-    pinned = _marker_payload(result.messages, "MEMORY_V2_UNTRUSTED_PINNED_CONTEXT")
-    assert pinned["trust"] == "UNTRUSTED_DATA"
+    pinned = _marker_payload(result.messages, "MEMORY_V2_EVIDENCE_PINNED_CONTEXT")
+    assert "trust" not in pinned
     assert pinned["pinned_task_state"] == {
         "stable_id": "task-state-1",
         "objective": "Ship",
@@ -1663,7 +1663,7 @@ def test_canonical_interaction_resolution_closes_only_its_pending_lifecycle() ->
         )
     )
 
-    pinned = _marker_payload(result.messages, "MEMORY_V2_UNTRUSTED_PINNED_CONTEXT")
+    pinned = _marker_payload(result.messages, "MEMORY_V2_EVIDENCE_PINNED_CONTEXT")
     assert (
         pinned["pending_interaction"]["request"]["interaction_id"] == "interaction-open"
     )
@@ -1727,7 +1727,7 @@ def test_resolved_human_interaction_closes_only_its_correlated_ask_call() -> Non
         )
     )
 
-    history = _marker_payload(result.messages, "MEMORY_V2_UNTRUSTED_HISTORY")
+    history = _marker_payload(result.messages, "MEMORY_V2_EVIDENCE_HISTORY")
     [resolved] = history["resolved_human_interactions"]
     assert resolved["interaction_id"] == "interaction-human"
     assert resolved["call_id"] == "call-human"
@@ -1737,7 +1737,7 @@ def test_resolved_human_interaction_closes_only_its_correlated_ask_call() -> Non
         "id": "interaction-answer",
         "revision": 1,
     }
-    pinned = _marker_payload(result.messages, "MEMORY_V2_UNTRUSTED_PINNED_CONTEXT")
+    pinned = _marker_payload(result.messages, "MEMORY_V2_EVIDENCE_PINNED_CONTEXT")
     assert [item["call_id"] for item in pinned["unfinished_tool_pairs"]] == [
         "call-still-open"
     ]
@@ -1802,7 +1802,7 @@ def test_authorized_canonical_resolution_supersedes_one_malformed_legacy_event()
         )
     )
 
-    history = _marker_payload(result.messages, "MEMORY_V2_UNTRUSTED_HISTORY")
+    history = _marker_payload(result.messages, "MEMORY_V2_EVIDENCE_HISTORY")
     [resolved] = history["resolved_human_interactions"]
     assert resolved["interaction_id"] == "interaction-human-compat"
     assert resolved["response"]["content_ref"] == {
@@ -1962,14 +1962,14 @@ def test_many_resolved_human_interactions_do_not_accumulate_under_pressure() -> 
 
     assert result.diagnostics["compacted"] is True
     assert result.diagnostics["atomic_call_ids"] == ()
-    history = _marker_payload(result.messages, "MEMORY_V2_UNTRUSTED_HISTORY")
+    history = _marker_payload(result.messages, "MEMORY_V2_EVIDENCE_HISTORY")
     assert len(history["resolved_human_interactions"]) == 20
     assert not any(
         "unfinished_tool_pairs" in str(message.get("content") or "")
         for message in result.messages
     )
     assert not any(
-        "MEMORY_V2_UNTRUSTED_PINNED_CONTEXT" in str(message.get("content") or "")
+        "MEMORY_V2_EVIDENCE_PINNED_CONTEXT" in str(message.get("content") or "")
         for message in result.messages
     )
 
@@ -2155,7 +2155,7 @@ def test_artifact_and_completed_handoff_are_injected_as_untrusted_refs() -> None
         )
     )
 
-    history = _marker_payload(result.messages, "MEMORY_V2_UNTRUSTED_HISTORY")
+    history = _marker_payload(result.messages, "MEMORY_V2_EVIDENCE_HISTORY")
     assert history["artifact_refs"][0]["artifact_ref"]["id"] == "artifact-1"
     assert history["handoffs"][0]["full_output_ref"]["id"] == "handoff-1"
     assert history["handoff_refs"] == [
@@ -2351,7 +2351,7 @@ def test_schema_v4_recorded_artifact_and_handoff_envelopes_are_injected() -> Non
         )
     )
 
-    history = _marker_payload(result.messages, "MEMORY_V2_UNTRUSTED_HISTORY")
+    history = _marker_payload(result.messages, "MEMORY_V2_EVIDENCE_HISTORY")
     assert history["artifact_refs"][0]["artifact_ref"]["id"] == "artifact-recorded"
     assert history["handoffs"][0]["full_output_ref"]["id"] == "handoff-recorded"
     assert history["handoff_refs"] == [

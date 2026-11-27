@@ -1778,7 +1778,7 @@ def test_tool_events_remain_neutral_while_write_lag_current_tail_is_native() -> 
     assert native_chat == ["history", "history answer", "current write lag"]
     assert not any(message.get("role") == "tool" for message in result.messages)
     assert any(
-        "MEMORY_V2_UNTRUSTED_HISTORY" in str(message.get("content") or "")
+        "MEMORY_V2_EVIDENCE_HISTORY" in str(message.get("content") or "")
         and "call-1" in str(message.get("content") or "")
         for message in result.messages
     )

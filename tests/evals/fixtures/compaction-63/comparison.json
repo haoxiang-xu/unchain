@@ -1,0 +1,532 @@
+{
+  "baseline_commit": "654017b793513df6cd9687a4096913bf1344e561",
+  "differential_cases": [
+    {
+      "case": 0,
+      "status": "complete"
+    },
+    {
+      "case": 1,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 2,
+      "status": "complete"
+    },
+    {
+      "case": 3,
+      "status": "complete"
+    },
+    {
+      "case": 4,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 5,
+      "status": "complete"
+    },
+    {
+      "case": 6,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 7,
+      "status": "complete"
+    },
+    {
+      "case": 8,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 9,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 10,
+      "status": "complete"
+    },
+    {
+      "case": 11,
+      "status": "complete"
+    },
+    {
+      "case": 12,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 13,
+      "status": "complete"
+    },
+    {
+      "case": 14,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 15,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 16,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 17,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 18,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 19,
+      "status": "complete"
+    },
+    {
+      "case": 20,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 21,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 22,
+      "status": "complete"
+    },
+    {
+      "case": 23,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 24,
+      "status": "complete"
+    },
+    {
+      "case": 25,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 26,
+      "status": "complete"
+    },
+    {
+      "case": 27,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 28,
+      "status": "complete"
+    },
+    {
+      "case": 29,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 30,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 31,
+      "status": "complete"
+    },
+    {
+      "case": 32,
+      "status": "complete"
+    },
+    {
+      "case": 33,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 34,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 35,
+      "status": "complete"
+    },
+    {
+      "case": 36,
+      "status": "complete"
+    },
+    {
+      "case": 37,
+      "status": "complete"
+    },
+    {
+      "case": 38,
+      "status": "complete"
+    },
+    {
+      "case": 39,
+      "status": "complete"
+    },
+    {
+      "case": 40,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 41,
+      "status": "complete"
+    },
+    {
+      "case": 42,
+      "status": "complete"
+    },
+    {
+      "case": 43,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 44,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 45,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 46,
+      "status": "complete"
+    },
+    {
+      "case": 47,
+      "status": "complete"
+    },
+    {
+      "case": 48,
+      "status": "complete"
+    },
+    {
+      "case": 49,
+      "status": "complete"
+    },
+    {
+      "case": 50,
+      "status": "complete"
+    },
+    {
+      "case": 51,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 52,
+      "status": "complete"
+    },
+    {
+      "case": 53,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 54,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 55,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 56,
+      "status": "complete"
+    },
+    {
+      "case": 57,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 58,
+      "status": "complete"
+    },
+    {
+      "case": 59,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 60,
+      "status": "complete"
+    },
+    {
+      "case": 61,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 62,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 63,
+      "status": "complete"
+    },
+    {
+      "case": 64,
+      "status": "complete"
+    },
+    {
+      "case": 65,
+      "status": "complete"
+    },
+    {
+      "case": 66,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 67,
+      "status": "complete"
+    },
+    {
+      "case": 68,
+      "status": "complete"
+    },
+    {
+      "case": 69,
+      "status": "complete"
+    },
+    {
+      "case": 70,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 71,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 72,
+      "status": "complete"
+    },
+    {
+      "case": 73,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 74,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 75,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 76,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 77,
+      "status": "complete"
+    },
+    {
+      "case": 78,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 79,
+      "status": "complete"
+    },
+    {
+      "case": 80,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 81,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 82,
+      "status": "complete"
+    },
+    {
+      "case": 83,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 84,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 85,
+      "status": "complete"
+    },
+    {
+      "case": 86,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 87,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 88,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 89,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 90,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 91,
+      "status": "complete"
+    },
+    {
+      "case": 92,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 93,
+      "status": "complete"
+    },
+    {
+      "case": 94,
+      "status": "complete"
+    },
+    {
+      "case": 95,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 96,
+      "status": "complete"
+    },
+    {
+      "case": 97,
+      "status": "checkpoint_required"
+    },
+    {
+      "case": 98,
+      "status": "complete"
+    },
+    {
+      "case": 99,
+      "status": "checkpoint_required"
+    }
+  ],
+  "timings": [
+    {
+      "turns": 100,
+      "window": 32768,
+      "same_result": true,
+      "baseline": {
+        "samples": 3,
+        "median_ms": 16.832834007800557,
+        "all_ms": [
+          16.737957994337194,
+          16.969207994407043,
+          16.832834007800557
+        ]
+      },
+      "optimized": {
+        "samples": 10,
+        "median_ms": 9.111542000027839,
+        "all_ms": [
+          9.327625011792406,
+          9.288332992582582,
+          9.066416998393834,
+          9.463333990424871,
+          9.197124993079342,
+          9.134499996434897,
+          9.088584003620781,
+          9.048374995472841,
+          9.071082997252233,
+          9.071833002963103
+        ]
+      },
+      "speedup": 1.8474188021905762
+    },
+    {
+      "turns": 250,
+      "window": 32768,
+      "same_result": true,
+      "baseline": {
+        "samples": 3,
+        "median_ms": 342.768791000708,
+        "all_ms": [
+          342.768791000708,
+          341.6214999888325,
+          356.1282499867957
+        ]
+      },
+      "optimized": {
+        "samples": 10,
+        "median_ms": 32.55293750407873,
+        "all_ms": [
+          32.52150000480469,
+          32.34674999839626,
+          32.77429100126028,
+          32.395041998825036,
+          32.42629200394731,
+          32.90249999554362,
+          32.58437500335276,
+          32.907417000387795,
+          32.72633299638983,
+          32.276707992423326
+        ]
+      },
+      "speedup": 10.529580962017967
+    },
+    {
+      "turns": 500,
+      "window": 32768,
+      "same_result": true,
+      "baseline": {
+        "samples": 3,
+        "median_ms": 1449.8453330015764,
+        "all_ms": [
+          1445.0877500057686,
+          1449.8453330015764,
+          1467.2980829927837
+        ]
+      },
+      "optimized": {
+        "samples": 10,
+        "median_ms": 69.14662499912083,
+        "all_ms": [
+          70.63516700873151,
+          71.54516699665692,
+          71.84245799726341,
+          70.90441600303166,
+          68.54587499401532,
+          68.42029199469835,
+          68.07591700635385,
+          68.5958749963902,
+          69.52837499557063,
+          68.76487500267103
+        ]
+      },
+      "speedup": 20.967694851628845
+    },
+    {
+      "turns": 1000,
+      "window": 32768,
+      "same_result": true,
+      "baseline": {
+        "samples": 3,
+        "median_ms": 6467.561249999562,
+        "all_ms": [
+          6980.024833988864,
+          6467.561249999562,
+          5962.9053749958985
+        ]
+      },
+      "optimized": {
+        "samples": 10,
+        "median_ms": 143.85212550405413,
+        "all_ms": [
+          142.56458400632255,
+          142.92429100896697,
+          144.7635420045117,
+          143.16254200821277,
+          142.3097910010256,
+          144.5417089998955,
+          142.6630829955684,
+          146.9622089935001,
+          146.91620800294913,
+          149.0445420058677
+        ]
+      },
+      "speedup": 44.95978927900714
+    }
+  ],
+  "note": "Offline synthetic pure compiler preflight. No model/network/database. Baseline timings n=3, not production p95."
+}

@@ -1,0 +1,7 @@
+{
+  "value": "beta",
+  "cases": [
+    {"id": "alpha-case", "value": "alpha"},
+    {"id": "beta-case", "value": "beta"}
+  ]
+}

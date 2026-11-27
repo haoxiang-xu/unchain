@@ -30,6 +30,7 @@ from .journal_view_cache import (
     JournalViewCacheError,
     RunLocalJournalViewCache,
 )
+from .node_memory_view import NodeMemoryView
 
 
 _CURRENT_INPUT_EVENT_TYPES = frozenset(
@@ -554,6 +555,7 @@ class JournalContextRequestFactory:
         snapshot_max_events: int = 10_000,
         snapshot_max_bytes: int = 32 * 1024 * 1024,
         journal_snapshot_source: JournalSnapshotSource | None = None,
+        node_memory_view: NodeMemoryView | None = None,
     ) -> None:
         if not isinstance(attempt, AttemptRef):
             attempt = AttemptRef.from_dict(attempt)
@@ -571,6 +573,11 @@ class JournalContextRequestFactory:
         ):
             raise JournalContextRequestFactoryError("artifact service scope mismatch")
         self._artifacts = artifacts
+        if node_memory_view is not None and (
+            type(node_memory_view) is not NodeMemoryView or node_memory_view.attempt != attempt
+        ):
+            raise JournalContextRequestFactoryError("node memory view attempt mismatch")
+        self._node_memory_view = node_memory_view
         self._attempt = attempt
         self._journal = journal
         self._model_window_fallback = model_window_fallback
@@ -607,6 +614,14 @@ class JournalContextRequestFactory:
     def journal(self) -> BoundExecutionJournal:
         return self._journal
 
+    @property
+    def node_memory_view(self) -> NodeMemoryView | None:
+        return self._node_memory_view
+
+    @property
+    def output_reserve_tokens(self) -> int | None:
+        return self._output_reserve_tokens
+
     def __call__(self, context: HarnessContext) -> ContextCompileRequest:
         if not isinstance(context, HarnessContext):
             raise TypeError("context must be a HarnessContext")
@@ -632,6 +647,11 @@ class JournalContextRequestFactory:
             for event in snapshot.events
             if event.attempt.generation == self._attempt.generation
         )
+        if self._node_memory_view is not None:
+            try:
+                generation_events = self._node_memory_view.select(snapshot)
+            except (TypeError, ValueError) as exc:
+                raise JournalContextRequestFactoryError("node memory view is invalid") from exc
         generation_inputs = tuple(
             event
             for event in generation_events
@@ -767,6 +787,8 @@ class JournalContextRequestFactory:
             "provider": provider,
             "model": model,
         }
+        if self._node_memory_view is not None:
+            identity["node_memory_view"] = self._node_memory_view.digest
         return "context-build-" + hashlib.sha256(_canonical_bytes(identity)).hexdigest()
 
 

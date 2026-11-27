@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -543,6 +544,37 @@ class DurableToolBoundary:
         self._projector = projector
         self._sink = sink
         self._authority = object()
+        self._projected_execution_id: str | None = None
+        self._projected_execution_lock = threading.Lock()
+
+    def _bind_projected_execution(self, binding: Any) -> None:
+        """Freeze the one child session allowed to use a root-journal attempt."""
+
+        from .runtime import (
+            _BoundExecutionGuard,
+            _CONTEXT_EXECUTION_BINDING_AUTHORITY,
+        )
+
+        if (
+            type(binding) is not _BoundExecutionGuard
+            or binding._authority is not _CONTEXT_EXECUTION_BINDING_AUTHORITY
+            or binding.attempt != self._attempt
+            or binding.root_execution_id
+            != self._attempt.generation.execution_id
+            or binding.execution_id == binding.root_execution_id
+        ):
+            raise DurableToolBoundaryCorruptError(
+                "projected execution binding does not match the tool attempt"
+            )
+        with self._projected_execution_lock:
+            if self._projected_execution_id not in {
+                None,
+                binding.execution_id,
+            }:
+                raise DurableToolBoundaryCorruptError(
+                    "tool attempt is bound to a different projected execution"
+                )
+            self._projected_execution_id = binding.execution_id
 
     @property
     def attempt(self) -> AttemptRef:
@@ -851,13 +883,28 @@ class DurableToolBoundary:
         completion = _thaw_json(completion_artifactization.completion)
         transition = completion.get("transition")
         if recovery.state is SideEffectRecoveryState.SEALED_COMPLETION_FINALIZABLE:
-            self._verify_sealed_completion(
-                recovery.sealed_event,
-                authorization=authorization,
-                result_artifact=artifactization.artifact,
-                completion_artifact=completion_artifactization.artifact,
-                transition=transition,
-            )
+            from ..skeleton.hook_raw_seal import EVENT_TYPE, verify_hook_raw_event
+            if recovery.sealed_event is not None and recovery.sealed_event.event_type == EVENT_TYPE:
+                recorded_subject = self._verify_recovery_identity(
+                    recovery.started_event,
+                    tool_name=authorization.tool_name,
+                    call_id=authorization.call_id,
+                    iteration=authorization.iteration,
+                    subject=authorization.execution_subject,
+                    allow_newer_fence=True,
+                )
+                verify_hook_raw_event(recovery.sealed_event, self._projector.artifacts,
+                    attempt=self._attempt, tool_name=authorization.tool_name,
+                    call_id=authorization.call_id, iteration=authorization.iteration,
+                    recorded_subject=recorded_subject)
+            else:
+                self._verify_sealed_completion(
+                    recovery.sealed_event,
+                    authorization=authorization,
+                    result_artifact=artifactization.artifact,
+                    completion_artifact=completion_artifactization.artifact,
+                    transition=transition,
+                )
         elif transition is not None:
             raise DurableToolBoundaryCorruptError(
                 "stateful tool completion has no durable seal"
@@ -1017,7 +1064,22 @@ class DurableToolBoundary:
             "handoff_refs",
         }
         raw = _thaw_json(event.payload)
-        if not isinstance(raw, dict) or set(raw) != expected_fields:
+        actual_fields = set(raw) if isinstance(raw, dict) else set()
+        if (
+            not isinstance(raw, dict)
+            or frozenset(actual_fields) not in {
+                frozenset(expected_fields),
+                frozenset(expected_fields | {"parent_run_id"}),
+            }
+            or (
+                "parent_run_id" in raw
+                and (
+                    type(raw["parent_run_id"]) is not str
+                    or not raw["parent_run_id"]
+                    or raw["parent_run_id"] == raw.get("run_id")
+                )
+            )
+        ):
             raise DurableToolBoundaryCorruptError(
                 "sealed completion payload schema is invalid"
             )
@@ -1108,6 +1170,27 @@ class DurableToolBoundary:
             if sealed_event is None:
                 raise DurableToolBoundaryCorruptError(
                     "sealed completion receipt is missing"
+                )
+            from ..skeleton.hook_raw_seal import EVENT_TYPE, verify_hook_raw_event
+            if sealed_event.event_type == EVENT_TYPE:
+                _payload, raw_artifact, _draft, _arguments = verify_hook_raw_event(
+                    sealed_event, self._projector.artifacts,
+                    attempt=self._attempt, tool_name=tool_name, call_id=call_id,
+                    iteration=iteration, recorded_subject=recorded_subject,
+                )
+                return DurableToolAuthorization(
+                    disposition=DurableToolExecutionDisposition.FINALIZE,
+                    tool_name=tool_name,
+                    call_id=call_id,
+                    iteration=iteration,
+                    execution_subject=recorded_subject,
+                    started_cursor=self._cursor(recovery.started_event),
+                    current_execution_fence=subject.execution_fence,
+                    result_artifact=raw_artifact,
+                    completion_artifact=raw_artifact,
+                    result_cursor=self._cursor(sealed_event),
+                    visible_result=None,
+                    _authority=self._authority,
                 )
             raw = _thaw_json(sealed_event.payload)
             try:
@@ -1268,7 +1351,14 @@ class DurableToolBoundary:
                 visible_result=visible_result,
             )
             transition = verified_completion["transition"]
-            if transition is None and recovery.sealed_event is not None:
+            from ..skeleton.hook_raw_seal import EVENT_TYPE, verify_hook_raw_event
+            hook_seal = (recovery.sealed_event is not None
+                and recovery.sealed_event.event_type == EVENT_TYPE)
+            if hook_seal:
+                verify_hook_raw_event(recovery.sealed_event, self._projector.artifacts,
+                    attempt=self._attempt, tool_name=tool_name, call_id=call_id,
+                    iteration=iteration, recorded_subject=recorded_subject)
+            if transition is None and recovery.sealed_event is not None and not hook_seal:
                 raise DurableToolBoundaryCorruptError(
                     "durable seal has no completion transition"
                 )
@@ -1286,13 +1376,14 @@ class DurableToolBoundary:
                     started_cursor=self._cursor(recovery.started_event),
                     _authority=self._authority,
                 )
-                self._verify_sealed_completion(
-                    recovery.sealed_event,
-                    authorization=executing,
-                    result_artifact=result_artifact,
-                    completion_artifact=completion_artifact,
-                    transition=transition,
-                )
+                if not hook_seal:
+                    self._verify_sealed_completion(
+                        recovery.sealed_event,
+                        authorization=executing,
+                        result_artifact=result_artifact,
+                        completion_artifact=completion_artifact,
+                        transition=transition,
+                    )
         return DurableToolAuthorization(
             disposition=DurableToolExecutionDisposition.REUSE,
             tool_name=tool_name,
@@ -1453,9 +1544,11 @@ class DurableToolBoundary:
         iteration: int,
         subject: DurableToolExecutionSubject,
     ) -> None:
-        if subject.execution_fence.execution_id != (
-            self._attempt.generation.execution_id
-        ):
+        expected_execution_id = (
+            self._projected_execution_id
+            or self._attempt.generation.execution_id
+        )
+        if subject.execution_fence.execution_id != expected_execution_id:
             raise DurableToolBoundaryCorruptError(
                 "execution fence does not match the tool execution"
             )

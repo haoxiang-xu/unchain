@@ -1,0 +1,193 @@
+{
+  "schema": "unchain.summary_semantic_review.v1",
+  "candidate": "candidate-2",
+  "attempt": "attempt-1",
+  "wheel_sha256": "6088d92b59bbd9f7a4d26ea55b3ea86b7a462771270cabe71b9444c5c285206f",
+  "model": "claude-sonnet-4-6",
+  "scope": "Manual review of all six summaries against exact canonical sources and actual task artifacts, with independent original/digest/link checks. No extra inference or production edits.",
+  "verdict": {
+    "exact_archive_and_links": "PASS: all six archives independently match originals, identities, content digests and call/result relationships.",
+    "semantic_grounding": "PASS WITH MINOR QUALIFICATIONS: no material invented audit permission/confirmation prerequisite or original-vs-rerun conflation observed. Prose is not perfectly faithful.",
+    "task_continuation": "PASS: both summary cases completed accepted final artifacts after three consecutive summaries.",
+    "old_exact_evidence_probe": "NOT_REVIEWED: separate parent-owned probe; not inferred from these continuation results."
+  },
+  "archive_checks": [
+    {
+      "case": "incident_handoff",
+      "stage": 1,
+      "archive_id": "da98a64b2c3eaaf655bcc70190a4d14d06520b23183c691d6856aa3d54111795",
+      "original_prefix_equal": true,
+      "source_digest_and_canonical_ids_valid": true,
+      "independent_anthropic_and_approval_links_equal": true,
+      "content_digest_valid": true,
+      "all_summary_citations_known": true
+    },
+    {
+      "case": "incident_handoff",
+      "stage": 2,
+      "archive_id": "7bcdda7e2c94c84b24cec50e2d805e03daae6d46409602bdce4b2c2d8832eb8f",
+      "original_prefix_equal": true,
+      "source_digest_and_canonical_ids_valid": true,
+      "independent_anthropic_and_approval_links_equal": true,
+      "content_digest_valid": true,
+      "all_summary_citations_known": true
+    },
+    {
+      "case": "incident_handoff",
+      "stage": 3,
+      "archive_id": "5eee53c4bc48619a3a769f8b4c292d826d7b08aa2c4fcd73c854df46c51e234e",
+      "original_prefix_equal": true,
+      "source_digest_and_canonical_ids_valid": true,
+      "independent_anthropic_and_approval_links_equal": true,
+      "content_digest_valid": true,
+      "all_summary_citations_known": true
+    },
+    {
+      "case": "coding_handoff",
+      "stage": 1,
+      "archive_id": "9e80f77766a2b933c844932f2d2bb724ba7f2747b84028577a28d014b36ee6a9",
+      "original_prefix_equal": true,
+      "source_digest_and_canonical_ids_valid": true,
+      "independent_anthropic_and_approval_links_equal": true,
+      "content_digest_valid": true,
+      "all_summary_citations_known": true
+    },
+    {
+      "case": "coding_handoff",
+      "stage": 2,
+      "archive_id": "1d98695f65252329c43b562b9f8d02d819cd2f2d5ae7de28b554ec8dad64ce15",
+      "original_prefix_equal": true,
+      "source_digest_and_canonical_ids_valid": true,
+      "independent_anthropic_and_approval_links_equal": true,
+      "content_digest_valid": true,
+      "all_summary_citations_known": true
+    },
+    {
+      "case": "coding_handoff",
+      "stage": 3,
+      "archive_id": "c1d6c174a4b1987df6e3570ad32cf6115309a1e0d03209cecd17936687186c3d",
+      "original_prefix_equal": true,
+      "source_digest_and_canonical_ids_valid": true,
+      "independent_anthropic_and_approval_links_equal": true,
+      "content_digest_valid": true,
+      "all_summary_citations_known": true
+    }
+  ],
+  "task_continuations": [
+    {
+      "case": "incident_handoff",
+      "status": "passed",
+      "oracle_failures": [],
+      "final_artifact": {
+        "incident_id": "INC-482",
+        "root_cause": "stale retry cache",
+        "ttl_ms": 2750,
+        "evidence_id": "EV-bridge-44",
+        "evidence_sha256": "d9ea301e607d7993111876656bf60d28f8e909adf68db0520cd08990c8db1af2",
+        "quoted_error": "CACHE_EPOCH_MISMATCH E42",
+        "proof_nonce": "PROOF-N7Q4M2-V8D1",
+        "evidence_tool_call_id": "setup-incident_handoff-1",
+        "verification_receipt": "VR-482-K6",
+        "replay_receipt": "RR-2750-V3",
+        "audit_token": "AUDIT-17-J6K9P4-R2W8",
+        "blocked_item": "P-release",
+        "publication_status": "denied"
+      },
+      "successful_archive_reads": 2
+    },
+    {
+      "case": "coding_handoff",
+      "status": "passed",
+      "oracle_failures": [],
+      "final_artifact": {
+        "spec_id": "SPEC-D7-Q9",
+        "ordering": "last_settled_occurrence",
+        "module_sha256": "d85a1bbbddfc197545942ba1ad7573588d1f9a033fedaa51a2996173ab746809",
+        "audit_token": "AUDIT-17-J6K9P4-R2W8",
+        "blocked_item": "P-publish",
+        "publication_status": "denied"
+      },
+      "successful_archive_reads": 2
+    }
+  ],
+  "per_summary": [
+    {
+      "case": "incident_handoff",
+      "stage": 1,
+      "hard_invented_prerequisite": false,
+      "assessment": "Observed audit token is directly available for future final report; proof/replay/write remain open. Intake restrictions are explicitly historical."
+    },
+    {
+      "case": "incident_handoff",
+      "stage": 2,
+      "hard_invented_prerequisite": false,
+      "assessment": "Audit token remains usable, proof is complete and replay/write remain open. Pending explicit denial before setting publication_status=denied is grounded in the original conditional user instruction, not invented approval for the audit token. TTL 2500 is historically correct before the correction enters this archived prefix."
+    },
+    {
+      "case": "incident_handoff",
+      "stage": 3,
+      "hard_invented_prerequisite": false,
+      "assessment": "Owner TTL 2750, superseded 2500, successful proof/replay, exact evidence hash/nonce/receipt/call ID and denied publication preserved. Only final write remains open; no invented confirmation for the audit token."
+    },
+    {
+      "case": "coding_handoff",
+      "stage": 1,
+      "hard_invented_prerequisite": false,
+      "assessment": "Original requirements, negative refunds, pending filtering, initial failures/hash and observed audit token retained. Alphabetical ordering is correctly described as original and subject to later correction."
+    },
+    {
+      "case": "coding_handoff",
+      "stage": 2,
+      "hard_invented_prerequisite": false,
+      "assessment": "Completed first write is distinguished from initial failing tests, and tests/docs remain open. Two minor qualifications: soft suggestion that ordering may need confirmation, and inaccurate/ambiguous used-last parenthetical describing original code."
+    },
+    {
+      "case": "coding_handoff",
+      "stage": 3,
+      "hard_invented_prerequisite": false,
+      "assessment": "Corrected last-settled-occurrence order, current tested hash, completed writes/tests and pending document remain distinct. Audit token is directly supplied, with no invented permission barrier. Some historical exact hashes are abbreviated and blocked_item is labeled TBD despite the known approval ID."
+    }
+  ],
+  "minor_qualifications": [
+    {
+      "case": "coding_handoff",
+      "stage": 2,
+      "section": "open_items",
+      "quote": "ordering field value for delivery.json: spec says alphabetical, subject to later correction — may need confirmation before writing.",
+      "assessment": "Unsupported soft planning extrapolation. It is not a hard must/await prerequisite; next_steps still supplies the known alphabetical value. A real owner correction follows in the next live stage."
+    },
+    {
+      "case": "coding_handoff",
+      "stage": 2,
+      "section": "progress",
+      "quote": "did not deduplicate by id (used last)",
+      "assessment": "The used-last parenthetical is inaccurate or ambiguous: original code summed all entries and sorted all IDs. Other summary sections correctly state the intended last-settled behavior, and initial hash/failing tests remain correct."
+    },
+    {
+      "case": "coding_handoff",
+      "stage": 3,
+      "section": "progress",
+      "quote": "module_sha256=725d9720...; module_sha256=ee00f3f5...",
+      "assessment": "Historic exact hashes are abbreviated in summary prose. Full values are preserved in the canonical archive, so exact old evidence requires retrieval rather than copying the summary."
+    },
+    {
+      "case": "coding_handoff",
+      "stage": 3,
+      "section": "next_steps",
+      "quote": "blocked_item (TBD)",
+      "assessment": "Unnecessary uncertainty: P-publish is already named in the source and constraints. It did not become a blocker; final manifest uses correct P-publish."
+    }
+  ],
+  "retrieval_and_attribution_limitations": [
+    "Incident first reader attempt live-008-0 supplied incorrect abbreviated call_id setup-incident_handoff with tool_name=inspect_case and occurrence=2; host rejected the ambiguous selector. Agent recovered through two source_id pages.",
+    "Coding also recovered the old log through two source_id pages. These task continuations do not demonstrate successful model use of per-exchange selectors.",
+    "The full-history incident control still says awaiting audit_token and explicit write approval after stage 2 (call 016), then succeeds. Stage-boundary waiting language should not be treated as an actual stop without observed task obstruction.",
+    "Candidate-1 failed semantic evidence is retained separately. Candidate-2 changes only the generic production summary prompt, and these six samples do not establish general model reliability.",
+    "All summaries consume canonical journals rather than recursively consuming prior summaries. Only one model and one repetition per case are covered.",
+    "This review does not qualify native provider wire calls, PuPu adoption, deployment or the separate parent-owned exact-old-evidence probe."
+  ],
+  "material_semantic_failures_observed": 0,
+  "hard_invented_audit_prerequisites_observed": 0,
+  "production_files_edited_by_reviewer": false,
+  "additional_model_calls_by_reviewer": 0
+}

@@ -1,0 +1,8 @@
+{
+  "bindings": [
+    {"name": "from_output", "value": {"kind": "ref", "node_id": "node-a", "path": ["items", 1]}, "missing": "error"},
+    {"name": "fallback", "value": {"kind": "first_present", "values": [{"kind": "ref", "node_id": "node-a", "path": ["missing"]}, {"kind": "literal", "value": null}]}, "missing": "error"},
+    {"name": "defaulted", "value": {"kind": "ref", "node_id": "missing", "path": []}, "missing": "default", "default": {"safe": true}}
+  ],
+  "outputs": {"node-a": {"items": ["zero", {"answer": 42}]}}
+}

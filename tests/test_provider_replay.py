@@ -1411,7 +1411,7 @@ def test_provider_adapters_consume_compiled_neutral_tool_history() -> None:
         json.dumps(anthropic_requests[0], sort_keys=True),
         json.dumps(ollama_requests[0], sort_keys=True),
     ]
-    assert all("MEMORY_V2_UNTRUSTED_HISTORY" in item for item in serialized_requests)
+    assert all("MEMORY_V2_EVIDENCE_HISTORY" in item for item in serialized_requests)
     assert all("tool-result-1" in item for item in serialized_requests)
     assert not any(
         item.get("type") in {"function_call", "function_call_output"}

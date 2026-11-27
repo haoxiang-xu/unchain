@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "kind": "agent",
+  "id": "agent-doc",
+  "name": "Agent document",
+  "description": "Provider-free schema fixture",
+  "nodes": [
+    {"id": "start", "type": "start", "config": {}},
+    {"id": "loop", "type": "agent", "config": {"nested": [true, 1]}},
+    {"id": "end", "type": "end", "config": {}}
+  ],
+  "edges": [
+    {"id": "edge-1", "kind": "flow", "source_node_id": "start", "source_port_id": "out", "target_node_id": "loop", "target_port_id": "in"}
+  ]
+}

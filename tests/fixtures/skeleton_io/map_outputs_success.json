@@ -1,0 +1,8 @@
+{
+  "mappings": [
+    {"name": "request_id", "source": {"kind": "input", "path": ["request", "id"]}},
+    {"name": "answer", "source": {"kind": "result", "path": ["answer"]}}
+  ],
+  "inputs": {"request": {"id": "r-1"}},
+  "result": {"answer": [1, 2, 3]}
+}

@@ -379,6 +379,31 @@ def normalize_raw_event(
     turn_id = _turn_id(run_id, raw_event)
     metadata = _base_metadata(raw_event)
 
+    if raw_type == "subagent_tool_settled":
+        from .subagent_settlement import validate_subagent_settlement_projection
+        try:
+            settlement = validate_subagent_settlement_projection(
+                raw_event.get("settlement"), execution_id=context.session_id,
+            )
+        except (TypeError, ValueError, KeyError, RecursionError):
+            return []
+        consumer = settlement["consumer_attempt"]["attempt_id"]
+        if "run_id" in raw_event and raw_event["run_id"] != consumer:
+            return []
+        child = settlement["source_attempt"]["attempt_id"]
+        status = settlement["status"]
+        payload = {"status": status, "settlement": settlement}
+        if status != "completed":
+            payload["error"] = {"code": "subagent_" + status,
+                                "message": "Subagent " + status}
+        return [RuntimeEventDraft(
+            type="run.completed" if status == "completed" else "run.failed",
+            run_id=child, agent_id=child,
+            links=RuntimeEventLinks(parent_run_id=consumer,
+                                    tool_call_id=settlement["call_id"]),
+            surface=_debug_surface(), payload=payload, metadata=metadata,
+        )]
+
     if raw_type == "run_started":
         return [
             RuntimeEventDraft(

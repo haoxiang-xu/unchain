@@ -170,6 +170,10 @@ class ContextExecutionBundle:
                 "durable sink and coordinator must share the same journal"
             )
         model_projection = self.coordinator.model_projection
+        if self.coordinator.node_memory_view != self.request_factory.node_memory_view:
+            raise ContextExecutionBundleError(
+                "coordinator and request factory must share the same node memory view"
+            )
         if (
             model_projection is not None
             and model_projection.artifacts is not self.artifacts
@@ -253,6 +257,7 @@ class DurableContextRuntimeFactory:
         bundle_builder: ContextExecutionBundleBuilder,
         generation_resolver: ContextGenerationResolver,
         current_input_resolver: ContextCurrentInputResolver,
+        execution_id_resolver: Callable[[HarnessContext, str], str] | None = None,
         projection_mode: SemanticEventProjectionMode = (
             SemanticEventProjectionMode.CANONICAL
         ),
@@ -263,11 +268,14 @@ class DurableContextRuntimeFactory:
             raise TypeError("generation_resolver must be callable")
         if not callable(current_input_resolver):
             raise TypeError("current_input_resolver must be callable")
+        if execution_id_resolver is not None and not callable(execution_id_resolver):
+            raise TypeError("execution_id_resolver must be callable or null")
         if not isinstance(projection_mode, SemanticEventProjectionMode):
             raise TypeError("projection_mode must be a SemanticEventProjectionMode")
         self._bundle_builder = bundle_builder
         self._generation_resolver = generation_resolver
         self._current_input_resolver = current_input_resolver
+        self._execution_id_resolver = execution_id_resolver
         self._projection_mode = projection_mode
         self._lock = threading.RLock()
         self._bundles: dict[tuple[str, str], ContextExecutionBundle] = {}
@@ -275,6 +283,26 @@ class DurableContextRuntimeFactory:
     @property
     def projection_mode(self) -> SemanticEventProjectionMode:
         return self._projection_mode
+
+    def execution_id_for_context(self, context: HarnessContext) -> str:
+        """Return the root journal execution bound to a live model session."""
+        if not isinstance(context, HarnessContext):
+            raise TypeError("context must be a HarnessContext")
+        attempt_id = str(context.event.get("run_id") or "").strip()
+        session_id = str(context.state.session_state.session_id or attempt_id).strip()
+        if not session_id:
+            raise ContextExecutionBundleError(
+                "bootstrap did not provide a stable execution ID"
+            )
+        execution_id = (
+            str(self._execution_id_resolver(context, session_id) or "").strip()
+            if self._execution_id_resolver is not None else session_id
+        )
+        if not execution_id:
+            raise ContextExecutionBundleError(
+                "execution ID resolver did not return a stable execution ID"
+            )
+        return execution_id
 
     def bind(self, context: HarnessContext) -> ContextExecutionBundle:
         if not isinstance(context, HarnessContext):
@@ -288,11 +316,7 @@ class DurableContextRuntimeFactory:
             raise ContextExecutionBundleError(
                 "bootstrap did not provide a stable attempt ID"
             )
-        execution_id = str(context.state.session_state.session_id or attempt_id).strip()
-        if not execution_id:
-            raise ContextExecutionBundleError(
-                "bootstrap did not provide a stable execution ID"
-            )
+        execution_id = self.execution_id_for_context(context)
         generation_id = str(
             self._generation_resolver(context, execution_id) or ""
         ).strip()

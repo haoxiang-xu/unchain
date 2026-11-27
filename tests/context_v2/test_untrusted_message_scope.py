@@ -13,12 +13,10 @@ def test_reference_scope_is_separate_from_live_user_request(marker):
     reference = _untrusted_message(marker, payload)
     assert set(reference) == {"role", "content"}
     assert reference["role"] == "assistant"
-    assert "only the JSON object" in reference["content"]
+    assert "records in the JSON object as historical evidence" in reference["content"]
     assert "ends with this message" in reference["content"]
     assert "live user message" in reference["content"]
-    assert json.loads(reference["content"].split("\n", 2)[2]) == {
-        **payload, "trust": "UNTRUSTED_DATA",
-    }
+    assert json.loads(reference["content"].split("\n", 2)[2]) == payload
     user = {"role": "user", "content": "Reply exactly OK"}
     assert [reference, user][-1] == user
 

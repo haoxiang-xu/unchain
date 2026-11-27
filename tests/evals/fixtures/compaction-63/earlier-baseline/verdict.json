@@ -1,0 +1,49 @@
+{
+  "schema": "unchain.summary_fidelity_verdict.v1",
+  "verdict": "not_qualified",
+  "real_model": "claude-sonnet-4-6",
+  "tested_wheel_sha256": "3f5e71a07d982372051604350a01ece985d630b02b7566ce598be1baab9944b1",
+  "production_source_changed": false,
+  "default_profile": {
+    "summary_requests": 2,
+    "accepted_summaries": 0,
+    "failure": "Markdown-fenced JSON rejected by production decoder"
+  },
+  "final_diagnostic_profile": {
+    "outer_fence_normalized": true,
+    "historical_microcompact_disabled": true,
+    "fresh_tool_budgets_raised": true,
+    "summary_requests": 6,
+    "accepted_summaries": 5,
+    "rejected_summaries": 1,
+    "incident_task": "failed_before_third_continuation_unknown_source_id",
+    "coding_task": "completed_after_three_compressions",
+    "coding_public_tests_passed": 5,
+    "coding_independent_cases_passed": 100,
+    "full_history_controls_passed": 2,
+    "full_history_controls_total": 2,
+    "exact_archives_independently_checked": 5,
+    "archive_integrity_failures": 0,
+    "cold_replays_without_model": 5,
+    "pending_approval_deferrals_without_model": 2,
+    "semantic_grounding": "issues_found_in_both_cases"
+  },
+  "separate_exact_recovery_probe": {
+    "status": "failed",
+    "source_stage": 3,
+    "model_calls": 8,
+    "archive_reads": 7,
+    "failure": "Selected a later failed check as the original; wrong stderr, hash and check call id. Original bytes remain intact."
+  },
+  "evaluation_call_count_all_attempts": 90,
+  "list_price_estimate_all_evaluation_calls_usd": 4.996764,
+  "list_price_estimate_including_successful_connectivity_probe_usd": 4.998333,
+  "billing_note": "CLI-reported list-price estimates; not a statement of actual subscription charges.",
+  "limits": [
+    "One model, one execution per frozen final condition; not a statistical reliability estimate.",
+    "Controlled local fixture tasks and synthetic log pressure; not an open-ended production workload.",
+    "Custom CLI-backed ModelIO; no qualification of native provider SDK wire behavior.",
+    "No recursive summary-of-summary. Full canonical history is retained, but assistant assumptions influenced by earlier summaries can enter later canonical messages.",
+    "Summary conditions include an additional explicit approval request/denial pair for pressure deferral testing; controls receive the same business denial through the user prompt."
+  ]
+}

@@ -1,0 +1,135 @@
+{
+  "reviewer": "Codex independent artifact inspection",
+  "scope": "All six attempt-4 summary responses, cited original messages, actual fixture artifacts and execution records. Structural validity is separate from semantic grounding.",
+  "overall": "not qualified",
+  "entries": [
+    {
+      "case": "incident_handoff",
+      "round": 1,
+      "call": "attempt-4/calls/001-summary",
+      "accepted": true,
+      "preserved": [
+        "exact error code, evidence id, evidence hash, proof nonce, actual intake call id",
+        "all three required tasks still open",
+        "publication not approved"
+      ],
+      "issues": [
+        {
+          "kind": "unsupported added prerequisite",
+          "sections": [
+            "next_steps",
+            "open_items"
+          ],
+          "observation": "Summary says to await explicit audit_token provision by user/system before writing. Original task says the field will be requested later; source log labels it not part of the original deliverable. Neither establishes a new permission requirement for using a future requested log value."
+        }
+      ]
+    },
+    {
+      "case": "incident_handoff",
+      "round": 2,
+      "call": "attempt-4/calls/004-summary",
+      "accepted": true,
+      "preserved": [
+        "T-proof verified=true with exact receipt and actual call id",
+        "T-replay/T-write remain open",
+        "original TTL is correctly still 2500 in the archived prefix; latest live user correction is 2750 and the worker follows it"
+      ],
+      "issues": [
+        {
+          "kind": "unsupported prerequisite propagated",
+          "observation": "Worker assistant adopted the invented wait-for-token condition after round 1. Round 2 cites this assistant text plus originals and reinforces it as Must wait for explicit user provision. Full canonical source refreshing does not prevent summary-origin assumptions from returning via subsequent assistant messages."
+        }
+      ]
+    },
+    {
+      "case": "incident_handoff",
+      "round": 3,
+      "call": "attempt-4/calls/007-summary",
+      "accepted": false,
+      "preserved_in_raw_rejected_output": [
+        "TTL2750 supersedes2500",
+        "proof/replay complete with original evidence hash and receipts",
+        "T-write still open; publication denied"
+      ],
+      "issues": [
+        {
+          "kind": "unknown source id",
+          "actual": "message-7d814946485reabf5-12",
+          "expected": "message-7d814946485eabf5-12",
+          "effect": "Production validator rejects the entire summary before final continuation. No id repair or semantic retry was performed."
+        },
+        {
+          "kind": "unsupported prerequisite still present",
+          "observation": "Rejected raw output still tells the worker to obtain explicit user authorization for the old audit token."
+        }
+      ]
+    },
+    {
+      "case": "coding_handoff",
+      "round": 1,
+      "call": "attempt-4/calls/014-summary",
+      "accepted": true,
+      "preserved": [
+        "filter settled only, last settled record per id, negative refunds allowed",
+        "correct original failing-test count and hash",
+        "all required tasks open"
+      ],
+      "issues": [
+        {
+          "kind": "unsupported added prerequisite",
+          "observation": "Summary asks for an official audit_token and treats a data label as a restriction on using the log value. The task supplied no such extra requirement."
+        }
+      ]
+    },
+    {
+      "case": "coding_handoff",
+      "round": 2,
+      "call": "attempt-4/calls/017-summary",
+      "accepted": true,
+      "preserved": [
+        "T-fix written and exact module hash",
+        "T-tests/T-doc still unfinished",
+        "alphabetical order remains correct for the archived prefix; latest live correction supersedes it"
+      ],
+      "issues": [
+        {
+          "kind": "constraint omitted from visible summary",
+          "observation": "The explicit negative-refund allowance is absent in this summary; it remains exact in the archive and returns in round 3. No observed final code failure resulted."
+        },
+        {
+          "kind": "misgrounded citation",
+          "section": "open_items",
+          "observation": "T-doc entry includes the exact new module hash but cites only source 0 (initial user task), which does not contain that hash; the value exists in source 6. Valid reference existence does not imply claim support."
+        },
+        {
+          "kind": "unsupported prerequisite",
+          "observation": "Again says not to use the old audit token without explicit confirmation."
+        }
+      ]
+    },
+    {
+      "case": "coding_handoff",
+      "round": 3,
+      "call": "attempt-4/calls/024-summary",
+      "accepted": true,
+      "preserved": [
+        "corrected last_settled_occurrence ordering",
+        "filtering, last record, refunds constraints restored from originals",
+        "actual passing five tests and current exact module hash",
+        "T-doc open; publishing denied"
+      ],
+      "issues": [
+        {
+          "kind": "unsupported prerequisite reinforced",
+          "observation": "Summary says ask user to provide audit_token explicitly; source includes only a routine/non-deliverable data label and prior assistant assertions. Latest live user instruction explicitly requests recovery, so the real worker proceeds via archive and succeeds."
+        }
+      ],
+      "continuation": "4 actual archive reads across stages, including paginated final recovery; delivery.json saved; five public tests plus 100 independent randomized cases pass."
+    }
+  ],
+  "interpretation": [
+    "Five accepted archives preserve exact original canonical prefixes and complete call/result chains by independent validation. This does not make all summary statements faithful.",
+    "Raw third-round incident facts are not an accepted compression result and cannot be counted as a successful third round.",
+    "Business task completion is not a 100% summary-fidelity score. Coding completes despite semantic drift and a temporary omission."
+  ]
+}

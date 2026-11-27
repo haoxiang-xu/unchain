@@ -13,10 +13,11 @@ from types import MappingProxyType
 from typing import Any, Callable, ClassVar
 from urllib.parse import unquote, urlsplit
 
-from unchain.journal import EventCursor, EventRange, ResourceRef
+from unchain.journal import AttemptRef, EventCursor, EventRange, ResourceRef
 from unchain.context_content import (
     ContextContentProtocolError,
     canonical_context_output_read_handle,
+    context_content_read_handle,
     project_context_output_for_model,
     validate_context_content_page,
     validate_context_output_descriptor,
@@ -44,6 +45,7 @@ from .budget import (
     estimate_context_tokens,
     resolve_context_budget,
 )
+from .suffix_cost import SuffixTokenCost
 from .attachments import (
     HostResolvedAttachment,
     normalize_host_resolved_attachments,
@@ -170,6 +172,7 @@ _CONTEXT_CONSUMED_EVENT_TYPES = (
             "human_input_requested",
             "interaction_resolved",
             "interaction.resolved",
+            "skeleton.subagent_tool_settlement",
         }
     )
 )
@@ -181,6 +184,12 @@ class ContextCompilerError(RuntimeError):
 
 class ContextBudgetExceededError(ContextCompilerError):
     """Mandatory context cannot fit or cannot be checkpointed safely."""
+
+
+class SemanticHistoryProjectionBudgetError(ContextBudgetExceededError):
+    """The local evidence representation exceeds its byte limit, not a model window."""
+
+    code = "context_semantic_history_projection_exceeded"
 
 
 class PinnedTaskStateBudgetError(ContextBudgetExceededError):
@@ -405,6 +414,7 @@ class _ContextCompilePass:
 class _CheckpointBinding:
     request: CheckpointRequest
     checkpoint_ref: ResourceRef
+    compression: dict | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.request, CheckpointRequest):
@@ -543,11 +553,22 @@ def _preview(value: Any, limit: int = _PREVIEW_CHARS) -> Any:
     }
 
 
-def _bounded_context_output_preview(value: Any) -> Any:
+def _bounded_context_output_preview(
+    value: Any, *, source_ref: ResourceRef | None = None,
+) -> Any:
     """Reduce tool content while retaining one strict, copyable read handle."""
 
     if not isinstance(value, Mapping):
         return _preview(value)
+    if source_ref is not None and value.get("inline") is True:
+        # A complete managed result has no read_request. Verify its source,
+        # byte count and digest before preserving it in a later request too.
+        projected = project_context_output_for_model(value, source_ref=source_ref)
+        if "read_request" not in projected:
+            if len(_canonical_bytes(projected)) <= _NATIVE_TOOL_RESULT_INLINE_LIMIT:
+                return _plain(projected)
+            projected.update(context_content_read_handle(source_ref))
+        value = projected
     try:
         handle = canonical_context_output_read_handle(value)
     except ContextContentProtocolError:
@@ -613,15 +634,18 @@ def _split_turns(messages: Sequence[Mapping[str, Any]]) -> list[list[dict[str, A
 def _untrusted_message(marker: str, payload: Mapping[str, Any]) -> dict[str, Any]:
     from .untrusted import untrusted_context_message
 
-    untrusted = {**_plain(payload), "trust": "UNTRUSTED_DATA"}
-    return untrusted_context_message(marker, untrusted)
+    return untrusted_context_message(marker, _plain(payload))
 
 
 def _is_pinned_message(message: Mapping[str, Any]) -> bool:
     return message.get(
         "role"
-    ) in {"user", "assistant"} and "[MEMORY_V2_UNTRUSTED_PINNED_CONTEXT]" in str(
-        message.get("content") or ""
+    ) in {"user", "assistant"} and any(
+        marker in str(message.get("content") or "")
+        for marker in (
+            "[MEMORY_V2_UNTRUSTED_PINNED_CONTEXT]",
+            "[MEMORY_V2_EVIDENCE_PINNED_CONTEXT]",
+        )
     )
 
 
@@ -1843,7 +1867,9 @@ def _canonical_journal_message_projection(
         if event_type in {"message.user", "message.assistant"}:
             if not attempt_id or not run_id:
                 raise JournalMessageProjectionError("message_scope_invalid")
-            if not is_root:
+            # A child/node may read its own explicitly bound inputs and turns.
+            # Its parent and siblings still exclude these private messages.
+            if not is_root and not (attempt_id == request.attempt_id and run_id == attempt_id):
                 continue
             cursor = _required_semantic_event_cursor(raw, event)
             expected_role = event_type.split(".", 1)[1]
@@ -2288,7 +2314,7 @@ def _bounded_pending_interaction(event: Mapping[str, Any]) -> dict[str, Any]:
         content_sha256 = declared_sha256
     durable_refs = _declared_refs(plain_event)
     inline = {
-        "trust": "UNTRUSTED_DATA",
+        "evidence_kind": "historical_record",
         "request": plain_event,
         "content_bytes": content_bytes,
         "content_sha256": content_sha256,
@@ -2304,7 +2330,7 @@ def _bounded_pending_interaction(event: Mapping[str, Any]) -> dict[str, Any]:
     request = plain_event.get("interaction_request")
     request = request if isinstance(request, dict) else plain_event
     return {
-        "trust": "UNTRUSTED_DATA",
+        "evidence_kind": "historical_record",
         "event_type": str(plain_event.get("type") or "")[:64],
         "interaction_id": str(
             request.get("interaction_id") or plain_event.get("interaction_id") or ""
@@ -2381,6 +2407,11 @@ def _tool_event_attempt_id(
     return str(
         event.get("attempt_id") or event.get("run_id") or request.attempt_id or ""
     ).strip()
+
+
+def _is_current_attempt_event(event, request):
+    return bool(request.attempt_id and event.get("attempt_id") == request.attempt_id
+                and event.get("run_id") == request.attempt_id)
 
 
 def _native_tool_result_payload(event: Mapping[str, Any]) -> dict[str, Any]:
@@ -2559,10 +2590,10 @@ def _current_completed_tool_batch(
         if str(event.get("type") or "") == "tool_call"
         and event.get("iteration") == iteration
         and _tool_event_attempt_id(event, request) == attempt_id
-        and not _interaction_is_child(
+        and (_is_current_attempt_event(event, request) or not _interaction_is_child(
             event,
             root_attempt_id=request.attempt_id or "",
-        )
+        ))
     ]
     results_with_indexes = [
         (event_index, event)
@@ -2570,10 +2601,10 @@ def _current_completed_tool_batch(
         if str(event.get("type") or "") == "tool_result"
         and event.get("iteration") == iteration
         and _tool_event_attempt_id(event, request) == attempt_id
-        and not _interaction_is_child(
+        and (_is_current_attempt_event(event, request) or not _interaction_is_child(
             event,
             root_attempt_id=request.attempt_id or "",
-        )
+        ))
     ]
     if not calls_with_indexes or not results_with_indexes:
         return None
@@ -2836,6 +2867,78 @@ def _is_durable_handoff_event(event: Mapping[str, Any]) -> bool:
     )
 
 
+def _subagent_tool_settlement(event: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate the immutable terminal result that supersedes a child wait."""
+
+    expected = {
+        "schema", "consumer_attempt", "source_attempt", "call_id", "tool_name",
+        "status", "outputs", "error", "full_output_ref", "result_bytes",
+        "result_sha256", "handoff_cursor", "summary",
+    }
+    if (
+        (set(event) & expected) != expected
+        or event.get("schema") != "unchain.skeleton_subagent_tool_settlement.v2"
+    ):
+        raise ContextCompilerError("subagent tool settlement has an invalid shape")
+    try:
+        consumer_attempt = AttemptRef.from_dict(event["consumer_attempt"])
+        source_attempt = AttemptRef.from_dict(event["source_attempt"])
+        handoff_cursor = EventCursor.from_dict(event["handoff_cursor"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ContextCompilerError("subagent tool settlement identity is invalid") from exc
+    if (consumer_attempt.to_dict() != event["consumer_attempt"]
+            or source_attempt.to_dict() != event["source_attempt"]
+            or source_attempt == consumer_attempt
+            or handoff_cursor.to_dict() != event["handoff_cursor"]):
+        raise ContextCompilerError("subagent tool settlement identity changed")
+    call_id = event.get("call_id")
+    tool_name = event.get("tool_name")
+    if (type(call_id) is not str or not call_id.strip()
+            or type(tool_name) is not str or not tool_name.strip()):
+        raise ContextCompilerError("subagent tool settlement call identity is invalid")
+    status = event.get("status")
+    outputs = event.get("outputs")
+    error = event.get("error")
+    summary = event.get("summary")
+    if (status not in {"completed", "failed", "cancelled", "outcome_unknown"}
+            or outputs is not None and type(outputs) is not dict
+            or type(error) is not str
+            or type(summary) is not str):
+        raise ContextCompilerError("subagent tool settlement outcome is invalid")
+    full_output_ref = _compact_ref(event.get("full_output_ref"))
+    result_bytes = event.get("result_bytes")
+    result_sha256 = event.get("result_sha256")
+    if (full_output_ref is None or full_output_ref["kind"] != "artifact"
+            or isinstance(result_bytes, bool) or not isinstance(result_bytes, int)
+            or result_bytes < 0 or type(result_sha256) is not str
+            or len(result_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in result_sha256)):
+        raise ContextCompilerError("subagent tool settlement descriptor is invalid")
+    canonical_completion = {
+        "schema": "unchain.skeleton_child_completion.v1",
+        "status": status,
+        "outputs": _plain(outputs),
+        "error": error,
+        "summary": summary,
+    }
+    expected_bytes, expected_sha256 = _fingerprint(canonical_completion)
+    if (result_bytes != expected_bytes or result_sha256 != expected_sha256):
+        raise ContextCompilerError(
+            "subagent tool settlement outcome does not match its child artifact"
+        )
+    return {
+        "call_id": call_id,
+        "tool_name": tool_name,
+        "result": canonical_completion,
+        "durable_full_output_ref": full_output_ref,
+        "model_full_output_ref": full_output_ref,
+        "has_model_projection": False,
+        "model_projection_policy": None,
+        "result_bytes": result_bytes,
+        "result_sha256": result_sha256,
+    }
+
+
 def _neutral_context(
     request: ContextCompileRequest,
     *,
@@ -2883,6 +2986,7 @@ def _neutral_context(
                 root_attempt_id=request.attempt_id or "",
             )
             and event_type != "handoff.recorded"
+            and not _is_current_attempt_event(event, request)
         ):
             continue
         consumed = event_index in message_dependency_indexes
@@ -2967,6 +3071,17 @@ def _neutral_context(
                     else {}
                 ),
             }
+        elif event_type == "skeleton.subagent_tool_settlement":
+            settlement = _subagent_tool_settlement(event)
+            if consumer_attempt := event.get("consumer_attempt"):
+                if request.attempt_id and consumer_attempt.get("attempt_id") != request.attempt_id:
+                    raise ContextCompilerError("subagent tool settlement escaped consumer attempt")
+            call_id = settlement["call_id"]
+            prior = results.get(call_id)
+            if prior is not None and prior.get("tool_name") != settlement["tool_name"]:
+                raise ContextCompilerError("subagent tool settlement changed tool identity")
+            results[call_id] = settlement
+            consumed = True
         elif event_type in {
             "interaction_requested",
             "interaction.requested",
@@ -3143,7 +3258,13 @@ def _neutral_context(
                 else (
                     _historical_context_content_page_marker(model_result)
                     if is_context_page
-                    else _bounded_context_output_preview(model_result)
+                    else _bounded_context_output_preview(
+                        model_result,
+                        source_ref=(
+                            _resource_ref(result["durable_full_output_ref"])
+                            if result["has_model_projection"] else None
+                        ),
+                    )
                 )
             ),
         }
@@ -3189,6 +3310,17 @@ def _neutral_context(
         task_state = _plain(request.task_state)
         task_state.pop("covered_through_store_seq", None)
         payload["pinned_task_state"] = task_state
+    # A managed projection is the only model-visible representation. The
+    # sealed execution artifact's preview may still contain unreduced bytes.
+    managed_cursors = {
+        (event.get("event_id"), event.get("store_seq"))
+        for _index, _raw, event in projection_events
+        if event.get("type") == "tool_result" and "model_projection" in event
+    }
+    for record in pending_inputs:
+        if record.get("type") == "tool_result" and (record.get("event_id"), record.get("store_seq")) in managed_cursors:
+            record.pop("preview", None)
+            record.pop("preview_truncated", None)
     if native_batch is not None:
         for record in pending_inputs:
             if (
@@ -3216,6 +3348,81 @@ def _neutral_context(
     )
 
 
+def _historical_tool_evidence(
+    value: Any,
+    *,
+    ref: ResourceRef,
+    field_name: str,
+) -> Any:
+    """Keep a small evidence preview and a readable, exact durable source."""
+
+    original = _canonical_bytes(value)
+    candidate = {
+        "evidence_kind": f"historical_tool_{field_name}",
+        "preview": original.decode("utf-8")[:256],
+        "truncated": True,
+        # These describe the value being projected, not the reader's source:
+        # arguments are recovered inside a whole canonical event, while a
+        # result's durable artifact can predate its managed model projection.
+        "projected_value_bytes": len(original),
+        "projected_value_sha256": hashlib.sha256(original).hexdigest(),
+        "read_scope": (
+            "canonical_tool_call_event" if field_name == "arguments" else "full_tool_output"
+        ),
+        **context_content_read_handle(ref),
+    }
+    # A short value is already a better projection than its reference wrapper.
+    return candidate if len(_canonical_bytes(candidate)) < len(original) else _plain(value)
+
+
+def _compact_completed_history(
+    request: ContextCompileRequest,
+    payload: Mapping[str, Any],
+) -> tuple[dict[str, Any], int]:
+    """Shrink verbose closed exchanges without dropping records or changing the journal."""
+
+    events = tuple(_validated_projection_events(request))
+    batch = _current_completed_tool_batch(
+        request, projection_events=events, pending_inputs=_pending_inputs(request)
+    )
+    protected = set(batch.call_ids if batch is not None else ())
+    calls: dict[str, ResourceRef] = {}
+    results: dict[str, ResourceRef] = {}
+    for _index, raw, event in events:
+        if _interaction_is_child(event, root_attempt_id=request.attempt_id or ""):
+            continue
+        call_id = str(event.get("call_id") or event.get("tool_call_id") or "").strip()
+        if event.get("type") == "tool_call" and call_id:
+            event_id, _store_seq = _required_semantic_event_cursor(raw, event)
+            calls[call_id] = ResourceRef("context_event", event_id, 1)
+        elif event.get("type") == "tool_result" and call_id:
+            output_ref = _resource_ref(event.get("full_output_ref"))
+            if output_ref is None or output_ref.kind != "artifact":
+                raise ContextCompilerError("completed tool result has no readable source")
+            results[call_id] = output_ref
+
+    compacted = _plain(payload)
+    count = 0
+    for exchange in compacted.get("tool_exchanges", ()):
+        call_id = str(exchange["call_id"])
+        if call_id in protected or exchange.get("tool_name") == _CONTEXT_CONTENT_READER_TOOL:
+            # Keep the immediate result byte-for-byte and preserve older page
+            # cursors/EOF information introduced by the paging contract.
+            continue
+        if call_id not in calls or call_id not in results:
+            raise ContextCompilerError("historical tool evidence source is missing")
+        before = _canonical_bytes(exchange)
+        exchange["arguments"] = _historical_tool_evidence(
+            exchange.get("arguments"), ref=calls[call_id], field_name="arguments"
+        )
+        exchange["result"] = _historical_tool_evidence(
+            exchange.get("result"), ref=results[call_id], field_name="result"
+        )
+        if _canonical_bytes(exchange) != before:
+            count += 1
+    return compacted, count
+
+
 def _assemble(
     request: ContextCompileRequest,
     *,
@@ -3223,6 +3430,7 @@ def _assemble(
     journal_projection: _JournalMessageProjection | None = None,
     include_optional_history: bool = True,
     current_provider_turn: _CurrentProviderTurnProjection | None = None,
+    history_message_budget_tokens: int | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], list[str], tuple[int, ...]]:
     source: list[dict[str, Any]] = []
     for index, raw_message in enumerate(request.source_messages):
@@ -3278,15 +3486,6 @@ def _assemble(
         },
     }
     injected: list[dict[str, Any]] = []
-    if len(optional_payload) > 1:
-        optional_bytes, _ = _fingerprint(optional_payload)
-        if optional_bytes > _SEMANTIC_HISTORY_LIMIT:
-            raise ContextBudgetExceededError(
-                "semantic history exceeds the bounded inline projection"
-            )
-        history = _untrusted_message("MEMORY_V2_UNTRUSTED_HISTORY", optional_payload)
-        history[_INJECTED_MANDATORY_KEY] = True
-        injected.append(history)
     if len(pinned_payload) > 1:
         pinned = _untrusted_message(
             "MEMORY_V2_UNTRUSTED_PINNED_CONTEXT", pinned_payload
@@ -3304,11 +3503,52 @@ def _assemble(
         if not _is_system(message):
             break
         leading_system_count += 1
+
+    def assemble_history(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
+        history_messages = []
+        if len(payload) > 1:
+            history = _untrusted_message("MEMORY_V2_UNTRUSTED_HISTORY", payload)
+            history[_INJECTED_MANDATORY_KEY] = True
+            history_messages.append(history)
+        return (
+            source[:leading_system_count]
+            + history_messages
+            + injected
+            + source[leading_system_count:]
+            + native_tail
+        )
+
+    combined = assemble_history(optional_payload)
+    if len(optional_payload) > 1:
+        before_bytes, _ = _fingerprint(optional_payload)
+        before_tokens = _estimate(combined).total_tokens
+        compacted_count = 0
+        if before_bytes > _SEMANTIC_HISTORY_LIMIT or (
+            history_message_budget_tokens is not None
+            and before_tokens > history_message_budget_tokens
+        ):
+            optional_payload, compacted_count = _compact_completed_history(
+                request, optional_payload
+            )
+            combined = assemble_history(optional_payload)
+        after_bytes, _ = _fingerprint(optional_payload)
+        if after_bytes > _SEMANTIC_HISTORY_LIMIT:
+            raise SemanticHistoryProjectionBudgetError(
+                "Local semantic-history projection exceeds the "
+                f"{_SEMANTIC_HISTORY_LIMIT}-byte inline limit after safe evidence "
+                "compaction. Durable history is unchanged; its remaining "
+                "reference records cannot fit in this projection."
+            )
+        if compacted_count:
+            neutral["_semantic_history_diagnostics"] = {
+                "semantic_history_before_bytes": before_bytes,
+                "semantic_history_after_bytes": after_bytes,
+                "semantic_history_before_estimated_tokens": before_tokens,
+                "semantic_history_after_estimated_tokens": _estimate(combined).total_tokens,
+                "semantic_history_compacted_exchange_count": compacted_count,
+            }
     return (
-        source[:leading_system_count]
-        + injected
-        + source[leading_system_count:]
-        + native_tail,
+        combined,
         neutral,
         atomic_call_ids,
         consumed_event_indexes,
@@ -3331,6 +3571,7 @@ def _reduce(
     checkpoint_ref_resolver: (
         Callable[[CheckpointRequest], ResourceRef | None] | None
     ) = None,
+    compression: dict | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], tuple[CheckpointRequest, ...]]:
     if isinstance(minimum_cutoff, bool) or not isinstance(minimum_cutoff, int):
         raise TypeError("minimum_cutoff must be an integer")
@@ -3505,6 +3746,33 @@ def _reduce(
     cutoff_order = range(minimum_cutoff, len(turns) + 1)
     if request.checkpoint_ref is not None:
         cutoff_order = range(max(1, minimum_cutoff), len(turns) + 1)
+    # Only the suffix's bare cost is monotone. Checkpoint metadata/ref lengths
+    # and legal tool boundaries are not; keep checking those in ascending order.
+    # Normalize/transform each message once, then binary-search the first suffix
+    # that could fit before constructing/pricing actual checkpoint candidates.
+    prepared_head = [transformed(message) for message in systems + injected]
+    prepared_tail = [transformed(message) for message in injected_tail]
+    prepared_turns = [
+        [transformed(message) for message in turn]
+        if index >= cutoff_order.start else []
+        for index, turn in enumerate(turns)
+    ]
+    flattened = [message for turn in prepared_turns for message in turn]
+    offsets = [0]
+    for turn in prepared_turns:
+        offsets.append(offsets[-1] + len(turn))
+    suffix_cost = SuffixTokenCost(
+        [_strip_internal_metadata(message) for message in flattened],
+        fixed=[_strip_internal_metadata(message) for message in prepared_head + prepared_tail],
+    )
+    low, high = cutoff_order.start, cutoff_order.stop
+    while low < high:
+        middle = (low + high) // 2
+        if suffix_cost.estimate(offsets[middle]).total_tokens <= message_budget:
+            high = middle
+        else:
+            low = middle + 1
+    cutoff_order = range(low, cutoff_order.stop)
     for cutoff in cutoff_order:
         if any(index < cutoff for index in pinned_indexes):
             continue
@@ -3514,17 +3782,8 @@ def _reduce(
             for dependent_indexes in pair_turn_indexes.values()
         ):
             continue
-        candidate = (
-            [transformed(message) for message in systems + injected]
-            + [
-                transformed(message)
-                for turn_index, turn in enumerate(turns)
-                if turn_index >= cutoff
-                for message in turn
-            ]
-            + [transformed(message) for message in injected_tail]
-        )
-        candidate_estimate = _estimate(candidate).total_tokens
+        candidate = prepared_head + flattened[offsets[cutoff]:] + prepared_tail
+        candidate_estimate = suffix_cost.estimate(offsets[cutoff]).total_tokens
         if candidate_estimate > message_budget:
             continue
         candidate_checkpoint_request: CheckpointRequest | None = None
@@ -3584,6 +3843,7 @@ def _reduce(
                     checkpoint_ref=projection_ref,
                     request=candidate_checkpoint_request,
                     omitted_complete_turns=cutoff,
+                    compression=compression,
                 )
                 checkpoint_message[
                     _CHECKPOINT_MARKER_KEY
@@ -3741,6 +4001,7 @@ def _portable_projection(
                 event,
                 root_attempt_id=request.attempt_id or "",
             )
+            or _is_current_attempt_event(event, request)
             or str(event.get("type") or "") == "handoff.recorded"
         ]
         results = {
@@ -4055,11 +4316,15 @@ class ContextCompiler:
             Callable[[CheckpointRequest], ResourceRef | None] | None
         ) = None,
         current_provider_turn: _CurrentProviderTurnProjection | None = None,
+        compression: dict | None = None,
     ) -> _CoreCompilation:
         _validate_generation_scope(request)
         if journal_projection is None:
             request = project_canonical_journal_messages(request)
         budget = request.budget or self._default_budget
+        history_message_budget_tokens = budget.pressure_threshold_tokens - max(
+            0, int(request.fixed_overhead_tokens or 0)
+        )
         if request.task_state_unavailable is not None:
             diagnostics = {
                 "status": "task_state_unavailable",
@@ -4123,6 +4388,7 @@ class ContextCompiler:
                 ),
                 journal_projection=journal_projection,
                 current_provider_turn=current_provider_turn,
+                history_message_budget_tokens=history_message_budget_tokens,
             )
             messages, reduction, checkpoint_requests = _reduce(
                 combined,
@@ -4131,6 +4397,7 @@ class ContextCompiler:
                 journal_projection=journal_projection,
                 minimum_cutoff=minimum_checkpoint_cutoff,
                 checkpoint_ref_resolver=checkpoint_ref_resolver,
+                compression=compression,
             )
         except ContextBudgetExceededError as original_error:
             if checkpoint_covered_through_store_seq is not None:
@@ -4152,6 +4419,7 @@ class ContextCompiler:
                 journal_projection=journal_projection,
                 include_optional_history=False,
                 current_provider_turn=current_provider_turn,
+                history_message_budget_tokens=history_message_budget_tokens,
             )
             recovered = False
             for minimum_cutoff in range(
@@ -4192,6 +4460,7 @@ class ContextCompiler:
                         ),
                         journal_projection=journal_projection,
                         current_provider_turn=current_provider_turn,
+                        history_message_budget_tokens=history_message_budget_tokens,
                     )
                     messages, reduction, checkpoint_requests = _reduce(
                         combined,
@@ -4208,16 +4477,27 @@ class ContextCompiler:
                 recovered = True
                 break
             if not recovered:
-                original_error.code = "context_budget_exceeded"
-                original_error.args = (
-                    f"{request.provider or 'model'}:{request.model or 'unknown'} "
-                    f"has a {budget.context_window_tokens}-token context window: "
-                    f"{original_error}. Reduce the input or selected tools, or choose "
-                    "a model with a larger context window.",
-                )
+                if not isinstance(original_error, SemanticHistoryProjectionBudgetError):
+                    original_error.code = "context_budget_exceeded"
+                    original_error.args = (
+                        f"{request.provider or 'model'}:{request.model or 'unknown'} "
+                        f"has a {budget.context_window_tokens}-token context window: "
+                        f"{original_error}. Reduce the input or selected tools, or choose "
+                        "a model with a larger context window.",
+                    )
                 raise original_error
+        history_diagnostics = neutral.get("_semantic_history_diagnostics", {})
         diagnostics = {
             **reduction,
+            **history_diagnostics,
+            "before_estimated_tokens": max(
+                reduction["before_estimated_tokens"],
+                history_diagnostics.get("semantic_history_before_estimated_tokens", 0),
+            ),
+            "compacted": bool(
+                reduction["compacted"]
+                or history_diagnostics.get("semantic_history_compacted_exchange_count")
+            ),
             "provider": request.provider or "",
             "model": request.model or "",
             "fixed_overhead_tokens": int(request.fixed_overhead_tokens or 0),
@@ -4309,6 +4589,7 @@ class ContextCompiler:
             minimum_checkpoint_cutoff=minimum_checkpoint_cutoff,
             checkpoint_ref_resolver=checkpoint_ref_resolver,
             current_provider_turn=current_provider_turn,
+            compression=None if checkpoint_binding is None else checkpoint_binding.compression,
         )
         result = compiled.result
         if checkpoint_binding is None:
@@ -4344,6 +4625,7 @@ class ContextCompiler:
             checkpoint_ref=checkpoint_binding.checkpoint_ref,
             request=checkpoint_request,
             omitted_complete_turns=omitted_complete_turns,
+            compression=checkpoint_binding.compression,
         )
         if len(compiled.checkpoint_markers) != 1:
             raise ContextCompilerError("checkpoint_consumption_invalid")

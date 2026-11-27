@@ -34,8 +34,11 @@ def project(tool, manager, config, ref, *, offset=0, limit=8192, call_id='read')
 def test_invalid_live_limit_has_safe_actionable_feedback_and_corrected_page(limit):
     tool, context, ref, manager, config = setup_reader()
     error = project(tool, manager, config, ref, limit=limit, call_id='invalid')
-    assert error == {'schema_version':'unchain.context_content_error.v1','trust':'UNTRUSTED_DATA',
-                     'code':'CONTEXT_READ_LIMIT_INVALID_USE_INTEGER_1_TO_8192'}
+    assert set(error) == {'schema_version', 'evidence_kind', 'notice', 'code'}
+    assert error['schema_version'] == 'unchain.context_content_error.v2'
+    assert error['evidence_kind'] == 'retrieval_status'
+    assert 'no source content was delivered' in error['notice']
+    assert error['code'] == 'CONTEXT_READ_LIMIT_INVALID_USE_INTEGER_1_TO_8192'
     assert validate_context_content_error(error)==error
     assert context.calls==[]
     first = project(tool,manager,config,ref,call_id='first')
@@ -82,8 +85,12 @@ def test_arbitrary_reader_exceptions_never_become_corrective_instructions(messag
         digest=hashlib.sha256(raw).hexdigest(), content_bytes=len(raw),
         call_id='unknown-error', requested_policy='context_page',
     ).payload
-    assert result == {'schema_version':'unchain.context_content_error.v1',
-                      'trust':'UNTRUSTED_DATA','code':'CONTEXT_CONTENT_READ_FAILED'}
+    assert set(result) == {'schema_version', 'evidence_kind', 'notice', 'code'}
+    assert result['schema_version'] == 'unchain.context_content_error.v2'
+    assert result['evidence_kind'] == 'retrieval_status'
+    assert result['code'] == 'CONTEXT_CONTENT_READ_FAILED'
+    assert 'no source content was delivered' in result['notice']
+    assert message not in result['notice']
 
 
 @pytest.mark.parametrize('offset', [-1,33554433,True,'0'])

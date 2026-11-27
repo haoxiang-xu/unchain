@@ -103,14 +103,24 @@ class ProviderFailureDiagnostic:
     # HTTP diagnostics have an integer status and two additional fields.
     RESPONSE_SCHEMA: ClassVar[str] = "unchain.provider_failure_diagnostic.v2"
     SCHEMA_V2: ClassVar[str] = "unchain.provider_failure_diagnostic.v2"
+    CONTEXT_SCHEMA: ClassVar[str] = "unchain.provider_failure_diagnostic.v3"
 
     http_status: int | None
     provider_code: str = ""
     parameter: str = ""
     provider_status: str = ""
     replacement_model: str = ""
+    input_context_rejected: bool = False
 
     def __post_init__(self) -> None:
+        if type(self.input_context_rejected) is not bool:
+            raise ValueError("context rejection evidence must be a boolean")
+        if self.input_context_rejected and (
+            self.http_status not in {400, 422}
+            or self.provider_code != "context_length_exceeded"
+            or self.parameter or self.provider_status or self.replacement_model
+        ):
+            raise ValueError("context rejection evidence is inconsistent")
         if self.http_status is None:
             if (
                 type(self.provider_code) is not str
@@ -150,6 +160,9 @@ class ProviderFailureDiagnostic:
             record["schema"] = self.SCHEMA_V2
             record["provider_status"] = self.provider_status
             record["replacement_model"] = self.replacement_model
+        if self.input_context_rejected:
+            record["schema"] = self.CONTEXT_SCHEMA
+            record["input_context_rejected"] = True
         return record
 
     @classmethod
@@ -158,6 +171,11 @@ class ProviderFailureDiagnostic:
             raise ValueError("provider diagnostic fields are invalid")
         base_fields = {"schema", "http_status", "provider_code", "parameter"}
         schema = value.get("schema")
+        if schema == cls.CONTEXT_SCHEMA and set(value) == base_fields | {"input_context_rejected"}:
+            if value["input_context_rejected"] is not True:
+                raise ValueError("context diagnostic must carry confirmed evidence")
+            return cls(value["http_status"], value["provider_code"], value["parameter"],
+                       input_context_rejected=True)
         if set(value) == base_fields:
             expected = cls.RESPONSE_SCHEMA if value["http_status"] is None else cls.SCHEMA
             if schema != expected:
@@ -179,6 +197,11 @@ class ProviderFailureDiagnostic:
     def from_exception(cls, error: BaseException) -> ProviderFailureDiagnostic | None:
         if type(error) is GeminiResponseFailure:
             return cls(None, error.reason)
+        from .context_limit import classify_context_limit
+
+        context_rejection = classify_context_limit(error)
+        if context_rejection is not None:
+            return cls(context_rejection.http_status, "context_length_exceeded", input_context_rejected=True)
         from google.genai.errors import APIError
 
         status = getattr(error, "status_code", None)

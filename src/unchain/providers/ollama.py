@@ -111,6 +111,17 @@ class OllamaModelIO(_NativeModelIOBase):
         ) as response:
             if int(getattr(response, "status_code", 0) or 0) >= 400:
                 raw_detail = response.read()
+                # Preserve real rejected-input evidence for bounded context
+                # recovery. Streamed errors and other legacy failures keep
+                # their existing uncertainty semantics.
+                if isinstance(response, httpx.Response):
+                    from .context_limit import classify_context_limit
+
+                    try:
+                        response.raise_for_status()
+                    except httpx.HTTPStatusError as error:
+                        if classify_context_limit(error) is not None:
+                            raise
                 if isinstance(raw_detail, bytes):
                     detail = raw_detail.decode()
                 else:

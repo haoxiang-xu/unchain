@@ -10,6 +10,57 @@ SubagentOutputMode = Literal["summary", "last_message", "full_trace"]
 SubagentMemoryPolicy = Literal["ephemeral", "scoped_persistent"]
 
 
+class SubagentWaitSignal(RuntimeError):
+    """Propagate a durable child-graph wait without turning it into tool output."""
+
+    def __init__(
+        self,
+        wait_id: str,
+        request: dict[str, Any],
+        *,
+        parent_tool_call: dict[str, str] | None = None,
+    ):
+        if type(wait_id) is not str or not wait_id:
+            raise ValueError("subagent wait id must be non-empty")
+        if type(request) is not dict:
+            raise TypeError("subagent wait request must be an object")
+        self.wait_id = wait_id
+        self.request = copy.deepcopy(request)
+        if parent_tool_call is not None:
+            if (
+                type(parent_tool_call) is not dict
+                or set(parent_tool_call) != {"call_id", "tool_name"}
+                or any(
+                    type(value) is not str or not value.strip()
+                    for value in parent_tool_call.values()
+                )
+            ):
+                raise ValueError("subagent parent tool call is invalid")
+            self.parent_tool_call = {
+                "call_id": parent_tool_call["call_id"].strip(),
+                "tool_name": parent_tool_call["tool_name"].strip(),
+            }
+        else:
+            self.parent_tool_call = None
+        super().__init__("subagent graph is awaiting interaction")
+
+    def for_parent_tool_call(self, tool_call) -> "SubagentWaitSignal":
+        """Bind a propagated wait to the immutable parent tool invocation."""
+
+        call_id = getattr(tool_call, "call_id", None)
+        tool_name = getattr(tool_call, "name", None)
+        if type(call_id) is not str or not call_id.strip() or type(tool_name) is not str or not tool_name.strip():
+            raise ValueError("subagent parent tool call is invalid")
+        parent_tool_call = {"call_id": call_id.strip(), "tool_name": tool_name.strip()}
+        if self.parent_tool_call is not None and self.parent_tool_call != parent_tool_call:
+            raise ValueError("subagent wait parent tool call changed")
+        return SubagentWaitSignal(
+            self.wait_id,
+            self.request,
+            parent_tool_call=parent_tool_call,
+        )
+
+
 @dataclass(frozen=True)
 class SubagentTemplate:
     name: str

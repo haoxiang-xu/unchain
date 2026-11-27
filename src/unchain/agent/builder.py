@@ -91,7 +91,12 @@ class AgentCallContext:
     provider_turn_ownership_factory: "ProviderTurnOwnershipFactory | None" = None
     execution_owner_id: str | None = None
     execution_guard: ExecutionGuard | None = None
+    interaction_execution_fence: Any = None
+    interaction_execution_fence_overridden: bool = False
+    resume_max_iterations: int | None = None
     tool_runtime_config: dict[str, Any] | None = None
+    initial_iteration: int = 0
+    recovered_tool_turn: Any = None
     interaction_id: str | None = None
     submitted_by: str = "user"
 
@@ -614,9 +619,13 @@ class PreparedAgent:
             submitted_by=submitted_by,
             expected_revision=pending.session_snapshot.revision,
             execution_fence=(
-                execution_guard.fence
-                if execution_guard is not None
-                else None
+                self.call_context.interaction_execution_fence
+                if self.call_context.interaction_execution_fence_overridden
+                else (
+                    execution_guard.fence
+                    if execution_guard is not None
+                    else None
+                )
             ),
         )
 
@@ -632,6 +641,8 @@ class PreparedAgent:
         run_id_override: str | None = None,
         run_bundle_identity_override: "RunIdentity | None" = None,
         continued_from_run_id: str | None = None,
+        initial_iteration: int = 0,
+        recovered_tool_turn: Any = None,
     ) -> KernelRunResult:
         if self.session_history_owned_by_memory:
             ensure_no_external_provider_history(
@@ -697,6 +708,8 @@ class PreparedAgent:
             _run_bundle_purpose=run_bundle_purpose,
             _run_bundle_receipts=exposure_receipts,
             _provider_turn_ownership=provider_turn_ownership,
+            _initial_iteration=initial_iteration,
+            _recovered_tool_turn=recovered_tool_turn,
         )
         self._completion_replay_frame = load_provider_replay_handle(
             result.provider_replay_handle
@@ -837,6 +850,8 @@ class PreparedAgent:
                 previous_response_id=self.call_context.previous_response_id,
                 execution_guard=execution_guard,
                 continued_from_run_id=self.call_context.continued_from_run_id,
+                initial_iteration=self.call_context.initial_iteration,
+                recovered_tool_turn=self.call_context.recovered_tool_turn,
             )
             run_bundles = [copy.deepcopy(result.run_bundle)]
             result = self._completion_policy_runner(
@@ -1069,6 +1084,7 @@ class PreparedAgent:
                 _run_bundle_descriptor=self.call_context.run_bundle_descriptor,
                 _run_bundle_receipts=exposure_receipts,
                 _provider_turn_ownership=provider_turn_ownership,
+                _max_iterations_override=self.call_context.resume_max_iterations,
             )
             return self._apply_run_hooks(result)
 

@@ -1113,6 +1113,20 @@ def test_verified_current_provider_turn_rejects_visible_output_receipt_mutation(
     assert projection.result_sha256 == result.result_sha256
     assert projection.replay_frame_sha256 is None
 
+    # A provider-produced turn cannot become a neutral host Tool exchange by
+    # losing its source-provider markers; the durable native receipt remains.
+    from dataclasses import replace
+    missing_provider_request = replace(request, semantic_events=tuple(
+        {key: value for key, value in event.items() if key != "source_provider"}
+        for event in request.semantic_events
+    ))
+    with pytest.raises(ContextCompileCoordinatorError, match="provider identity is missing"):
+        _verified_current_provider_turn(
+            request=missing_provider_request,
+            generation_events=(wire_event, valid_result_event),
+            artifact_reader=lambda *, artifact: contents[artifact.ref],
+        )
+
 
 def test_provider_result_requires_matching_wire_subject_and_route():
     """A result from another request cannot authorize native-tool replay."""
