@@ -379,3 +379,48 @@ def test_node_memory_view_bundle_rejects_mismatched_selector_and_legacy_is_none(
     legacy = _runtime(store, _attempt("legacy-attempt"), None)
     assert legacy["request_factory"].node_memory_view is None
     assert legacy["coordinator"].node_memory_view is None
+
+
+def test_context_recovery_keeps_node_history_selection(tmp_path: Path):
+    from unchain.context.provider_recovery import (
+        apply_provider_context_recovery,
+        prepare_provider_context_recovery,
+        verify_provider_context_reduction,
+    )
+
+    store = _open_store(tmp_path)
+    journal = store.bind_execution(_EXECUTION)
+    root = _attempt("root-attempt")
+    node = _attempt("node-attempt")
+    excluded = _public_history(journal, root)
+    view = NodeMemoryView(node, _DEFINITION)
+    view.persist(journal)
+    runtime = _runtime(store, node, view, parent_run_id=root.attempt_id)
+    runtime["ingress"].persist(HostResolvedCurrentInput(
+        attempt=node, content="old node input " * 1000, message_index=0,
+    ))
+    _append_scoped(runtime, "old-node-response", "message.assistant",
+                   message={"role": "assistant", "content": "old node response " * 1000})
+    runtime["ingress"].persist(HostResolvedCurrentInput(
+        attempt=node, content="continue node task", message_index=1,
+    ))
+    request = runtime["request_factory"](_context(node))
+    first = runtime["coordinator"].compile(request)
+    assert "public root request" not in str(first.messages)
+    recovery = prepare_provider_context_recovery(
+        journal=journal, attempt=node, iteration=0,
+        provider=request.provider, model=request.model,
+        envelope=first.envelope.to_dict(), messages=first.messages,
+    )
+    rebuilt = runtime["coordinator"].compile(apply_provider_context_recovery(request, recovery))
+    verify_provider_context_reduction(rebuilt, recovery)
+    assert "continue node task" in str(rebuilt.messages)
+    assert "public root request" not in str(rebuilt.messages)
+    assert "public root response" not in str(rebuilt.messages)
+    assert all(event.event_id not in str(rebuilt.envelope.to_dict()) for event in excluded)
+    cold = _runtime(_open_store(tmp_path), node, NodeMemoryView.from_dict(view.to_dict()),
+                    parent_run_id=root.attempt_id)
+    cold_request = cold["request_factory"](_context(node))
+    replayed = cold["coordinator"].compile(apply_provider_context_recovery(cold_request, recovery))
+    assert replayed.messages == rebuilt.messages
+    assert replayed.envelope == rebuilt.envelope

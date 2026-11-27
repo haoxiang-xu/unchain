@@ -1462,7 +1462,10 @@ class ContextCompileCoordinator:
             )
             from .provider_recovery import provider_recovery_build_trigger
 
-            trigger = provider_recovery_build_trigger(request, snapshot, journal_view.input_receipt)
+            trigger = provider_recovery_build_trigger(
+                request, snapshot, journal_view.input_receipt,
+                node_memory_view=self._node_memory_view,
+            )
             if trigger != journal_view.input_receipt:
                 # Recovery rebuilds are immutable projections at their durable
                 # authorization cursor. Later wire/result receipts must not
@@ -1476,6 +1479,7 @@ class ContextCompileCoordinator:
                 prepared_request, journal_view = _prepare_journal_view(
                     request=request, snapshot=snapshot, artifacts=self._artifacts,
                     provider_turn_result_reader=self._provider_turn_result_reader,
+                    node_memory_view=self._node_memory_view,
                 )
                 journal_view = replace(journal_view, input_receipt=trigger)
             self._verify_input_trigger_claim(request, journal_view.input_receipt)

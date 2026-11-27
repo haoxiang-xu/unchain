@@ -184,7 +184,7 @@ def recovery_occurrence_sha256(event: JournalEvent) -> str:
     return hashlib.sha256(f"provider-context-recovery\x00{event.event_id}".encode()).hexdigest()
 
 
-def provider_recovery_build_trigger(request, snapshot, input_receipt):
+def provider_recovery_build_trigger(request, snapshot, input_receipt, *, node_memory_view=None):
     """Resolve a new build trigger without rebinding the original input claim.
 
     The coordinator calls this only after independently verifying the original
@@ -204,6 +204,10 @@ def provider_recovery_build_trigger(request, snapshot, input_receipt):
             "trigger": {"event_id": input_receipt.event_id, "store_seq": input_receipt.store_seq},
             "provider": request.provider, "model": request.model,
         }
+        if node_memory_view is not None:
+            if (node_memory_view.attempt != event.attempt):
+                raise ContextLimitRecoveryError("Context recovery changed its node memory view scope")
+            base_identity["node_memory_view"] = node_memory_view.digest
         base = "context-build-" + hashlib.sha256(json.dumps(
             base_identity, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
         expected = "context-recovery-build-" + hashlib.sha256(f"{base}\x00{event.event_id}".encode()).hexdigest()

@@ -1,5 +1,7 @@
 """Provider-free helpers for the Skeleton protocol."""
 
+from typing import TYPE_CHECKING
+
 from .errors import SkeletonValidationError
 from .conditions import evaluate_condition, select_case
 from .diagnostics import SkeletonDiagnostic
@@ -10,6 +12,23 @@ from .recovery import RecoveryEnvelopeError, build_workflow_recovery_envelope, v
 from .execution import WorkflowExecutionError, WorkflowNodeCompleted, WorkflowNodeContext, WorkflowRunResult, run_workflow
 from .schema import validate_skeleton_document
 from .validation import diagnose_skeleton_draft, validate_skeleton_for_execution
+
+# Declare the lazy public API for static consumers without importing provider or
+# persistence capabilities during the basic Workflow bootstrap.
+if TYPE_CHECKING:
+    from .agent_preparation import PreparedAgentPlan, prepare_agent_graph, execution_definition_digest
+    from .durable_execution import DurableWorkflowRunner, DurableWorkflowResult, WorkflowNodeWaiting
+    from .durable_store import WorkflowExecutionStore
+    from .kernel_runtime import SkeletonKernelHandler, build_node_bundle
+    from .kernel_profile import KernelProfileBinding, bind_kernel_profile
+    from .tool_runtime import SkeletonToolRuntime, SkeletonSkillRuntime
+    from .code_runtime import SkeletonCodeRuntime, PythonEnvironmentProfile, CodeSourceSnapshot, FileCodeSourceResolver
+    from .workflow_runtime import PublishedWorkflow, SkeletonWorkflowCallRuntime
+    from .subagent_config import attached_subagents, validate_subagent_pool_config
+    from .hooks_config import attached_hooks, validate_hooks_pool_config
+    from .hook_runtime import PinnedHookWorkflow, SkeletonHookRuntime
+    from .hooks_runtime import apply_after_decision, apply_before_decision
+    from .subagent_runtime import SkeletonSubagentAgent, SkeletonSubagentRuntime
 
 __all__ = [
     "PreparedAgentPlan", "prepare_agent_graph", "execution_definition_digest",
